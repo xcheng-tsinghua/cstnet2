@@ -56,8 +56,8 @@ def main(args):
     train_dataset = RegressionDataset(root=data_root, npoints=args.n_point, is_train=True)
     test_dataset = RegressionDataset(root=data_root, npoints=args.n_point, is_train=False)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.bs, shuffle=True, num_workers=4, drop_last=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
     classifier = PointNet2Regression()
