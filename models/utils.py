@@ -442,5 +442,41 @@ def save_confusion_mat(pred_list: list, target_list: list, save_name):
     plt.close()
 
 
+def random_points_in_plane(a, b, c, d, n1):
+    # Step 1: 计算平面法向量
+    normal = np.array([a, b, c], dtype=float)
+    normal /= np.linalg.norm(normal)
+
+    # Step 2: 计算原点到平面的垂足
+    # 平面方程: a*x + b*y + c*z + d = 0
+    t = -d / (a ** 2 + b ** 2 + c ** 2)
+    foot_point = t * np.array([a, b, c], dtype=float)
+
+    # Step 3: 构建平面局部坐标系 (u_dir, v_dir)
+    # 找一个与normal不平行的向量
+    if abs(normal[0]) < 0.9:
+        tmp = np.array([1, 0, 0], dtype=float)
+    else:
+        tmp = np.array([0, 1, 0], dtype=float)
+
+    u_dir = np.cross(normal, tmp)
+    u_dir /= np.linalg.norm(u_dir)
+    v_dir = np.cross(normal, u_dir)
+
+    # Step 4: 在局部坐标 [-100, 100] 范围内随机选择一个小块
+    grid_min, grid_max = -100, 100
+    grid_x = np.random.randint(grid_min, grid_max)
+    grid_y = np.random.randint(grid_min, grid_max)
+
+    # Step 5: 在该小块内随机生成n1个点
+    local_u = grid_x + np.random.rand(n1)
+    local_v = grid_y + np.random.rand(n1)
+
+    # Step 6: 将局部坐标映射到三维空间
+    points = foot_point + np.outer(local_u, u_dir) + np.outer(local_v, v_dir)
+
+    return points, foot_point
+
+
 if __name__ == '__main__':
     pass
