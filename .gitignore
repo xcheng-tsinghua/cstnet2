@@ -1,5 +1,6 @@
 models/__pycache__/
 data_utils/__pycache__/
 .idea/
-weights/
+model_trained/
+log/
 

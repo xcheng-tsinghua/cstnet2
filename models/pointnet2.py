@@ -194,7 +194,7 @@ class PointNetSetAbstraction(nn.Module):
     set abstraction 层
     包含sampling、grouping、PointNet层
     """
-    def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all):
+    def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all=False):
         '''
         :param npoint: 使用FPS查找的中心点数，因此该点数也是池化到的点数
         :param radius: 沿每个中心点进行 ball query 的半径
@@ -292,13 +292,53 @@ class PointNet2(nn.Module):
         return x
 
 
+class PointNet2Regression(nn.Module):
+    # num_class = 40，normal_channel = false
+    def __init__(self, fea_channel=0):
+        """
+        fea_channel: 点的特征维度，带法向量就是3，不带就是0
+        """
+        super().__init__()
+
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=fea_channel + 3, mlp=[16, 16, 32])
+        self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=32 + 3, mlp=[32, 32, 64])
+        self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=64 + 3, mlp=[128, 128, 256], group_all=True)
+
+        self.fc1 = nn.Linear(256, 128)
+        self.bn1 = nn.BatchNorm1d(128)
+        self.drop1 = nn.Dropout(0.4)
+
+        self.fc2 = nn.Linear(128, 32)
+        self.bn2 = nn.BatchNorm1d(32)
+        self.drop2 = nn.Dropout(0.4)
+
+        self.fc3 = nn.Linear(32, 3)
+
+    def forward(self, xyz, fea=None):
+        """
+        xyz: [bs, n_points, 3]
+        """
+        xyz = xyz.permute(0, 2, 1)
+
+        l1_xyz, l1_fea = self.sa1(xyz, fea)
+        l2_xyz, l2_fea = self.sa2(l1_xyz, l1_fea)
+        l3_xyz, l3_fea = self.sa3(l2_xyz, l2_fea)
+        glo_fea = l3_fea.squeeze()
+
+        res = self.drop1(F.relu(self.bn1(self.fc1(glo_fea))))
+        res = self.drop2(F.relu(self.bn2(self.fc2(res))))
+        res = self.fc3(res)
+
+        return res
+
+
 if __name__ == '__main__':
-    x = torch.rand((2, 3, 1024)).cuda()
+    _x = torch.rand((2, 3, 1024)).cuda()
     featensor = torch.rand((2, 7, 1024)).cuda()
 
-    anet = PointNet2(20).cuda()
-    y = anet(x)
-    print("Input Shape of PointNet: ", x.shape, "\nOutput Shape of PointNet: ", y.shape)
+    anet = PointNet2Regression().cuda()
+    y = anet(_x)
+    print("Input Shape of PointNet: ", _x.shape, "\nOutput Shape of PointNet: ", y.shape)
 
 
 

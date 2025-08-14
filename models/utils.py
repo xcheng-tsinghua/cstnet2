@@ -478,5 +478,58 @@ def random_points_in_plane(a, b, c, d, n1):
     return points, foot_point
 
 
+def generate_unique_random_planes(num_planes, coeff_range=(-10, 10)):
+    """
+    生成唯一的随机平面参数 (a, b, c, d)，保证 a^2 + b^2 + c^2 != 0 且没有重复
+
+    参数:
+        num_planes: int，要生成的平面数量
+        coeff_range: tuple，(min_val, max_val) 系数的范围
+
+    返回:
+        numpy数组，形状为 (num_planes, 4)，每行是 [a, b, c, d]
+    """
+    planes_set = set()
+    min_val, max_val = coeff_range
+
+    while len(planes_set) < num_planes:
+        a, b, c, d = np.random.uniform(min_val, max_val, 4)
+
+        # 检查法向量是否为零
+        if a ** 2 + b ** 2 + c ** 2 == 0:
+            continue
+
+        # 用元组保存，避免浮点比较误差问题 → 先四舍五入到一定小数位
+        key = tuple(np.round([a, b, c, d], 6))
+
+        if key not in planes_set:
+            planes_set.add(key)
+
+    return list(planes_set)
+
+
+def gen_batched_random_plane_points(save_dir, n_planes=1000, n_point=2000):
+    """
+    随机生成一系列的点并保存
+    每个平面保存在一个txt文件，文件名为 x-y-z.txt，(x y z)为垂足的三维坐标
+
+    n_planes: 平面数
+    n_point: 每个平面上采集的点数
+
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 先获取平面参数
+    plane_coeff = generate_unique_random_planes(n_planes)
+
+    # 获取点坐标
+    for c_coeff in plane_coeff:
+        c_pnts, c_root = random_points_in_plane(c_coeff[0], c_coeff[1], c_coeff[2], c_coeff[3], n_point)
+
+        c_save_root = os.path.join(save_dir, f'{c_root[0]};{c_root[1]};{c_root[2]}.txt')
+        np.savetxt(c_save_root, c_pnts)
+
+
 if __name__ == '__main__':
+    gen_batched_random_plane_points(r'D:\document\DeepLearning\DataSet\pcd_cstnet2\test')
     pass

@@ -131,13 +131,13 @@ class PointNetfeat(nn.Module):
 
 
 class PointNet(nn.Module):
-    def __init__(self, k=2, fea_channel=0, feature_transform=False):
+    def __init__(self, n_classes, fea_channel=0, feature_transform=False):
         super().__init__()
         self.feature_transform = feature_transform
         self.feat = PointNetfeat(global_feat=True, feature_transform=feature_transform, fea_channel=fea_channel)
         self.fc1 = nn.Linear(1024, 512)
         self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, k)
+        self.fc3 = nn.Linear(256, n_classes)
         self.dropout = nn.Dropout(p=0.3)
         self.bn1 = nn.BatchNorm1d(512)
         self.bn2 = nn.BatchNorm1d(256)

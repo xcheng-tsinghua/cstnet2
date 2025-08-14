@@ -152,5 +152,49 @@ class Param20KDataset(Dataset):
         return len(self.classes)
 
 
+class RegressionDataset(Dataset):
+    def __init__(self, root, is_train, npoints):
+
+        print('RegressionDataset dataset, from:' + root)
+        self.npoints = npoints
+
+        if is_train:
+            inner_root = os.path.join(root, 'train')
+        else:
+            inner_root = os.path.join(root, 'test')
+
+        self.path_label = []  # [([x, y ,z], Path1), ...]
+        files_all = utils.get_allfiles(inner_root)
+
+        for c_file in files_all:
+            c_base = os.path.basename(c_file)
+            c_base = os.path.splitext(c_base)[0]
+
+            c_x, c_y, c_z = c_base.split(';')
+
+            c_perpendicular = np.array([float(c_x), float(c_y), float(c_z)])
+            self.path_label.append((c_perpendicular, c_file))
+
+        print('instance all:', len(self.path_label))
+
+    def __getitem__(self, index):
+
+        c_perpendicular, c_file = self.path_label[index]
+        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
+
+        try:
+            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+        except:
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+
+        point_set = point_set[choice, :]
+        xyz = point_set[:, :3]
+
+        return xyz, c_perpendicular
+
+    def __len__(self):
+        return len(self.path_label)
+
+
 if __name__ == '__main__':
     pass
