@@ -123,7 +123,7 @@ def main(args):
             test_accstr = f'test_loss:\t{np.mean(test_loss)}'
             log_str = logstr_epoch + '\t' + train_accstr + '\t' + test_accstr
 
-            print(log_str.replace('\t', ' ') + '--' + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
+            print(log_str.replace('\t', ' ') + ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
             logger.info(log_str)
 
 
