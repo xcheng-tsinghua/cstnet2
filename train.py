@@ -84,7 +84,7 @@ def main(args):
         weight_decay=args.decay_rate
     )
 
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.95)
 
     # training
     for epoch in range(args.epoch):
