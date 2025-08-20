@@ -475,7 +475,25 @@ def random_points_in_plane(a, b, c, d, n1):
     # Step 6: 将局部坐标映射到三维空间
     points = foot_point + np.outer(local_u, u_dir) + np.outer(local_v, v_dir)
 
-    return points, foot_point
+    return points
+
+
+def fit_plane(points):
+    # points: (N,3) numpy array
+    pts = np.asarray(points, dtype=float)
+    assert pts.shape[1] == 3 and pts.shape[0] >= 3
+
+    mu = pts.mean(axis=0)
+    X = pts - mu
+    # SVD on centered data
+    _, _, Vt = np.linalg.svd(X, full_matrices=False)
+    n = Vt[-1]  # unit normal
+    n = n / np.linalg.norm(n)
+    d = -np.dot(n, mu)
+    # RMS orthogonal error
+    rms = np.sqrt(np.mean((X @ n)**2))
+    a, b, c = n
+    return a, b, c, d, rms
 
 
 def generate_unique_random_planes(num_planes, coeff_range=(-10, 10)):
@@ -508,7 +526,86 @@ def generate_unique_random_planes(num_planes, coeff_range=(-10, 10)):
     return list(planes_set)
 
 
-def gen_batched_random_plane_points(save_dir, n_planes=1000, n_point=2000):
+def generate_planes(n_planes, d_range=(-1, 1), tol=1e-6, seed=None):
+    """
+    随机生成一组平面参数 (a, b, c, d)，满足 sqrt(a^2+b^2+c^2)=1，且不重复。
+
+    参数:
+        n_planes : int   需要生成的平面数量
+        d_range  : tuple (d_min, d_max)  d 的范围
+        tol      : float 重复判断的容差
+        seed     : int or None 随机数种子
+
+    返回:
+        planes : list of (a,b,c,d)
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    planes = []
+
+    while len(planes) < n_planes:
+        # 随机生成法向量（高斯分布后归一化）
+        n = np.random.randn(3)
+        n /= np.linalg.norm(n)
+
+        # 随机生成 d
+        d = np.random.uniform(d_range[0], d_range[1])
+
+        # 构造平面参数
+        plane = (n[0], n[1], n[2], d)
+
+        # 检查是否重复（考虑方向相反的情况也算重复）
+        is_duplicate = False
+        for (a, b, c, dd) in planes:
+            n1 = np.array([a, b, c])
+            n2 = np.array([plane[0], plane[1], plane[2]])
+            # 如果法向量相同或相反，且 d 也接近
+            if (np.allclose(n1, n2, atol=tol) and abs(dd - plane[3]) < tol) \
+                    or (np.allclose(n1, -n2, atol=tol) and abs(dd + plane[3]) < tol):
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            planes.append(plane)
+
+    return planes
+
+
+def dir_unify(a, b, c, d, tol=1e-6):
+    """
+    使平面参数固定，不至于出现同一个平面参数护卫相反数
+    """
+    # 先看 d
+    if d > tol:
+        return a, b, c, d
+    elif d < -1 * tol:
+        return -1 * a, -1 * b, -1 * c, -1 * d
+
+    # d == 0 的情况，看 c
+    elif c > tol:
+        return a, b, c, d
+    elif c < -1 * tol:
+        return -1 * a, -1 * b, -1 * c, -1 * d
+
+    # d == 0 and c == 0 的情况，看 b
+    elif b > tol:
+        return a, b, c, d
+    elif b < -1 * tol:
+        return -1 * a, -1 * b, -1 * c, -1 * d
+
+    # d == 0 and c == 0 and b == 0 的情况，看 a
+    elif a > tol:
+        return a, b, c, d
+    elif a < -1 * tol:
+        return -1 * a, -1 * b, -1 * c, -1 * d
+
+    # 其它情况，出错，因为 sqrt(a^2+b^2+c^2)=1
+    else:
+        raise ValueError('not satisfy sqrt(a^2+b^2+c^2)=1')
+
+
+def gen_batched_random_plane_points(save_dir, n_planes, n_point=2000):
     """
     随机生成一系列的点并保存
     每个平面保存在一个txt文件，文件名为 x-y-z.txt，(x y z)为垂足的三维坐标
@@ -520,16 +617,34 @@ def gen_batched_random_plane_points(save_dir, n_planes=1000, n_point=2000):
     os.makedirs(save_dir, exist_ok=True)
 
     # 先获取平面参数
-    plane_coeff = generate_unique_random_planes(n_planes)
+    print('生成随机参数')
+    plane_coeff = generate_planes(n_planes)
 
     # 获取点坐标
     for c_coeff in plane_coeff:
-        c_pnts, c_root = random_points_in_plane(c_coeff[0], c_coeff[1], c_coeff[2], c_coeff[3], n_point)
+        a, b, c, d = dir_unify(*c_coeff)
 
-        c_save_root = os.path.join(save_dir, f'{c_root[0]};{c_root[1]};{c_root[2]}.txt')
+        c_pnts = random_points_in_plane(a, b, c, d, n_point)
+
+        # 将点云放在 [-1, 1] 之间
+        dist = np.max(np.sqrt(np.sum(c_pnts ** 2, axis=1)), 0)
+        c_pnts = c_pnts / dist  # scale
+
+        fa, fb, fc, fd, fm = fit_plane(c_pnts)
+
+        if fm > 1e-6:
+            print('skip a plane')
+            continue
+
+        fa, fb, fc, fd = dir_unify(fa, fb, fc, fd)
+
+        c_save_root = os.path.join(save_dir, f'{fa};{fb};{fc};{fd}.txt')
         np.savetxt(c_save_root, c_pnts)
 
 
 if __name__ == '__main__':
-    gen_batched_random_plane_points(r'D:\document\DeepLearning\DataSet\pcd_cstnet2\test')
+    gen_batched_random_plane_points(r'D:\document\DeepLearning\DataSet\pcd_cstnet2\test', 1000)
     pass
+
+
+

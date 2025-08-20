@@ -170,10 +170,10 @@ class RegressionDataset(Dataset):
             c_base = os.path.basename(c_file)
             c_base = os.path.splitext(c_base)[0]
 
-            c_x, c_y, c_z = c_base.split(';')
+            c_a, c_b, c_c, c_d = c_base.split(';')
 
-            c_perpendicular = np.array([float(c_x), float(c_y), float(c_z)])
-            self.path_label.append((c_perpendicular, c_file))
+            coefficient = np.array([float(c_a), float(c_b), float(c_c), float(c_d)])
+            self.path_label.append((coefficient, c_file))
 
         print('instance all:', len(self.path_label))
 
