@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
 
     parser.add_argument('--n_point', type=int, default=2000, help='Point Number')
-    parser.add_argument('--is_load_weight', default='True', choices=['True', 'False'], type=str)
+    parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2')
