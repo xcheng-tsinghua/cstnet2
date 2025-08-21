@@ -17,6 +17,25 @@ from models.pointnet import PointNet
 from models.pointnet2 import PointNet2Regression
 
 
+def plane_loss(points, pred_plane, lam=0.1):
+    """
+    points: [bs, n_point, 3]
+    pred_plane: [bs, 4]  (a,b,c,d)
+    """
+    a, b, c, d = pred_plane[:, 0], pred_plane[:, 1], pred_plane[:, 2], pred_plane[:, 3]
+    normal = torch.stack([a, b, c], dim=-1)  # [bs, 3]
+
+    # [bs, n_point]
+    residuals = (points @ normal.unsqueeze(-1)).squeeze(-1) + d.unsqueeze(-1)
+    loss_point = (residuals ** 2).mean()
+
+    # normalize constraint
+    norm = torch.norm(normal, dim=-1)
+    loss_norm = ((norm - 1) ** 2).mean()
+
+    return loss_point + lam * loss_norm
+
+
 def parse_args():
 
     parser = argparse.ArgumentParser('training')
@@ -99,7 +118,8 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss = F.mse_loss(pred, target)
+            # loss = F.mse_loss(pred, target)
+            loss = plane_loss(points, pred)
             train_loss.append(loss.item())
 
             loss.backward()
@@ -117,7 +137,8 @@ def main(args):
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss = F.mse_loss(pred, target)
+                # loss = F.mse_loss(pred, target)
+                loss = plane_loss(points, pred)
                 test_loss.append(loss.item())
 
             test_accstr = f'test_loss:\t{np.mean(test_loss)}'
