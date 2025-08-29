@@ -10,7 +10,7 @@ from datetime import datetime
 import logging
 import argparse
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 from data_utils.datasets import CstNet2Dataset
 from models.pointnet2 import PointNet2Cls
