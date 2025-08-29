@@ -128,14 +128,18 @@ def main(args):
                 points = data[0].cuda()
                 target = data[1].long().cuda()
 
-                mad = data[2].float().cuda()
-                adj = data[3].long().cuda()
-                pt = data[4].long().cuda()
+                pmt = data[2].long().cuda()  # 基元类型
+                pmt = F.one_hot(pmt, 5)
 
-                adj = F.one_hot(adj, 2)
-                pt = F.one_hot(pt, args.n_primitive)
+                main_dir = data[3].cuda()  # 主方向
+                main_dim = data[4].cuda()  # 主尺寸
+                normal = data[5].cuda()  # 法线
+                main_loc = data[6].cuda()  # 主位置
+                affil_idx = data[7].long().cuda()  # 从属索引
 
-                pred = classifier(points, mad, adj, pt)
+                cst = torch.cat([pmt, main_dir, main_dim.unsqueeze(2), normal, main_loc], dim=2)
+
+                pred = classifier(points, cst)
 
                 all_preds.append(pred.detach().cpu().numpy())
                 all_labels.append(target.detach().cpu().numpy())
