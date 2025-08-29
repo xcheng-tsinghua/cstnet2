@@ -50,8 +50,8 @@ def main(args):
     test_dataset = CstNet2Dataset(root=data_root, npoints=args.n_point, is_train=False, data_augmentation=False)
     num_class = len(train_dataset.classes)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, drop_last=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     # loading model
     classifier = PointNet2Cls(num_class, 5+3+1+3+3)
