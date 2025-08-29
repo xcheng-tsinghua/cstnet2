@@ -253,7 +253,7 @@ class PointNetSetAbstraction(nn.Module):
         return new_xyz, new_points
 
 
-class PointNet2(nn.Module):
+class PointNet2Cls(nn.Module):
     # num_class = 40，normal_channel = false
     def __init__(self, num_class: int, fea_channel=0):
         super().__init__()
@@ -276,14 +276,19 @@ class PointNet2(nn.Module):
 
     def forward(self, xyz, fea=None):
         """
-        xyz: [bs, 3, n_points]
+        xyz: [bs, n_points, 3]
+        fea: [bs, n_point, channel]
         """
-        B, _, _ = xyz.shape
+        bs = xyz.size(0)
+        xyz = xyz.permute(0, 2, 1)
+
+        if fea is not None:
+            fea = fea.permute(0, 2, 1)
 
         l1_xyz, l1_points = self.sa1(xyz, fea)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        x = l3_points.view(B, 1024)
+        x = l3_points.view(bs, 1024)
         x = self.drop1(F.relu(self.bn1(self.fc1(x))))
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
@@ -292,7 +297,7 @@ class PointNet2(nn.Module):
         return x
 
 
-class PointNet2Regression(nn.Module):
+class PointNet2Reg(nn.Module):
     # num_class = 40，normal_channel = false
     def __init__(self, fea_channel=0):
         """
@@ -336,7 +341,7 @@ if __name__ == '__main__':
     _x = torch.rand((2, 1024, 3)).cuda()
     featensor = torch.rand((2, 7, 1024)).cuda()
 
-    anet = PointNet2Regression().cuda()
+    anet = PointNet2Reg().cuda()
     y = anet(_x)
     print("Input Shape of PointNet: ", _x.shape, "\nOutput Shape of PointNet: ", y.shape)
 

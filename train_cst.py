@@ -1,6 +1,6 @@
-'''
-train constraint prediction
-'''
+"""
+训练约束预测模块
+"""
 import os
 import torch
 import torch.nn.functional as F
@@ -8,7 +8,7 @@ from datetime import datetime
 import logging
 import argparse
 
-from data_utils.Param20KDataset import CstPntDataset
+from data_utils.datasets import CstPntDataset
 from models.cstpnt import CstPnt
 
 

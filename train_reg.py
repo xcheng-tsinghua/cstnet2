@@ -12,9 +12,9 @@ from tqdm import tqdm
 import numpy as np
 import os
 
-from data_utils.Param20KDataset import RegressionDataset
+from data_utils.datasets import RegressionDataset
 from models.pointnet import PointNet
-from models.pointnet2 import PointNet2Regression
+from models.pointnet2 import PointNet2Reg
 
 
 def plane_loss(points, pred_plane, lam=0.1):
@@ -48,8 +48,8 @@ def parse_args():
     parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
-    parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2')
-    parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2')
+    parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/plane_test')
+    parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2\plane_test')
 
     return parser.parse_args()
 
@@ -80,7 +80,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
-    classifier = PointNet2Regression()
+    classifier = PointNet2Reg()
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'
