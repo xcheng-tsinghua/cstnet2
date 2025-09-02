@@ -317,7 +317,7 @@ class PointNet2Reg(nn.Module):
         self.bn2 = nn.BatchNorm1d(32)
         self.drop2 = nn.Dropout(0.4)
 
-        self.fc3 = nn.Linear(32, 4)
+        self.fc3 = nn.Linear(32, 3)
 
     def forward(self, xyz, fea=None):
         """

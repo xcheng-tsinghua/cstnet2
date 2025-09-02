@@ -7,7 +7,6 @@ import os.path
 import torch
 import torch.nn.functional as F
 from datetime import datetime
-import logging
 import argparse
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
@@ -37,7 +36,7 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'pn2_cst_label'
+    save_str = 'pn2_cst_label' + datetime.now().strftime("%Y-%m-%d %H-%M-%S")
 
     # logger
     log_dir = os.path.join('log', save_str)
@@ -151,7 +150,7 @@ def main(args):
             writer.add_scalar('test/f1', all_metric_test[2], epoch)
             writer.add_scalar('test/map', all_metric_test[3], epoch)
 
-            accustr = f'test_instance_accuracy: {all_metric_test[0]}. test_class_accuracy: {all_metric_test[1]}. test_F1_Score: {all_metric_test[2]}. mAP: {all_metric_test[3]}'
+            accustr = f'{epoch} / {args.epoch}. train_ins_acc: {all_metric_train[0]}, test_ins_acc: {all_metric_test[0]}'
             print(accustr)
 
 

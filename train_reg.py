@@ -1,19 +1,17 @@
 
 """
-train classification
+用于测试是否能回归出几个属性
 """
 
 import torch
-import torch.nn.functional as F
 from datetime import datetime
-import logging
 import argparse
 from tqdm import tqdm
 import numpy as np
 import os
+from tensorboardX import SummaryWriter
 
 from data_utils.datasets import RegressionDataset
-from models.pointnet import PointNet
 from models.pointnet2 import PointNet2Reg
 
 
@@ -36,6 +34,19 @@ def plane_loss(points, pred_plane, lam=0.1):
     return loss_point + lam * loss_norm
 
 
+def foot_loss(points, pred_foot):
+    """
+    points: [bs, n_point, 3]
+    pred_plane: [bs, 3]  (-ad,-bd,-cd)
+    """
+    points_to_foot = points - pred_foot.unsqueeze(1)  # [bs, n, 3]
+
+    # 点到垂足的向量与原点到垂足垂直
+    residuals = torch.abs(torch.bmm(points_to_foot, pred_foot.unsqueeze(2)).squeeze(2)).mean()
+
+    return residuals
+
+
 def parse_args():
 
     parser = argparse.ArgumentParser('training')
@@ -56,16 +67,12 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'pointnet'
+    save_str = 'pointnet_reg'
 
     # logger
-    logger = logging.getLogger("Model")
-    logger.setLevel(logging.INFO)
-    file_handler = logging.FileHandler('log/' + save_str + f'-{datetime.now().strftime("%Y-%m-%d %H-%M-%S")}.txt')
-    file_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(message)s')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    log_dir = os.path.join('log', save_str)
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(logdir=log_dir)
 
     # datasets
     if args.local == 'True':
@@ -119,7 +126,8 @@ def main(args):
 
             pred = classifier(points)
             # loss = F.mse_loss(pred, target)
-            loss = plane_loss(points, pred)
+            # loss = plane_loss(points, pred)
+            loss = foot_loss(points, pred)
             train_loss.append(loss.item())
 
             loss.backward()
@@ -127,7 +135,7 @@ def main(args):
 
         scheduler.step()
         torch.save(classifier.state_dict(), 'model_trained/' + save_str + '.pth')
-        train_accstr = f'train_loss:\t{np.mean(train_loss)}'
+        train_loss_mean = np.mean(train_loss).item()
 
         with torch.no_grad():
             test_loss = []
@@ -141,11 +149,10 @@ def main(args):
                 loss = plane_loss(points, pred)
                 test_loss.append(loss.item())
 
-            test_accstr = f'test_loss:\t{np.mean(test_loss)}'
-            log_str = logstr_epoch + '\t' + train_accstr + '\t' + test_accstr
-
-            print(log_str.replace('\t', ' ') + ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
-            logger.info(log_str)
+            test_loss_mean = np.mean(test_loss).item()
+            print(f'{epoch} / {args.epoch}: train_loss: {train_loss_mean}. test_loss: {test_loss_mean}')
+            writer.add_scalar('train_loss', train_loss_mean, epoch)
+            writer.add_scalar('train_loss', train_loss_mean, epoch)
 
 
 if __name__ == '__main__':

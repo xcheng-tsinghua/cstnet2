@@ -95,17 +95,20 @@ class CstPnt(nn.Module):
 
         self.mlp_fea = utils.MLP(1, (128, int((128 * n_embout) ** 0.5), n_embout))
 
-        self.mlp_mad = utils.MLP(1, (n_embout, 256, 128, 32, 3))
-        self.mlp_adj = utils.MLP(1, (n_embout, 256, 128, 32, 2))
-        self.mlp_pt = utils.MLP(1, (n_embout, 256, 128, 64, n_primitive))
+        self.mlp_pmt = utils.MLP(1, (n_embout, 256, 128, 32, 3))
+        self.mlp_mad = utils.MLP(1, (n_embout, 256, 128, 32, 2))
+        self.mlp_dim = utils.MLP(1, (n_embout, 256, 128, 64, n_primitive))
+        self.mlp_nor = utils.MLP(1, (n_embout, 256, 128, 64, n_primitive))
+        self.mlp_loc = utils.MLP(1, (n_embout, 256, 128, 64, n_primitive))
 
     def forward(self, xyz):
         """
         xyz: [bs, n_point, 3]
         """
-        xyz = xyz.transpose(1, -1)
 
-        # Set Abstraction layers
+        # -> [bs, 3, n_point]
+        xyz = xyz.permute(0, 2, 1)
+
         l1_xyz, l1_points = self.sa1(xyz, xyz)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
@@ -115,10 +118,7 @@ class CstPnt(nn.Module):
         l0_points = self.fp1(xyz, l1_xyz, torch.cat([xyz, xyz], 1), l1_points)
 
         # FC layers
-        feat = self.mlp_fea(l0_points)
-        ex_features = feat.permute(0, 2, 1)  # [bs, n_points_all, self.n_embout]
-
-        ex_features = ex_features.transpose(-1, -2)  # [bs, self.n_embout, n_points_all]
+        ex_features = self.mlp_fea(l0_points)  # [bs, channel, n_point]
 
         mad = self.mlp_mad(ex_features).transpose(-1, -2)  # [bs, n_points_all, 3]
         adj = self.mlp_adj(ex_features).transpose(-1, -2)  # [bs, n_points_all, 2]
