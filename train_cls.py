@@ -36,10 +36,10 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'pn2_cst_label' + datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+    save_str = 'pn2_cst_label'
 
     # logger
-    log_dir = os.path.join('log', save_str)
+    log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(logdir=log_dir)
 

@@ -70,7 +70,7 @@ def main(args):
     save_str = 'pointnet_reg'
 
     # logger
-    log_dir = os.path.join('log', save_str)
+    log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(logdir=log_dir)
 
