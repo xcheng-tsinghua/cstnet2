@@ -146,7 +146,8 @@ def main(args):
 
                 pred = classifier(points)
                 # loss = F.mse_loss(pred, target)
-                loss = plane_loss(points, pred)
+                # loss = plane_loss(points, pred)
+                loss = foot_loss(points, pred)
                 test_loss.append(loss.item())
 
             test_loss_mean = np.mean(test_loss).item()
