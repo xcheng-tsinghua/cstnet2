@@ -276,23 +276,30 @@ class CstNet2Dataset(Dataset):
         except:
             exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
 
-        xyz = point_set[:, :3]
-        pmt = point_set[:, 3]  # 基元类型
-        main_dir = point_set[:, 4:7]  # 主方向
-        main_dim = point_set[:, 7]  # 主尺寸
-        normal = point_set[:, 8:11]  # 法线
-        main_loc = point_set[:, 11:14]  # 主位置
-        affil_idx = point_set[:, 14]  # 从属索引
+        xyz = point_set[:, :3]  # [n, 3]
+        pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]
+        mad = point_set[:, 4:7]  # 主方向 [n, 3]
+        dim = point_set[:, 7]  # 主尺寸 [n, ]
+        nor = point_set[:, 8:11]  # 法线 [n, 3]
+        loc = point_set[:, 11:14]  # 主位置 [n, 3]
+        affil_idx = point_set[:, 14]  # 从属索引 [n, ]
 
-        # scale points to [-1, 1]^2
-        xyz = xyz - np.expand_dims(np.mean(xyz, axis=0), 0)
-        dist = np.max(np.sqrt(np.sum(xyz ** 2, axis=1)), 0)
-        xyz = xyz / dist
+        # 已弃用在加载时调整点云，直接在点云生成时归一化三维模型，使其处于 [-1, 1]^3
+        # # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
+        # move_dir = -np.mean(xyz, axis=0)
+        # xyz = xyz + move_dir
+        # scale = 1.0 / np.max(np.sqrt(np.sum(xyz ** 2, axis=1)), 0)
+        # xyz = xyz * scale
+        #
+        # # 平移缩放后，pmt, mad, nor 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
+        # dim = update_dim(pmt, dim, scale)
+        # loc = update_loc(pmt, loc, mad, move_dir)
+        # loc = loc * scale
 
         if self.data_augmentation:
             xyz += np.random.normal(0, 0.02, size=xyz.shape)
 
-        return xyz, cls, pmt, main_dir, main_dim, normal, main_loc, affil_idx
+        return xyz, cls, pmt, mad, dim, nor, loc, affil_idx
 
     def __len__(self):
         return len(self.datapath)
@@ -301,6 +308,143 @@ class CstNet2Dataset(Dataset):
         return len(self.classes)
 
 
+def trans_loc_for_planes(pmt: np.ndarray, loc: np.ndarray, mad: np.ndarray, trans: np.ndarray, eps: float = 1e-8):
+    """
+    对于平面，点云平移 trans = (a, b, c) 后，原点到该平面的垂足应变为 原点到旧平面的垂足 加上平移向量在法向方向的投影
+
+    pmt: [n, ]
+    loc: [n, 3]
+    mad: [n, 3]
+    trans: [3, ]
+    """
+
+    denom = np.linalg.norm(mad, axis=1) ** 2  # ||n||^2 for each normal, [n, ]
+    dots = mad.dot(trans)  # [n, ]  # n·t for each row
+
+    # 获取有效位置
+    is_plane = (pmt == 0)  # [n, ]
+    valid = is_plane & (denom > eps)  # [n, ]
+    updated_idx = np.where(valid)[0]  # [n_valid, ]
+
+    if updated_idx.size > 0:
+        scalars = dots[updated_idx] / denom[updated_idx]  # [n, ]
+        deltas = scalars[:, None] * mad[updated_idx]  # [n, 3]
+        loc[updated_idx] += deltas
+
+    return loc
+
+
+def trans_loc_for_cylinders(pmt, loc, mad, trans):
+    """
+    更新圆柱几何体的loc
+
+    参数:
+        pmt: [n, ] numpy数组，几何体类型 (0=plane, 1=cylinder, ...)
+        loc: [n, 3] numpy数组，原点到几何体的垂足
+        mad: [n, 3] numpy数组，几何体的法线/轴向（需为单位向量）
+        translation: (a, b, c) 平移向量
+    返回:
+        loc_updated: [n, 3] numpy数组，更新后的垂足
+    """
+
+    # 找到所有圆柱
+    cyl_mask = (pmt == 1)
+
+    if np.any(cyl_mask):
+        d = mad[cyl_mask]  # 轴向
+        d = d / np.linalg.norm(d, axis=1, keepdims=True)  # 单位化
+        p0 = loc[cyl_mask]  # 原垂足
+
+        # 投影到轴方向
+        proj = np.sum(trans * d, axis=1, keepdims=True) * d
+
+        # 新的垂足
+        loc[cyl_mask] = p0 + (trans - proj)
+
+    return loc
+
+
+def update_dim(pmt, dim, scale):
+    # 找到圆锥
+    mask_plane = (pmt == 2)
+    other_pmt = ~mask_plane
+    dim[other_pmt] = dim[other_pmt] * scale
+
+    return dim
+
+
+def update_loc(pmt, loc, mad, trans):
+    """
+    更新几何体loc
+
+    参数:
+        pmt: [n, ] numpy数组，几何体类型 (0=plane, 1=cylinder, 其它=直接平移)
+        loc: [n, 3] numpy数组，原点到几何体的垂足
+        mad: [n, 3] numpy数组，几何体的法线/轴向（需为单位向量）
+        translation: (a, b, c) 平移向量
+    返回:
+        loc_updated: [n, 3] numpy数组，更新后的垂足
+    """
+    loc_updated = loc.copy()
+
+    # ---------- 平面 ----------
+    mask_plane = (pmt == 0)
+    if np.any(mask_plane):
+        n = mad[mask_plane]
+        proj = np.sum(trans * n, axis=1, keepdims=True) * n
+        loc_updated[mask_plane] = loc[mask_plane] + proj
+
+    # ---------- 圆柱 ----------
+    mask_cyl = (pmt == 1)
+    if np.any(mask_cyl):
+        d = mad[mask_cyl]
+        proj = np.sum(trans * d, axis=1, keepdims=True) * d
+        loc_updated[mask_cyl] = loc[mask_cyl] + (trans - proj)
+
+    # ---------- 其它 ----------
+    mask_other = ~(mask_plane | mask_cyl)
+    if np.any(mask_other):
+        loc_updated[mask_other] = loc[mask_other] + trans
+
+    return loc_updated
+
+
+def single_load(pcd_file):
+    point_set = np.loadtxt(pcd_file)
+
+    xyz = point_set[:, :3]  # [n, 3]
+    pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]
+    mad = point_set[:, 4:7]  # 主方向 [n, 3]
+    dim = point_set[:, 7]  # 主尺寸 [n, ]
+    nor = point_set[:, 8:11]  # 法线 [n, 3]
+    loc = point_set[:, 11:14]  # 主位置 [n, 3]
+    affil_idx = point_set[:, 14]  # 从属索引 [n, ]
+
+    # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
+    move_dir = -np.mean(xyz, axis=0)
+    xyz = xyz + move_dir
+    scale = 1.0 / np.max(np.sqrt(np.sum(xyz ** 2, axis=1)), 0)
+    xyz = xyz * scale
+
+    # 平移缩放后，pmt, mad, nor 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
+    dim = update_dim(pmt, dim, scale)
+    loc = update_loc(pmt, loc, mad, move_dir)
+    loc = loc * scale
+
+    return xyz, pmt, mad, dim, nor, loc, affil_idx
+
+
+def test():
+    afile = r'C:\Users\ChengXi\Desktop\cstnet2\comb.txt'
+    xyz, pmt, mad, dim, nor, loc, affil_idx = single_load(afile)
+
+
+
 if __name__ == '__main__':
+    test()
+
+
+
+
     pass
 

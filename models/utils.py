@@ -219,23 +219,35 @@ def fps(xyz, n_samples):
     return centroids
 
 
-def knn(vertices: "(bs, vertice_num, 3)",  neighbor_num: int, is_backdis: bool = False):
-    bs, v, _ = vertices.size()
-    inner = torch.bmm(vertices, vertices.transpose(1, 2)) #(bs, v, v)
-    quadratic = torch.sum(vertices**2, dim= 2) #(bs, v)
+def knn(vertices, k, is_back_dist=False, is_include_self=True):
+    """
+    返回最近的 k 个点索引
+    :param vertices: [bs, n_point, 3]
+    :param k: number of neighbor points
+    :param is_back_dist: 是否返回平方距离
+    :param is_include_self: 是否包含自身
+    :return: index of neighbor points [bs, n_point, k]
+    """
+    # 计算平方距离
+    inner = torch.bmm(vertices, vertices.transpose(1, 2))  # (bs, v, v)
+    quadratic = torch.sum(vertices**2, dim=2)  # (bs, v)
     distance = inner * (-2) + quadratic.unsqueeze(1) + quadratic.unsqueeze(2)
-    # print('distance.shape: ', distance.shape)
 
-    neighbor_index = torch.topk(distance, k=neighbor_num + 1, dim=-1, largest=False)[1]
-    neighbor_index = neighbor_index[:, :, 1:]
-    if is_backdis:
+    neighbor_index = torch.topk(distance, k=k + 1, dim=-1, largest=False)[1]
+
+    if is_include_self:
+        neighbor_index = neighbor_index[:, :, :-1]
+    else:
+        neighbor_index = neighbor_index[:, :, 1:]
+
+    if is_back_dist:
         return neighbor_index, distance
     else:
         return neighbor_index
 
 
-def surface_knn(points_all: "(bs, n_pnts, 3)", k_near: int = 100, n_stepk = 10):
-    ind_neighbor_all, all_dist = knn(points_all, n_stepk, True)
+def surface_knn(points_all: "(bs, n_pnts, 3)", k_near=100, n_stepk=10):
+    ind_neighbor_all, all_dist = knn(points_all, n_stepk, True, False)
 
     neighbor_index_max = torch.max(all_dist, dim=-1, keepdim=True)[1]
 

@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 import shutil
 from pathlib import Path
 
-from models.cstpnt import CstPnt
+from models.cst_pcd import CstPnt
 
 
 def is_suffix_step(filename):
