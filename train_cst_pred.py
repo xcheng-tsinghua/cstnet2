@@ -44,10 +44,10 @@ def main(args):
     # data
     data_root = args.root_local if eval(args.local) else args.root_sever
 
-    train_set = CstNet2Dataset(root=data_root, npoints=args.npoints, data_augmentation=True)
+    train_set = CstNet2Dataset(root=data_root, is_train=True, npoints=args.npoints)
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
-    test_set = CstNet2Dataset(root=data_root, npoints=args.npoints, data_augmentation=True)
+    test_set = CstNet2Dataset(root=data_root, is_train=False, npoints=args.npoints)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
     # model
