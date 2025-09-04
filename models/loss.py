@@ -224,6 +224,9 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # 总损失
     loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
 
+    if loss_all.isnan().item():
+        print(f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loc_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
+
     return loss_all
 
 
