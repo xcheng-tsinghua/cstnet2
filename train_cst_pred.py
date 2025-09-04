@@ -16,7 +16,7 @@ from models.loss import constraint_loss
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--bs', type=int, default=16, help='batch size in training')
+    parser.add_argument('--bs', type=int, default=32, help='batch size in training')
     parser.add_argument('--epoch', default=2000, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate in training')
     parser.add_argument('--npoints', type=int, default=2000, help='Point Number')
