@@ -79,7 +79,7 @@ def main(args):
         train_loss_all = []
         predictor = predictor.train()
 
-        for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader), disable=True):
+        for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
             xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
 
             xyz = xyz.float().cuda()
@@ -97,20 +97,23 @@ def main(args):
 
             loss.backward()
             optimizer.step()
-            train_loss_all.append(loss.item())
 
-            print(f'c_train_loss: {loss.item()}')
+            c_loss = loss.item()
+            train_loss_all.append(c_loss)
+            writer.add_scalar('train/loss_batch', c_loss)
+
+        train_loss_epoch = np.mean(train_loss_all).item()
+        writer.add_scalar('train/loss_epoch', train_loss_epoch)
 
         scheduler.step()
         torch.save(predictor.state_dict(), model_savepth)
-        train_loss = np.mean(train_loss_all).item()
 
         # test
         with torch.no_grad():
             test_loss_all = []
             predictor = predictor.eval()
 
-            for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader), disable=True):
+            for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
                 xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
 
                 xyz = xyz.float().cuda()
@@ -121,20 +124,20 @@ def main(args):
                 loc_gt = loc_gt.float().cuda()
                 affil_idx = affil_idx.long().cuda()
 
-                # if any(torch.isnan(xyz)):
-                #     print('发现 nan 在 xyz')
-
                 log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
                 loss = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
                                        pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
-                test_loss_all.append(loss.item())
-                print(f'c_test_loss: {loss.item()}')
+                c_loss = loss.item()
+                test_loss_all.append(c_loss)
+                writer.add_scalar('test/loss_batch', c_loss)
 
-            test_loss = np.mean(test_loss_all).item()
-            print(f'{epoch} / {args.epoch}: train_loss: {train_loss}. test_loss: {test_loss}')
-            writer.add_scalar('train_loss', train_loss, epoch)
-            writer.add_scalar('train_loss', test_loss, epoch)
+            test_loss_epoch = np.mean(test_loss_all).item()
+            writer.add_scalar('test/loss_epoch', test_loss_epoch)
+
+            print(f'{epoch} / {args.epoch}: train_loss: {train_loss_epoch}. test_loss: {test_loss_epoch}')
+
+    writer.close()
 
 
 if __name__ == '__main__':
