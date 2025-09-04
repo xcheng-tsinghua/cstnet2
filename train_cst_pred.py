@@ -99,7 +99,7 @@ def main(args):
             optimizer.step()
             train_loss_all.append(loss.item())
 
-            print(f'c_loss: {loss.item()}')
+            print(f'c_train_loss: {loss.item()}')
 
         scheduler.step()
         torch.save(predictor.state_dict(), model_savepth)
@@ -110,7 +110,7 @@ def main(args):
             test_loss_all = []
             predictor = predictor.eval()
 
-            for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
+            for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader), disable=True):
                 xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
 
                 xyz = xyz.float().cuda()
@@ -129,6 +129,7 @@ def main(args):
                                        pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
                 test_loss_all.append(loss.item())
+                print(f'c_test_loss: {loss.item()}')
 
             test_loss = np.mean(test_loss_all).item()
             print(f'{epoch} / {args.epoch}: train_loss: {train_loss}. test_loss: {test_loss}')
