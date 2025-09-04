@@ -22,6 +22,7 @@ def parse_args():
     parser.add_argument('--npoints', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
+    parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
@@ -52,11 +53,15 @@ def main(args):
     predictor = CstPcd(args.npoints).cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
-    try:
-        predictor.load_state_dict(torch.load(model_savepth))
-        print('training from exist model: ' + model_savepth)
-    except:
-        print('no existing model, training from scratch')
+
+    if eval(args.is_load_weight):
+        try:
+            predictor.load_state_dict(torch.load(model_savepth))
+            print('training from exist model: ' + model_savepth)
+        except:
+            print('no existing model, training from scratch')
+    else:
+        print('does not load weight, training from scratch')
 
     # optimizer
     optimizer = torch.optim.Adam(
@@ -112,6 +117,9 @@ def main(args):
                 nor_gt = nor_gt.float().cuda()
                 loc_gt = loc_gt.float().cuda()
                 affil_idx = affil_idx.long().cuda()
+
+                if any(torch.isnan(xyz)):
+                    print('发现 nan 在 xyz')
 
                 log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
                 loss = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
