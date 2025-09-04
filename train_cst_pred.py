@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 from datetime import datetime
 import argparse
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 from data_utils.datasets import CstNet2Dataset
 from models.cst_pcd import CstPcd
