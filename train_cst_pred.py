@@ -78,7 +78,7 @@ def main(args):
         train_loss_all = []
         predictor = predictor.train()
 
-        for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
+        for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader), disable=True):
             xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
 
             xyz = xyz.float().cuda()
@@ -97,6 +97,8 @@ def main(args):
             loss.backward()
             optimizer.step()
             train_loss_all.append(loss.item())
+
+            print(f'c_loss: {loss.item()}')
 
         scheduler.step()
         torch.save(predictor.state_dict(), model_savepth)
@@ -118,8 +120,8 @@ def main(args):
                 loc_gt = loc_gt.float().cuda()
                 affil_idx = affil_idx.long().cuda()
 
-                if any(torch.isnan(xyz)):
-                    print('发现 nan 在 xyz')
+                # if any(torch.isnan(xyz)):
+                #     print('发现 nan 在 xyz')
 
                 log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
                 loss = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,

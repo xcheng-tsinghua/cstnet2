@@ -194,62 +194,32 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # 基元类型
     pmt_nll = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
 
-    if any(torch.isnan(pmt_nll)):
-        print('发现 nan 在 pmt_nll')
-
     # 主方向损失
     mad_mse = mse_loss_with_pmt_considered(mad_pred, mad_gt, pmt_gt, (0, 1, 2))
-
-    if any(torch.isnan(mad_mse)):
-        print('发现 nan 在 mad_mse')
 
     # 主尺寸损失
     dim_mse = mse_loss_with_pmt_considered(dim_pred, dim_gt, pmt_gt, (1, 2, 3))
 
-    if any(torch.isnan(dim_mse)):
-        print('发现 nan 在 dim_mse')
-
     # 法线损失
     nor_mse = mse_loss_with_pmt_considered(nor_pred, nor_gt, pmt_gt, (0, 1, 2, 3, 4))
-
-    if any(torch.isnan(nor_mse)):
-        print('发现 nan 在 nor_mse')
 
     # 主位置损失
     loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))
 
-    if any(torch.isnan(loc_mse)):
-        print('发现 nan 在 loc_mse')
-
     # 平面几何损失
     loss_plane = geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt)
-
-    if any(torch.isnan(loss_plane)):
-        print('发现 nan 在 loss_plane')
 
     # 圆柱几何损失
     loss_cylinder = geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
 
-    if any(torch.isnan(loss_cylinder)):
-        print('发现 nan 在 loss_cylinder')
-
     # 圆锥几何损失
     loss_cone = geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
-
-    if any(torch.isnan(loss_cone)):
-        print('发现 nan 在 loss_cone')
 
     # 球几何损失
     loss_sphere = geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt)
 
-    if any(torch.isnan(loss_sphere)):
-        print('发现 nan 在 loss_sphere')
-
     # 实例一致性损失
     loss_cons = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
-
-    if any(torch.isnan(loss_cons)):
-        print('发现 nan 在 loss_cons')
 
     # 总损失
     loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
