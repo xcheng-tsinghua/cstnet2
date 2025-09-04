@@ -15,9 +15,14 @@ def mse_loss_with_pmt_considered(attr_pred, attr_gt, pmt_gt, valid_pmt):
     # 筛选 mask：GT or 预测的基元类型是否在有效集合里
     mask = torch.isin(pmt_gt, torch.tensor(valid_pmt, device=pmt_gt.device))
 
-    # 只对有效类型计算 loss
-    loss = F.mse_loss(attr_pred[mask], attr_gt[mask])
-    return loss
+    if mask.sum() > 0:
+
+        # 只对有效类型计算 loss
+        loss = F.mse_loss(attr_pred[mask], attr_gt[mask])
+        return loss
+
+    else:
+        return 0.0
 
 
 def geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt):
@@ -31,21 +36,26 @@ def geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt):
     # 找到全部平面类型的点
     mask = (pmt_gt == 0)  # [bs, point]
 
-    xyz = xyz[mask]  # [n_item, 3]
-    mad_pred = mad_pred[mask]  # [n_item, 3]
-    nor_pred = nor_pred[mask]  # [n_item, 3]
-    loc_pred = loc_pred[mask]  # [n_item, 3]
+    if mask.sum() > 0:
 
-    # 点到垂足的向量与主方向垂直，内积要接近 0
-    dot_product = torch.einsum('ij, ij -> i', (loc_pred - xyz), mad_pred).abs().mean()
+        xyz = xyz[mask]  # [n_item, 3]
+        mad_pred = mad_pred[mask]  # [n_item, 3]
+        nor_pred = nor_pred[mask]  # [n_item, 3]
+        loc_pred = loc_pred[mask]  # [n_item, 3]
 
-    # 原点到垂足的向量与主方向平行
-    parallel1 = (torch.norm(loc_pred, dim=1) - torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs()).abs().mean()
+        # 点到垂足的向量与主方向垂直，内积要接近 0
+        dot_product = torch.einsum('ij, ij -> i', (loc_pred - xyz), mad_pred).abs().mean()
 
-    # 主方向和法线共线
-    parallel2 = (1.0 - torch.einsum('ij, ij -> i', mad_pred, nor_pred).abs()).abs().mean()
+        # 原点到垂足的向量与主方向平行
+        parallel1 = (torch.norm(loc_pred, dim=1) - torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs()).abs().mean()
 
-    return dot_product + 0.5 * parallel1 + 0.5 * parallel2
+        # 主方向和法线共线
+        parallel2 = (1.0 - torch.einsum('ij, ij -> i', mad_pred, nor_pred).abs()).abs().mean()
+
+        return dot_product + 0.5 * parallel1 + 0.5 * parallel2
+
+    else:
+        return 0.0
 
 
 def geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
@@ -59,20 +69,25 @@ def geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
     # 找到全部圆柱类型的点
     mask = (pmt_gt == 1)  # [bs, point]
 
-    xyz = xyz[mask]  # [n_item, 3]
-    mad_pred = mad_pred[mask]  # [n_item, 3]
-    dim_pred = dim_pred[mask]  # [n_item, 3]
-    loc_pred = loc_pred[mask]  # [n_item, 3]
+    if mask.sum() > 0:
 
-    # 半径与预测主尺寸相等
-    radius = torch.cross(xyz - loc_pred, mad_pred, dim=1)
-    radius = radius.norm(dim=1)
-    radius = (radius - dim_pred).abs().mean()
+        xyz = xyz[mask]  # [n_item, 3]
+        mad_pred = mad_pred[mask]  # [n_item, 3]
+        dim_pred = dim_pred[mask]  # [n_item, 3]
+        loc_pred = loc_pred[mask]  # [n_item, 3]
 
-    # 原点到垂足的向量与主方向垂直
-    dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
+        # 半径与预测主尺寸相等
+        radius = torch.cross(xyz - loc_pred, mad_pred, dim=1)
+        radius = radius.norm(dim=1)
+        radius = (radius - dim_pred).abs().mean()
 
-    return radius + dot_product
+        # 原点到垂足的向量与主方向垂直
+        dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
+
+        return radius + dot_product
+
+    else:
+        return 0.0
 
 
 def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
@@ -86,18 +101,23 @@ def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
     # 找到全部圆锥类型的点
     mask = (pmt_gt == 2)  # [bs, point]
 
-    xyz = xyz[mask]  # [n_item, 3]
-    mad_pred = mad_pred[mask]  # [n_item, 3]
-    dim_pred = dim_pred[mask]  # [n_item, ]
-    loc_pred = loc_pred[mask]  # [n_item, 3]
+    if mask.sum() > 0:
 
-    # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
-    apex_to_xyz = xyz - loc_pred
-    dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
-    dot2 = mad_pred.norm(dim=1) * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
-    semi_angle = (dot1 - dot2).abs().mean()
+        xyz = xyz[mask]  # [n_item, 3]
+        mad_pred = mad_pred[mask]  # [n_item, 3]
+        dim_pred = dim_pred[mask]  # [n_item, ]
+        loc_pred = loc_pred[mask]  # [n_item, 3]
 
-    return semi_angle
+        # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
+        apex_to_xyz = xyz - loc_pred
+        dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
+        dot2 = mad_pred.norm(dim=1) * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
+        semi_angle = (dot1 - dot2).abs().mean()
+
+        return semi_angle
+
+    else:
+        return 0.0
 
 
 def geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt):
@@ -110,15 +130,20 @@ def geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt):
     # 找到全部球类型的点
     mask = (pmt_gt == 3)  # [bs, point]
 
-    xyz = xyz[mask]  # [n_item, 3]
-    dim_pred = dim_pred[mask]  # [n_item, ]
-    loc_pred = loc_pred[mask]  # [n_item, 3]
+    if mask.sum() > 0:
 
-    # 球面上的点到主位置的距离等于主尺寸
-    center_to_xyz = xyz - loc_pred
-    radius = (center_to_xyz.norm(dim=1) - dim_pred).abs().mean()
+        xyz = xyz[mask]  # [n_item, 3]
+        dim_pred = dim_pred[mask]  # [n_item, ]
+        loc_pred = loc_pred[mask]  # [n_item, 3]
 
-    return radius
+        # 球面上的点到主位置的距离等于主尺寸
+        center_to_xyz = xyz - loc_pred
+        radius = (center_to_xyz.norm(dim=1) - dim_pred).abs().mean()
+
+        return radius
+
+    else:
+        return 0.0
 
 
 def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx):
