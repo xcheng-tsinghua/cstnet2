@@ -121,6 +121,52 @@ def geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt):
     return radius
 
 
+def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx):
+    """
+    log_pmt_pred: [B, P, 5] log-softmax后的基元类型预测
+    mad_pred: [B, P, 3] 主方向预测
+    dim_pred: [B, P] 尺寸预测
+    loc_pred: [B, P, 3] 主位置预测
+    affil_idx: [B, P] 每个点所属实例的索引 (int)
+    """
+    bs = log_pmt_pred.size(0)
+    loss_total = 0.0
+
+    for b in range(bs):
+        # 找到无重复的实例id
+        inst_ids = affil_idx[b].unique()
+
+        for inst_id in inst_ids:
+            mask = (affil_idx[b] == inst_id)  # 当前实例的点
+            if mask.sum() <= 1:
+                continue  # 只有1个点不计算一致性
+
+            # ---- 基元类型一致性（对logits取均值，再和每个点对齐）----
+            logits = log_pmt_pred[b][mask]   # [N, 5]
+            mean_logits = logits.mean(0, keepdim=True)  # [1, 5]
+            loss_pmt = F.mse_loss(logits, mean_logits.expand_as(logits))
+
+            # ---- 主方向一致性 ----
+            mad = mad_pred[b][mask]  # [N, 3]
+            mean_mad = mad.mean(0, keepdim=True)
+            loss_mad = F.mse_loss(mad, mean_mad.expand_as(mad))
+
+            # ---- 尺寸一致性 ----
+            dim = dim_pred[b][mask]  # [N]
+            mean_dim = dim.mean()
+            loss_dim = F.mse_loss(dim, mean_dim.expand_as(dim))
+
+            # ---- 主位置一致性 ----
+            loc = loc_pred[b][mask]  # [N, 3]
+            mean_loc = loc.mean(0, keepdim=True)
+            loss_loc = F.mse_loss(loc, mean_loc.expand_as(loc))
+
+            loss_total += (loss_pmt + loss_mad + loss_dim + loss_loc)
+
+    # 归一化
+    return loss_total / bs
+
+
 def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
                     pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx):
     """
@@ -172,7 +218,11 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # 球几何损失
     loss_sphere = geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt)
 
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere
+    # 实例一致性损失
+    loss_cons = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
+
+    # 总损失
+    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
 
     return loss_all
 
