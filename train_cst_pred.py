@@ -100,7 +100,7 @@ def main(args):
         # test
         with torch.no_grad():
             test_loss_all = []
-            classifier = classifier.eval()
+            predictor = predictor.eval()
 
             for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
                 xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
