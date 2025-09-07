@@ -33,7 +33,7 @@ def parse_args():
 
 
 def main(args):
-    save_str = 'cst_pcd'
+    save_str = 'cst_pcd_2'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))

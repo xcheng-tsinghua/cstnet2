@@ -282,7 +282,7 @@ class CstNet2Dataset(Dataset):
         dim = point_set[:, 7]  # 主尺寸 [n, ]
         nor = point_set[:, 8:11]  # 法线 [n, 3]
         loc = point_set[:, 11:14]  # 主位置 [n, 3]
-        affil_idx = point_set[:, 14]  # 从属索引 [n, ]
+        affil_idx = point_set[:, 14].astype(np.int32)  # 从属索引 [n, ]
 
         # 已弃用在加载时调整点云，直接在点云生成时归一化三维模型，使其处于 [-1, 1]^3
         # # 质心平移到原点，三轴范围缩放到 [-1, 1]^3

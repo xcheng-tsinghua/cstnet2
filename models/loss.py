@@ -229,7 +229,7 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     nor_mse = mse_loss_with_pmt_considered(nor_pred, nor_gt, pmt_gt, (0, 1, 2, 3, 4))
 
     # 主位置损失
-    # loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))
+    # loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))  # 测试这个损失很大，可能造成训练不稳定，故注释
 
     # 平面几何损失
     loss_plane = geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt)
@@ -250,10 +250,10 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
     loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
 
-    if loss_all.isnan().item() or loss_all.item() >= 20:
-        # print(f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loc_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
-        print(
-            f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
+    # if loss_all.isnan().item() or loss_all.item() >= 20:
+    #     # print(f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loc_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
+    #     print(
+    #         f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
 
     return loss_all
 
