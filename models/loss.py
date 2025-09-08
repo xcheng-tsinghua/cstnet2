@@ -229,7 +229,7 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     nor_mse = mse_loss_with_pmt_considered(nor_pred, nor_gt, pmt_gt, (0, 1, 2, 3, 4))
 
     # 主位置损失
-    # loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))  # 测试这个损失很大，可能造成训练不稳定，故注释
+    loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))  # 测试这个损失很大，可能造成训练不稳定，故注释
 
     # 平面几何损失
     loss_plane = geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt)
@@ -244,18 +244,30 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     loss_sphere = geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt)
 
     # 实例一致性损失
-    loss_cons = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
+    loss_consistent = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
 
     # 总损失
     # loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
+    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_consistent
+
+    loss_dict = {
+        'all': loss_all.item(),
+        'pmt_nll': pmt_nll.item(),
+        'mad_mse': mad_mse.item(),
+        'dim_mse': dim_mse.item(),
+        'nor_mse': nor_mse.item(),
+        'loc_mse': loc_mse.item(),
+        'loss_plane': loss_plane.item(),
+        'loss_cylinder': loss_cylinder.item(),
+        'loss_cone': loss_cone.item(),
+        'loss_sphere': loss_sphere.item(),
+        'loss_consistent': loss_consistent.item()
+    }
 
     if loss_all.isnan().item() or loss_all.item() >= 20:
-        # print(f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loc_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
-        print(
-            f'{loss_all.item()} = {pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
+        print(loss_dict)
 
-    return loss_all
+    return loss_all, loss_dict
 
 
 def test():

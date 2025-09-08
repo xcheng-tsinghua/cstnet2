@@ -32,6 +32,11 @@ def parse_args():
     return args
 
 
+def write_loss_dict(writer: SummaryWriter, loss_dict: dict, step: int, add_str: str):
+    for c_key, c_value in loss_dict.items():
+        writer.add_scalar(f'detailed/{add_str}/' + c_key, c_value, step)
+
+
 def main(args):
     save_str = 'cst_pcd_3_'
 
@@ -94,7 +99,7 @@ def main(args):
 
             optimizer.zero_grad()
             log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
-            loss = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
+            loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
                                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
             loss.backward()
@@ -103,6 +108,7 @@ def main(args):
             c_loss = loss.item()
             train_loss_all.append(c_loss)
             writer.add_scalar('train/loss_batch', c_loss, train_batch)
+            write_loss_dict(writer, loss_dict, train_batch, 'train')
             train_batch += 1
 
         train_loss_epoch = np.mean(train_loss_all).item()
@@ -128,16 +134,17 @@ def main(args):
                 affil_idx = affil_idx.long().cuda()
 
                 log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
-                loss = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
+                loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
                                        pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
                 c_loss = loss.item()
                 test_loss_all.append(c_loss)
                 writer.add_scalar('test/loss_batch', c_loss, epoch)
+                write_loss_dict(writer, loss_dict, test_batch, 'test')
+                test_batch += 1
 
             test_loss_epoch = np.mean(test_loss_all).item()
             writer.add_scalar('test/loss_epoch', test_loss_epoch, test_batch)
-            test_batch += 1
 
             print(f'{epoch} / {args.epoch}: train_loss: {train_loss_epoch}. test_loss: {test_loss_epoch}')
 
