@@ -36,8 +36,8 @@ def main(args):
     save_str = 'cst_pcd_3_'
 
     # logger
-    log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
-    # log_dir = os.path.join('log', save_str)
+    # log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
+    log_dir = os.path.join('log', save_str)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(logdir=log_dir)
 
