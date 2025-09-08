@@ -253,7 +253,7 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     if loss_all.isnan().item() or loss_all.item() >= 20:
         # print(f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loc_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
         print(
-            f'{pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
+            f'{loss_all.item()} = {pmt_nll} + {mad_mse} + {dim_mse} + {nor_mse} + {loss_plane} + {loss_cylinder} + {loss_cone} + {loss_sphere} + {loss_cons}')
 
     return loss_all
 
