@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument('--npoints', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
-    parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
+    parser.add_argument('--is_load_weight', default='True', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
@@ -33,7 +33,7 @@ def parse_args():
 
 
 def main(args):
-    save_str = 'cst_pcd_2'
+    save_str = 'cst_pcd2_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -75,6 +75,8 @@ def main(args):
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
 
     # train
+    train_batch = 0
+    test_batch = 0
     for epoch in range(args.epoch):
         train_loss_all = []
         predictor = predictor.train()
@@ -100,10 +102,11 @@ def main(args):
 
             c_loss = loss.item()
             train_loss_all.append(c_loss)
-            writer.add_scalar('train/loss_batch', c_loss)
+            writer.add_scalar('train/loss_batch', c_loss, train_batch)
+            train_batch += 1
 
         train_loss_epoch = np.mean(train_loss_all).item()
-        writer.add_scalar('train/loss_epoch', train_loss_epoch)
+        writer.add_scalar('train/loss_epoch', train_loss_epoch, epoch)
 
         scheduler.step()
         torch.save(predictor.state_dict(), model_savepth)
@@ -130,10 +133,11 @@ def main(args):
 
                 c_loss = loss.item()
                 test_loss_all.append(c_loss)
-                writer.add_scalar('test/loss_batch', c_loss)
+                writer.add_scalar('test/loss_batch', c_loss, epoch)
 
             test_loss_epoch = np.mean(test_loss_all).item()
-            writer.add_scalar('test/loss_epoch', test_loss_epoch)
+            writer.add_scalar('test/loss_epoch', test_loss_epoch, test_batch)
+            test_batch += 1
 
             print(f'{epoch} / {args.epoch}: train_loss: {train_loss_epoch}. test_loss: {test_loss_epoch}')
 
