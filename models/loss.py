@@ -251,23 +251,30 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_consistent
 
     loss_dict = {
-        'all': loss_all.item(),
-        'pmt_nll': pmt_nll.item(),
-        'mad_mse': mad_mse.item(),
-        'dim_mse': dim_mse.item(),
-        'nor_mse': nor_mse.item(),
-        'loc_mse': loc_mse.item(),
-        'loss_plane': loss_plane.item(),
-        'loss_cylinder': loss_cylinder.item(),
-        'loss_cone': loss_cone.item(),
-        'loss_sphere': loss_sphere.item(),
-        'loss_consistent': loss_consistent.item()
+        'all': value_item(loss_all),
+        'pmt_nll': value_item(pmt_nll),
+        'mad_mse': value_item(mad_mse),
+        'dim_mse': value_item(dim_mse),
+        'nor_mse': value_item(nor_mse),
+        'loc_mse': value_item(loc_mse),
+        'loss_plane': value_item(loss_plane),
+        'loss_cylinder': value_item(loss_cylinder),
+        'loss_cone': value_item(loss_cone),
+        'loss_sphere': value_item(loss_sphere),
+        'loss_consistent': value_item(loss_consistent),
     }
 
     if loss_all.isnan().item() or loss_all.item() >= 20:
         print(loss_dict)
 
     return loss_all, loss_dict
+
+
+def value_item(atensor):
+    if isinstance(atensor, float):
+        return atensor
+    else:
+        return atensor.item()
 
 
 def test():

@@ -10,7 +10,7 @@ import argparse
 from tensorboardX import SummaryWriter
 
 from data_utils.datasets import CstNet2Dataset
-from models.cst_pcd import CstPcd
+from models.cst_pcd import CstPcdSimplify
 from models.loss import constraint_loss
 
 
@@ -56,7 +56,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
     # model
-    predictor = CstPcd(args.npoints).cuda()
+    predictor = CstPcdSimplify(args.npoints).cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
 
