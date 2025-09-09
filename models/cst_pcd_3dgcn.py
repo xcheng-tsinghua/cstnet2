@@ -342,7 +342,7 @@ class CstPcd(nn.Module):
 
 def test():
     model = CstPcd().cuda()
-    test_tensor = torch.rand(8, 2000, 3).cuda()
+    test_tensor = torch.rand(32, 2000, 3).cuda()
 
     res = model(test_tensor)
     print(res.size())

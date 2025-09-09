@@ -13,8 +13,8 @@ from typing import Union
 import torch.nn.functional as F
 
 from data_utils.datasets import CstNet2Dataset
-# from models.cst_pcd import CstPcd
-from models.cst_pcd_3dgcn import CstPcd
+from models.cst_pcd import CstPcd
+# from models.cst_pcd_3dgcn import CstPcd
 from models.loss import constraint_loss
 
 
@@ -46,7 +46,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'cst_pcd_3dgcn_'
+    save_str = 'cst_pcd_5_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
