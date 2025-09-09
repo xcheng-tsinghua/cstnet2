@@ -86,6 +86,7 @@ class UpSample(nn.Module):
 class CstPcd(nn.Module):
     def __init__(self, n_points_all, sample_rate=0.9):
         super().__init__()
+        print('constraint prediction original version')
 
         self.dn1 = DownSample(int(n_points_all * sample_rate), 50, 3, 64)
         self.dn2 = DownSample(int(n_points_all * sample_rate ** 2), 40, 64, 128)

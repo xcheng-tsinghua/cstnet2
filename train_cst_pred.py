@@ -12,13 +12,14 @@ import statistics
 from typing import Union
 
 from data_utils.datasets import CstNet2Dataset
-from models.cst_pcd import CstPcdSimplify
+# from models.cst_pcd import CstPcd
+from models.cst_pcd_3dgcn import CstPcd
 from models.loss import constraint_loss
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--bs', type=int, default=50, help='batch size in training')
+    parser.add_argument('--bs', type=int, default=32, help='batch size in training')
     parser.add_argument('--epoch', default=2000, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate in training')
     parser.add_argument('--npoints', type=int, default=2000, help='Point Number')
@@ -40,11 +41,11 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
         loss_dict = {k: statistics.mean([d[k] for d in loss_dict]) for k in loss_dict[0]}
 
     for c_key, c_value in loss_dict.items():
-        writer.add_scalar(f'{tag}/' + c_key, c_value, step)
+        writer.add_scalar(f'{tag}/{c_key}', c_value, step)
 
 
 def main(args):
-    save_str = 'cst_pcd_3_'
+    save_str = 'cst_pcd_3dgcn_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -62,7 +63,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
     # model
-    predictor = CstPcdSimplify(args.npoints).cuda()
+    predictor = CstPcd(args.npoints).cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
 
@@ -83,7 +84,7 @@ def main(args):
         eps=1e-08,
         weight_decay=args.decay_rate
     )
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
 
     # train
     train_batch = 0
