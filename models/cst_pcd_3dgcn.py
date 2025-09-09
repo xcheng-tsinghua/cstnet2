@@ -279,10 +279,10 @@ class CstPcd(nn.Module):
         self.global_mlp = utils.MLP(1, (dim_fuse, 512, 256), final_proc=True)
 
         self.mlp_pmt = utils.MLP(1, (256, 64, 5))  # 5 类基元
-        self.mlp_mad = utils.MLP(1, (256, 64, 3))  # 主方向 3 个坐标分量
-        self.mlp_dim = utils.MLP(1, (256, 64, 1))  # 主尺寸 1 个实数
-        self.mlp_nor = utils.MLP(1, (256, 64, 3))  # 法线 3 个坐标分量
-        self.mlp_loc = utils.MLP(1, (256, 64, 3))  # 主位置 3 个坐标分量
+        # self.mlp_mad = utils.MLP(1, (256, 64, 3))  # 主方向 3 个坐标分量
+        # self.mlp_dim = utils.MLP(1, (256, 64, 1))  # 主尺寸 1 个实数
+        # self.mlp_nor = utils.MLP(1, (256, 64, 3))  # 法线 3 个坐标分量
+        # self.mlp_loc = utils.MLP(1, (256, 64, 3))  # 主位置 3 个坐标分量
 
     def forward(self, vertices):
         """
