@@ -276,9 +276,18 @@ class CstPcd(nn.Module):
 
         dim_fuse = sum([128, 128, 256, 256, 512, 512])
 
-        self.global_mlp = utils.MLP(1, (dim_fuse, 512, 256), final_proc=True)
+        self.global_mlp = nn.Sequential(
+            nn.Conv1d(dim_fuse, 512, 1),
+            nn.ReLU(inplace= True),
+            nn.Conv1d(512, 512, 1),
+            nn.ReLU(inplace= True),
+            nn.Conv1d(512, 5, 1),
+        )
 
-        self.mlp_pmt = utils.MLP(1, (256, 64, 5))  # 5 类基元
+
+        # self.global_mlp = utils.MLP(1, (dim_fuse, 512, 256), final_proc=True)
+        #
+        # self.mlp_pmt = utils.MLP(1, (256, 64, 5))  # 5 类基元
         # self.mlp_mad = utils.MLP(1, (256, 64, 3))  # 主方向 3 个坐标分量
         # self.mlp_dim = utils.MLP(1, (256, 64, 1))  # 主尺寸 1 个实数
         # self.mlp_nor = utils.MLP(1, (256, 64, 3))  # 法线 3 个坐标分量
@@ -314,11 +323,13 @@ class CstPcd(nn.Module):
         fm_fuse = torch.cat([fm_0, fm_1, fm_2, fm_3, fm_4, f_global], dim=2)
 
         conv1d_input = fm_fuse.permute(0, 2, 1)  # (bs, fuse_ch, vertice_num)
-        l0_fea = self.global_mlp(conv1d_input)
+        l0_fea = self.global_mlp(conv1d_input).permute(0, 2, 1)
+        # pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
+        log_pmt = F.log_softmax(l0_fea, dim=2)  # 分类，使用 log_softmax
 
         # FC layers
-        pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
-        log_pmt = F.log_softmax(pmt, dim=2)  # 分类，使用 log_softmax
+        # pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
+        # log_pmt = F.log_softmax(pmt, dim=2)  # 分类，使用 log_softmax
 
         # mad = self.mlp_mad(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
         # dim = self.mlp_dim(l0_fea).squeeze()  # [bs, n_points_all]
