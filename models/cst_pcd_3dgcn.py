@@ -320,16 +320,17 @@ class CstPcd(nn.Module):
         pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
         log_pmt = F.log_softmax(pmt, dim=2)  # 分类，使用 log_softmax
 
-        mad = self.mlp_mad(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        dim = self.mlp_dim(l0_fea).squeeze()  # [bs, n_points_all]
-        nor = self.mlp_nor(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        loc = self.mlp_loc(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 4]
+        # mad = self.mlp_mad(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
+        # dim = self.mlp_dim(l0_fea).squeeze()  # [bs, n_points_all]
+        # nor = self.mlp_nor(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
+        # loc = self.mlp_loc(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 4]
 
-        return log_pmt, mad, dim, nor, loc
+        return log_pmt
+        # return log_pmt, mad, dim, nor, loc
 
 
 def test():
-    model = GCN3D(class_num=50, support_num=1, neighbor_num=50).cuda()
+    model = CstPcd().cuda()
     test_tensor = torch.rand(8, 2000, 3).cuda()
 
     res = model(test_tensor)
