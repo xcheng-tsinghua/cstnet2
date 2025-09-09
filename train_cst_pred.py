@@ -107,11 +107,11 @@ def main(args):
             affil_idx = affil_idx.long().cuda()
 
             optimizer.zero_grad()
-            log_pmt_pred = predictor(xyz)
-            loss = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
-            # log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred = predictor(xyz)
-            # loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-            #                        pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
+            # log_pmt_pred = predictor(xyz)
+            # loss = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
+            log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred = predictor(xyz)
+            loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
+                                              pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
             loss.backward()
             optimizer.step()
