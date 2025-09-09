@@ -8,6 +8,8 @@ from tqdm import tqdm
 from datetime import datetime
 import argparse
 from tensorboardX import SummaryWriter
+import statistics
+from typing import Union
 
 from data_utils.datasets import CstNet2Dataset
 from models.cst_pcd import CstPcdSimplify
@@ -32,9 +34,13 @@ def parse_args():
     return args
 
 
-def write_loss_dict(writer: SummaryWriter, loss_dict: dict, step: int, add_str: str):
+def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tuple[dict]], step: int, tag: str):
+
+    if isinstance(loss_dict, (list, tuple)):
+        loss_dict = {k: statistics.mean([d[k] for d in loss_dict]) for k in loss_dict[0]}
+
     for c_key, c_value in loss_dict.items():
-        writer.add_scalar(f'detailed/{add_str}/' + c_key, c_value, step)
+        writer.add_scalar(f'{tag}/' + c_key, c_value, step)
 
 
 def main(args):
@@ -84,6 +90,7 @@ def main(args):
     test_batch = 0
     for epoch in range(args.epoch):
         train_loss_all = []
+        train_loss_dict_all = []
         predictor = predictor.train()
 
         for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
@@ -107,12 +114,14 @@ def main(args):
 
             c_loss = loss.item()
             train_loss_all.append(c_loss)
+            train_loss_dict_all.append(loss_dict)
             writer.add_scalar('train/loss_batch', c_loss, train_batch)
-            write_loss_dict(writer, loss_dict, train_batch, 'train')
+            write_loss_dict(writer, loss_dict, train_batch, 'detailed/batch/train')
             train_batch += 1
 
         train_loss_epoch = np.mean(train_loss_all).item()
         writer.add_scalar('train/loss_epoch', train_loss_epoch, epoch)
+        write_loss_dict(writer, train_loss_dict_all, epoch, 'detailed/epoch/train')
 
         scheduler.step()
         torch.save(predictor.state_dict(), model_savepth)
@@ -120,6 +129,7 @@ def main(args):
         # test
         with torch.no_grad():
             test_loss_all = []
+            test_loss_dict_all = []
             predictor = predictor.eval()
 
             for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
@@ -139,12 +149,14 @@ def main(args):
 
                 c_loss = loss.item()
                 test_loss_all.append(c_loss)
+                test_loss_dict_all.append(loss_dict)
                 writer.add_scalar('test/loss_batch', c_loss, epoch)
-                write_loss_dict(writer, loss_dict, test_batch, 'test')
+                write_loss_dict(writer, loss_dict, test_batch, 'detailed/batch/test')
                 test_batch += 1
 
             test_loss_epoch = np.mean(test_loss_all).item()
             writer.add_scalar('test/loss_epoch', test_loss_epoch, test_batch)
+            write_loss_dict(writer, test_loss_dict_all, epoch, 'detailed/epoch/test')
 
             print(f'{epoch} / {args.epoch}: train_loss: {train_loss_epoch}. test_loss: {test_loss_epoch}')
 
