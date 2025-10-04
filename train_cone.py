@@ -55,10 +55,11 @@ def geom_cone(xyz, mad_pred, dim_pred, loc_pred):
     :param dim_pred: [bs,]
     :param loc_pred: [bs, 3]
     """
-    n_points = xyz.size(2)
-    mad_pred = mad_pred.unsqueeze(1).repeat(1, n_points, 1)
-    dim_pred = dim_pred.unsqueeze(1).repeat(1, n_points)
-    loc_pred = loc_pred.unsqueeze(1).repeat(1, n_points, 1)
+    bs, n_points, _ = xyz.size()
+    xyz = xyz.view(bs * n_points, -1)
+    mad_pred = mad_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
+    dim_pred = dim_pred.unsqueeze(1).repeat(1, n_points).view(bs * n_points, -1)
+    loc_pred = loc_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
 
     # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
     apex_to_xyz = xyz - loc_pred
@@ -86,7 +87,8 @@ def cone_geom_loss(xyz, pred, target):
     semi_angle_label = target[:, 9]
     beta_label = target[:, 10]
 
-    apex_pred = perp_pred + 2 * torch.atan(beta_pred) * axis_pred
+    dist = (2 * torch.atan(beta_pred)).unsqueeze(1)
+    apex_pred = perp_pred + dist * axis_pred
 
     loss_apex = F.mse_loss(apex_pred, apex_label)
     loss_axis = F.mse_loss(axis_pred, axis_label)
@@ -195,7 +197,7 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_loss(pred, target)
+            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
 
             train_loss_apex.append(loss_apex.item())
             train_loss_axis.append(loss_axis.item())
@@ -255,7 +257,7 @@ def main(args):
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_loss(pred, target)
+                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
 
                 test_loss_apex.append(loss_apex.item())
                 test_loss_axis.append(loss_axis.item())
