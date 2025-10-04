@@ -196,6 +196,49 @@ class RegressionDataset(Dataset):
         return len(self.path_label)
 
 
+class ConeDataset(Dataset):
+    def __init__(self, root, is_train, npoints):
+
+        print('cone dataset, from:' + root)
+        self.npoints = npoints
+
+        if is_train:
+            inner_root = os.path.join(root, 'train')
+        else:
+            inner_root = os.path.join(root, 'test')
+
+        self.path_label = []  # [([x, y ,z], Path1), ...]
+        files_all = utils.get_allfiles(inner_root)
+
+        for c_file in files_all:
+            c_base = os.path.basename(c_file)
+            c_base = os.path.splitext(c_base)[0]
+
+            apex_x, apex_y, apex_z, axis_x, axis_y, axis_z, perp_x, perp_y, perp_z, semi_angle = c_base.split('_')
+
+            coefficient = np.array([float(apex_x), float(apex_y), float(apex_z), float(axis_x), float(axis_y), float(axis_z), float(perp_x), float(perp_y), float(perp_z), float(semi_angle)])
+            self.path_label.append((coefficient, c_file))
+
+        print('instance all:', len(self.path_label))
+
+    def __getitem__(self, index):
+        c_coefficient, c_file = self.path_label[index]
+        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
+
+        try:
+            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+        except:
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+
+        point_set = point_set[choice, :]
+        xyz = point_set[:, :3]
+
+        return xyz, c_coefficient
+
+    def __len__(self):
+        return len(self.path_label)
+
+
 class CstNet2Dataset(Dataset):
     """
     CstNet2 具备五个属性的数据集读取

@@ -3,4 +3,5 @@ data_utils/__pycache__/
 .idea/
 model_trained/
 log/
+backups/
 

@@ -299,13 +299,14 @@ class PointNet2Cls(nn.Module):
 
 class PointNet2Reg(nn.Module):
     # num_class = 40，normal_channel = false
-    def __init__(self, fea_channel=0):
+    def __init__(self, channel_fea=0, channel_out=3):
         """
-        fea_channel: 点的特征维度，带法向量就是3，不带就是0
+        channel_fea: 点的特征维度，带法向量就是3，不带就是0
+        channel_out: 回归输出的特征长度
         """
         super().__init__()
 
-        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=fea_channel + 3, mlp=[16, 16, 32])
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=channel_fea + 3, mlp=[16, 16, 32])
         self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=32 + 3, mlp=[32, 32, 64])
         self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=64 + 3, mlp=[128, 128, 256], group_all=True)
 
@@ -317,7 +318,7 @@ class PointNet2Reg(nn.Module):
         self.bn2 = nn.BatchNorm1d(32)
         self.drop2 = nn.Dropout(0.4)
 
-        self.fc3 = nn.Linear(32, 3)
+        self.fc3 = nn.Linear(32, channel_out)
 
     def forward(self, xyz, fea=None):
         """
