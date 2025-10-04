@@ -299,7 +299,7 @@ class PointNet2Cls(nn.Module):
 
 class PointNet2Reg(nn.Module):
     # num_class = 40，normal_channel = false
-    def __init__(self, channel_fea=0, channel_out=3):
+    def __init__(self, channel_out=3, channel_fea=0):
         """
         channel_fea: 点的特征维度，带法向量就是3，不带就是0
         channel_out: 回归输出的特征长度

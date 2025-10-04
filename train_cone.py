@@ -56,7 +56,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
-    classifier = PointNet2Reg()
+    classifier = PointNet2Reg(10)
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'
