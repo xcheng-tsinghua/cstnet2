@@ -16,6 +16,30 @@ from data_utils.datasets import ConeDataset
 from models.pointnet2 import PointNet2Reg
 
 
+def cone_loss(pred, target):
+    """
+    pred: [bs, 10]
+    target: [bs, 10]
+    """
+    apex_pred = pred[:, :3]
+    axis_pred = pred[:, 3:6]
+    perp_pred = pred[:, 6:9]
+    semi_angle_pred = pred[:, 9]
+
+    apex_label = target[:, :3]
+    axis_label = target[:, 3:6]
+    perp_label = target[:, 6:9]
+    semi_angle_label = target[:, 9]
+
+    loss_apex = F.mse_loss(apex_pred, apex_label)
+    loss_axis = F.mse_loss(axis_pred, axis_label)
+    loss_prep = F.mse_loss(perp_pred, perp_label)
+    loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
+    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle
+
+    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_all
+
+
 def parse_args():
 
     parser = argparse.ArgumentParser('training')
@@ -84,7 +108,12 @@ def main(args):
     # training
     for epoch in range(args.epoch):
 
+        train_loss_apex = []
+        train_loss_axis = []
+        train_loss_prep = []
+        train_loss_semi_angle = []
         train_loss = []
+
         classifier = classifier.train()
         for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
             points = data[0].float().cuda()
@@ -93,9 +122,12 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss = F.mse_loss(pred, target)
-            # loss = plane_loss(points, pred)
-            # loss = foot_loss(points, pred)
+            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss = cone_loss(pred, target)
+
+            train_loss_apex.append(loss_apex.item())
+            train_loss_axis.append(loss_axis.item())
+            train_loss_prep.append(loss_prep.item())
+            train_loss_semi_angle.append(loss_semi_angle.item())
             train_loss.append(loss.item())
 
             loss.backward()
@@ -103,25 +135,60 @@ def main(args):
 
         scheduler.step()
         torch.save(classifier.state_dict(), 'model_trained/' + save_str + '.pth')
+
+        train_loss_apex_mean = np.mean(train_loss_apex).item()
+        train_loss_axis_mean = np.mean(train_loss_axis).item()
+        train_loss_prep_mean = np.mean(train_loss_prep).item()
+        train_loss_semi_angle_mean = np.mean(train_loss_semi_angle).item()
         train_loss_mean = np.mean(train_loss).item()
 
+        writer.add_scalar('train/apex', train_loss_apex_mean, epoch)
+        writer.add_scalar('train/axis', train_loss_axis_mean, epoch)
+        writer.add_scalar('train/prep', train_loss_prep_mean, epoch)
+        writer.add_scalar('train/semi_angle', train_loss_semi_angle_mean, epoch)
+        writer.add_scalar('train/loss', train_loss_mean, epoch)
+
         with torch.no_grad():
+
+            test_loss_apex = []
+            test_loss_axis = []
+            test_loss_prep = []
+            test_loss_semi_angle = []
             test_loss = []
+
             classifier = classifier.eval()
             for j, data in tqdm(enumerate(test_loader), total=len(test_loader)):
                 points = data[0].float().cuda()
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss = F.mse_loss(pred, target)
-                # loss = plane_loss(points, pred)
-                # loss = foot_loss(points, pred)
+                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss = cone_loss(pred, target)
+
+                test_loss_apex.append(loss_apex.item())
+                test_loss_axis.append(loss_axis.item())
+                test_loss_prep.append(loss_prep.item())
+                test_loss_semi_angle.append(loss_semi_angle.item())
                 test_loss.append(loss.item())
 
+            test_loss_apex_mean = np.mean(test_loss_apex).item()
+            test_loss_axis_mean = np.mean(test_loss_axis).item()
+            test_loss_prep_mean = np.mean(test_loss_prep).item()
+            test_loss_semi_angle_mean = np.mean(test_loss_semi_angle).item()
             test_loss_mean = np.mean(test_loss).item()
-            print(f'{epoch} / {args.epoch}: train_loss: {train_loss_mean}. test_loss: {test_loss_mean}')
-            writer.add_scalar('train_loss', train_loss_mean, epoch)
-            writer.add_scalar('train_loss', train_loss_mean, epoch)
+
+            writer.add_scalar('test/apex', test_loss_apex_mean, epoch)
+            writer.add_scalar('test/axis', test_loss_axis_mean, epoch)
+            writer.add_scalar('test/prep', test_loss_prep_mean, epoch)
+            writer.add_scalar('test/semi_angle', test_loss_semi_angle_mean, epoch)
+            writer.add_scalar('test/loss', test_loss_mean, epoch)
+
+        print(f'{epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")}')
+        print('--type----train----test--')
+        print(f' apex: {train_loss_apex_mean:.4f}, {test_loss_apex_mean:.4f}')
+        print(f' axis: {train_loss_axis_mean:.4f}, {test_loss_axis_mean:.4f}')
+        print(f' prep: {train_loss_prep_mean:.4f}, {test_loss_prep_mean:.4f}')
+        print(f'angle: {train_loss_semi_angle_mean:.4f}, {test_loss_semi_angle_mean:.4f}')
+        print(f'total: {train_loss_mean:.4f}, {test_loss_mean:.4f}')
 
 
 if __name__ == '__main__':
