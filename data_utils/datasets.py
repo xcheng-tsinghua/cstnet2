@@ -214,9 +214,9 @@ class ConeDataset(Dataset):
             c_base = os.path.basename(c_file)
             c_base = os.path.splitext(c_base)[0]
 
-            apex_x, apex_y, apex_z, axis_x, axis_y, axis_z, perp_x, perp_y, perp_z, semi_angle = c_base.split('_')
+            apex_x, apex_y, apex_z, axis_x, axis_y, axis_z, perp_x, perp_y, perp_z, semi_angle, foot_to_apex = c_base.split('_')
 
-            coefficient = np.array([float(apex_x), float(apex_y), float(apex_z), float(axis_x), float(axis_y), float(axis_z), float(perp_x), float(perp_y), float(perp_z), float(semi_angle)])
+            coefficient = np.array([float(apex_x), float(apex_y), float(apex_z), float(axis_x), float(axis_y), float(axis_z), float(perp_x), float(perp_y), float(perp_z), float(semi_angle), float(foot_to_apex)])
             self.path_label.append((coefficient, c_file))
 
         print('instance all:', len(self.path_label))

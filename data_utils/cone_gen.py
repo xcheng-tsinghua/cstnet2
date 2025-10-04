@@ -3,6 +3,8 @@ import os.path
 import numpy as np
 import matplotlib.pyplot as plt
 import random
+
+import torch
 from tqdm import tqdm
 
 
@@ -25,6 +27,7 @@ class Cone(object):
 
         # 计算原点到轴线的垂足
         t = - np.dot(self.apex, self.axis)
+        self.foot_to_apex = -t
         self.perp_foot = self.apex + t * self.axis
 
     def sample_points(self, n, theta_range=(0, 2 * np.pi), h_range=(0.5, 2.0), is_normalize=True):
@@ -142,7 +145,7 @@ class Cone(object):
             raise ValueError('without points')
 
         # 生成文件名，文件名为 apex_axis_SemiAngle_PerpFoot.txt
-        file_name = f'{self.apex[0]}_{self.apex[1]}_{self.apex[2]}_{self.axis[0]}_{self.axis[1]}_{self.axis[2]}_{self.perp_foot[0]}_{self.perp_foot[1]}_{self.perp_foot[2]}_{self.semi_angle}.txt'
+        file_name = f'{self.apex[0]:.6f}_{self.apex[1]:.6f}_{self.apex[2]:.6f}_{self.axis[0]:.6f}_{self.axis[1]:.6f}_{self.axis[2]:.6f}_{self.perp_foot[0]:.6f}_{self.perp_foot[1]:.6f}_{self.perp_foot[2]:.6f}_{self.semi_angle:.6f}_{self.foot_to_apex:.6f}.txt'
         file_name = os.path.join(dir_root, file_name)
         np.savetxt(file_name, self.points)
 
@@ -253,13 +256,14 @@ def set_axes_equal(ax):
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
 
-def show_cones(n_cones=1, n_points=2000):
+def show_cones(n_cones=1000, n_points=2000):
     # 生成圆锥参数
     random_cones = generate_cones(n_cones)
     random_theta, random_h = generate_random_theta_and_h_range(n_cones)
 
     n_fail = 0
     for idx, c_cone in tqdm(enumerate(random_cones), total=n_cones):
+
         try:
             c_theta = random_theta[idx]
             c_h = random_h[idx]
@@ -277,5 +281,9 @@ def show_cones(n_cones=1, n_points=2000):
 if __name__ == "__main__":
     show_cones()
 
+    # atenor = torch.tensor([1., 0., 0.])
+    # btenor = torch.tensor([0., 1., 0.])
+    #
+    # print(atenor * btenor)
 
 
