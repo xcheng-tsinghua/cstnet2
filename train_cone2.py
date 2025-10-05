@@ -85,7 +85,7 @@ def cone_loss(xyz, pred, target):
     loss_axis = F.mse_loss(axis_pred, axis_label)
     loss_prep = F.mse_loss(perp_pred, perp_label)
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-    loss_beta = F.mse_loss(t_pred, t_label)
+    loss_t = F.mse_loss(t_pred, t_label)
 
     # axis 为单位向量
     axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
@@ -96,9 +96,9 @@ def cone_loss(xyz, pred, target):
     # 点位于圆锥上的几何损失
     on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_beta + axis_norm_loss + foot_axis_perp_loss + on_cone_loss
+    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + axis_norm_loss + foot_axis_perp_loss + on_cone_loss
 
-    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss_all
+    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_t, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss_all
 
 
 def parse_args():
