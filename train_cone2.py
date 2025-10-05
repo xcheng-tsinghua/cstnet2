@@ -1,6 +1,6 @@
 
 """
-用于测试是否能回归出几个属性
+用于测试是否能回归出几个属性, 使用额外的几何损失
 """
 
 import torch
@@ -16,30 +16,6 @@ from data_utils.datasets import ConeDataset
 from models.pointnet2 import PointNet2Reg
 
 
-def cone_loss(pred, target):
-    """
-    pred: [bs, 10]
-    target: [bs, 10]
-    """
-    apex_pred = pred[:, :3]
-    axis_pred = pred[:, 3:6]
-    perp_pred = pred[:, 6:9]
-    semi_angle_pred = pred[:, 9]
-
-    apex_label = target[:, :3]
-    axis_label = target[:, 3:6]
-    perp_label = target[:, 6:9]
-    semi_angle_label = target[:, 9]
-
-    loss_apex = F.mse_loss(apex_pred, apex_label)
-    loss_axis = F.mse_loss(axis_pred, axis_label)
-    loss_prep = F.mse_loss(perp_pred, perp_label)
-    loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle
-
-    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_all
-
-
 def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-8):
     """
     原点到垂足的向量与圆锥轴线方向垂直
@@ -53,29 +29,32 @@ def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-8):
     return loss
 
 
-def geom_cone(xyz, mad_pred, dim_pred, loc_pred):
+def point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred):
     """
     :param xyz: [bs, point, 3]
-    :param mad_pred: [bs, 3]
-    :param dim_pred: [bs,]
-    :param loc_pred: [bs, 3]
+    :param axis_pred: [bs, 3]
+    :param semi_angle_pred: [bs,]
+    :param apex_pred: [bs, 3]
     """
-    bs, n_points, _ = xyz.size()
-    xyz = xyz.view(bs * n_points, -1)
-    mad_pred = mad_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
-    dim_pred = dim_pred.unsqueeze(1).repeat(1, n_points).view(bs * n_points, -1)
-    loc_pred = loc_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
+    # bs, n_points, _ = xyz.size()
+    # xyz = xyz.view(bs * n_points, -1)
+    # axis_pred = axis_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
+    # semi_angle_pred = semi_angle_pred.unsqueeze(1).repeat(1, n_points).view(bs * n_points, -1)
+    # apex_pred = apex_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
 
     # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
-    apex_to_xyz = xyz - loc_pred
-    dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
-    dot2 = mad_pred.norm(dim=1) * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
+    apex_to_xyz = xyz - apex_pred.unsqueeze(1)  # [bs, point, 3]
+    dot1 = torch.einsum('bpc,bc->bp', apex_to_xyz, axis_pred)
+
+    axis_pred_norm = axis_pred.norm(dim=1).unsqueeze(1)
+    apex_to_xyz_norm = apex_to_xyz.norm(dim=2)
+    dot2 = axis_pred_norm * apex_to_xyz_norm * torch.cos(semi_angle_pred.unsqueeze(1))
     semi_angle = (dot1 - dot2).abs().mean()
 
     return semi_angle
 
 
-def cone_geom_loss(xyz, pred, target):
+def cone_loss(xyz, pred, target):
     """
     xyz: [bs, n, 3]
     pred: [bs, 8]
@@ -90,16 +69,22 @@ def cone_geom_loss(xyz, pred, target):
     axis_label = target[:, 3:6]
     perp_label = target[:, 6:9]
     semi_angle_label = target[:, 9]
-    beta_label = target[:, 10]
+    t_label = target[:, 10]
 
-    dist = (2 * torch.atan(beta_pred)).unsqueeze(1)
-    apex_pred = perp_pred + dist * axis_pred
+    # 先使 beta 处于 [-pi/2, pi/2] 之间，以符合反正切定义域
+    beta_pred = (torch.pi / 2) * torch.tanh(beta_pred)
+
+    # 预测的 t, beta = arctan(t), t = tan(beta)
+    t_pred = torch.tan(beta_pred)
+
+    # apex = perp_foot + t * axis
+    apex_pred = perp_pred + t_pred.unsqueeze(1) * axis_pred
 
     loss_apex = F.mse_loss(apex_pred, apex_label)
     loss_axis = F.mse_loss(axis_pred, axis_label)
     loss_prep = F.mse_loss(perp_pred, perp_label)
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-    loss_beta = F.mse_loss(beta_pred, beta_label)
+    loss_beta = F.mse_loss(t_pred, t_label)
 
     # axis 为单位向量
     axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
@@ -107,12 +92,12 @@ def cone_geom_loss(xyz, pred, target):
     # 原点到 foot 的向量与 axis 垂直
     foot_axis_perp_loss = perpendicular_loss_normalized(axis_pred, perp_label)
 
-    # 几何损失
-    geom_cone_l = geom_cone(xyz, axis_pred, semi_angle_pred, apex_pred)
+    # 点位于圆锥上的几何损失
+    on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_beta + axis_norm_loss + foot_axis_perp_loss + geom_cone_l
+    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_beta + axis_norm_loss + foot_axis_perp_loss + on_cone_loss
 
-    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss_all
+    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss_all
 
 
 def parse_args():
@@ -135,10 +120,11 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'cone'
+    save_str = 'cone_geom_loss_alt'
 
     # logger
-    log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
+    # log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
+    log_dir = os.path.join('log', save_str)
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(logdir=log_dir)
 
@@ -202,7 +188,7 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
+            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss = cone_loss(points, pred, target)
 
             train_loss_apex.append(loss_apex.item())
             train_loss_axis.append(loss_axis.item())
@@ -211,7 +197,7 @@ def main(args):
             train_loss_beta.append(loss_beta.item())
             train_loss_axis_norm.append(axis_norm_loss.item())
             train_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
-            train_loss_geom_cone.append(geom_cone_l.item())
+            train_loss_geom_cone.append(on_cone_loss.item())
             train_loss.append(loss.item())
 
             loss.backward()
@@ -262,7 +248,7 @@ def main(args):
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
+                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss = cone_loss(points, pred, target)
 
                 test_loss_apex.append(loss_apex.item())
                 test_loss_axis.append(loss_axis.item())
@@ -272,7 +258,7 @@ def main(args):
                 test_loss_beta.append(loss_beta.item())
                 test_loss_axis_norm.append(axis_norm_loss.item())
                 test_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
-                test_loss_geom_cone.append(geom_cone_l.item())
+                test_loss_geom_cone.append(on_cone_loss.item())
 
                 test_loss.append(loss.item())
 
