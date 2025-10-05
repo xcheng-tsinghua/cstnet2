@@ -55,7 +55,7 @@ def point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred):
     return semi_angle
 
 
-def cone_loss(xyz, pred, target):
+def cone_loss(xyz, pred, target, eps=1e-8):
     """
     xyz: [bs, n, 3]
     pred: [bs, 8]
@@ -72,6 +72,9 @@ def cone_loss(xyz, pred, target):
     semi_angle_label = target[:, 9]
     t_label = target[:, 10]
 
+    # axis 为单位向量
+    axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
+
     # 先使 beta 处于 [-pi/2, pi/2] 之间，以符合反正切定义域
     beta_pred = (torch.pi / 2) * torch.tanh(beta_pred)
 
@@ -87,8 +90,8 @@ def cone_loss(xyz, pred, target):
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
     loss_t = F.mse_loss(t_pred, t_label)
 
-    # axis 为单位向量
-    axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
+    # axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
+    # axis_norm_loss = torch.tensor(0)
 
     # 原点到 foot 的向量与 axis 垂直
     foot_axis_perp_loss = perpendicular_loss_normalized(axis_pred, perp_label)
@@ -96,9 +99,13 @@ def cone_loss(xyz, pred, target):
     # 点位于圆锥上的几何损失
     on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + axis_norm_loss + foot_axis_perp_loss + on_cone_loss
+    # loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + axis_norm_loss + foot_axis_perp_loss + on_cone_loss
+    #
+    # return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_t, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss_all
 
-    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_t, axis_norm_loss, foot_axis_perp_loss, on_cone_loss, loss_all
+    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss
+
+    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_t, torch.tensor(0), foot_axis_perp_loss, on_cone_loss, loss_all
 
 
 def parse_args():
