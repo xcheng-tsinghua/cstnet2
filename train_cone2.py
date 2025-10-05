@@ -11,6 +11,7 @@ import numpy as np
 import os
 from torch.nn import functional as F
 from tensorboardX import SummaryWriter
+from colorama import Fore, Back, init
 
 from data_utils.datasets import ConeDataset
 from models.pointnet2 import PointNet2Reg
@@ -174,10 +175,12 @@ def main(args):
         train_loss_axis = []
         train_loss_prep = []
         train_loss_semi_angle = []
+
         train_loss_beta = []
         train_loss_axis_norm = []
         train_loss_foot_axis_perp = []
         train_loss_geom_cone = []
+
         train_loss = []
 
         classifier = classifier.train()
@@ -194,10 +197,12 @@ def main(args):
             train_loss_axis.append(loss_axis.item())
             train_loss_prep.append(loss_prep.item())
             train_loss_semi_angle.append(loss_semi_angle.item())
+
             train_loss_beta.append(loss_beta.item())
             train_loss_axis_norm.append(axis_norm_loss.item())
             train_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
             train_loss_geom_cone.append(on_cone_loss.item())
+
             train_loss.append(loss.item())
 
             loss.backward()
@@ -236,10 +241,12 @@ def main(args):
             test_loss_axis = []
             test_loss_prep = []
             test_loss_semi_angle = []
+
             test_loss_beta = []
             test_loss_axis_norm = []
             test_loss_foot_axis_perp = []
             test_loss_geom_cone = []
+
             test_loss = []
 
             classifier = classifier.eval()
@@ -287,7 +294,7 @@ def main(args):
             writer.add_scalar('test/loss', test_loss_mean, epoch)
 
         print(f'{epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")}')
-        print('-type---train---test-')
+        print(Fore.GREEN + '-type---train---test-')
         print(f' apex: {train_loss_apex_mean:.4f}, {test_loss_apex_mean:.4f}')
         print(f' axis: {train_loss_axis_mean:.4f}, {test_loss_axis_mean:.4f}')
         print(f' prep: {train_loss_prep_mean:.4f}, {test_loss_prep_mean:.4f}')
@@ -302,6 +309,7 @@ def main(args):
 
 
 if __name__ == '__main__':
+    init(autoreset=True)
     os.makedirs('log', exist_ok=True)
     os.makedirs('model_trained', exist_ok=True)
     main(parse_args())
