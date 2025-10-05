@@ -1,6 +1,6 @@
 
 """
-最初始的仅使用 mseloss
+用于测试是否能回归出几个属性
 """
 
 import torch
@@ -40,6 +40,81 @@ def cone_loss(pred, target):
     return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_all
 
 
+def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-8):
+    """
+    原点到垂足的向量与圆锥轴线方向垂直
+    axis_pred: 预测主轴 [bs, 3]
+    perp_label: 预测垂足 [bs, 3]
+    """
+    axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
+    perp_label = perp_label / (torch.norm(perp_label, dim=1, keepdim=True) + eps)
+    dot = torch.sum(axis_pred * perp_label, dim=1)
+    loss = torch.mean(dot ** 2)
+    return loss
+
+
+def geom_cone(xyz, mad_pred, dim_pred, loc_pred):
+    """
+    :param xyz: [bs, point, 3]
+    :param mad_pred: [bs, 3]
+    :param dim_pred: [bs,]
+    :param loc_pred: [bs, 3]
+    """
+    bs, n_points, _ = xyz.size()
+    xyz = xyz.view(bs * n_points, -1)
+    mad_pred = mad_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
+    dim_pred = dim_pred.unsqueeze(1).repeat(1, n_points).view(bs * n_points, -1)
+    loc_pred = loc_pred.unsqueeze(1).repeat(1, n_points, 1).view(bs * n_points, -1)
+
+    # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
+    apex_to_xyz = xyz - loc_pred
+    dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
+    dot2 = mad_pred.norm(dim=1) * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
+    semi_angle = (dot1 - dot2).abs().mean()
+
+    return semi_angle
+
+
+def cone_geom_loss(xyz, pred, target):
+    """
+    xyz: [bs, n, 3]
+    pred: [bs, 8]
+    target: [bs, 11]
+    """
+    perp_pred = pred[:, :3]
+    axis_pred = pred[:, 3:6]
+    semi_angle_pred = pred[:, 6]
+    beta_pred = pred[:, 7]
+
+    apex_label = target[:, :3]
+    axis_label = target[:, 3:6]
+    perp_label = target[:, 6:9]
+    semi_angle_label = target[:, 9]
+    beta_label = target[:, 10]
+
+    dist = (2 * torch.atan(beta_pred)).unsqueeze(1)
+    apex_pred = perp_pred + dist * axis_pred
+
+    loss_apex = F.mse_loss(apex_pred, apex_label)
+    loss_axis = F.mse_loss(axis_pred, axis_label)
+    loss_prep = F.mse_loss(perp_pred, perp_label)
+    loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
+    loss_beta = F.mse_loss(beta_pred, beta_label)
+
+    # axis 为单位向量
+    axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
+
+    # 原点到 foot 的向量与 axis 垂直
+    foot_axis_perp_loss = perpendicular_loss_normalized(axis_pred, perp_label)
+
+    # 几何损失
+    geom_cone_l = geom_cone(xyz, axis_pred, semi_angle_pred, apex_pred)
+
+    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_beta + axis_norm_loss + foot_axis_perp_loss + geom_cone_l
+
+    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss_all
+
+
 def parse_args():
 
     parser = argparse.ArgumentParser('training')
@@ -60,7 +135,7 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'cone_mse'
+    save_str = 'cone'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -80,7 +155,8 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
-    classifier = PointNet2Reg(10)
+    # foot(3) + axis(3) + semi_angle(1) + beta(1)
+    classifier = PointNet2Reg(8)
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'
@@ -112,6 +188,10 @@ def main(args):
         train_loss_axis = []
         train_loss_prep = []
         train_loss_semi_angle = []
+        train_loss_beta = []
+        train_loss_axis_norm = []
+        train_loss_foot_axis_perp = []
+        train_loss_geom_cone = []
         train_loss = []
 
         classifier = classifier.train()
@@ -122,12 +202,16 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss = cone_loss(pred, target)
+            loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
 
             train_loss_apex.append(loss_apex.item())
             train_loss_axis.append(loss_axis.item())
             train_loss_prep.append(loss_prep.item())
             train_loss_semi_angle.append(loss_semi_angle.item())
+            train_loss_beta.append(loss_beta.item())
+            train_loss_axis_norm.append(axis_norm_loss.item())
+            train_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
+            train_loss_geom_cone.append(geom_cone_l.item())
             train_loss.append(loss.item())
 
             loss.backward()
@@ -141,12 +225,22 @@ def main(args):
         train_loss_prep_mean = np.mean(train_loss_prep).item()
         train_loss_semi_angle_mean = np.mean(train_loss_semi_angle).item()
 
+        train_loss_beta_mean = np.mean(train_loss_beta).item()
+        train_loss_axis_norm_mean = np.mean(train_loss_axis_norm).item()
+        train_loss_foot_axis_perp_mean = np.mean(train_loss_foot_axis_perp).item()
+        train_loss_geom_mean = np.mean(train_loss_geom_cone).item()
+
         train_loss_mean = np.mean(train_loss).item()
 
         writer.add_scalar('train/apex', train_loss_apex_mean, epoch)
         writer.add_scalar('train/axis', train_loss_axis_mean, epoch)
         writer.add_scalar('train/prep', train_loss_prep_mean, epoch)
         writer.add_scalar('train/semi_angle', train_loss_semi_angle_mean, epoch)
+
+        writer.add_scalar('train/beta', train_loss_beta_mean, epoch)
+        writer.add_scalar('train/axis_norm', train_loss_axis_norm_mean, epoch)
+        writer.add_scalar('train/foot_axis_perp', train_loss_foot_axis_perp_mean, epoch)
+        writer.add_scalar('train/geom', train_loss_geom_mean, epoch)
 
         writer.add_scalar('train/loss', train_loss_mean, epoch)
 
@@ -156,6 +250,10 @@ def main(args):
             test_loss_axis = []
             test_loss_prep = []
             test_loss_semi_angle = []
+            test_loss_beta = []
+            test_loss_axis_norm = []
+            test_loss_foot_axis_perp = []
+            test_loss_geom_cone = []
             test_loss = []
 
             classifier = classifier.eval()
@@ -164,12 +262,17 @@ def main(args):
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss = cone_loss(pred, target)
+                loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_beta, axis_norm_loss, foot_axis_perp_loss, geom_cone_l, loss = cone_geom_loss(points, pred, target)
 
                 test_loss_apex.append(loss_apex.item())
                 test_loss_axis.append(loss_axis.item())
                 test_loss_prep.append(loss_prep.item())
                 test_loss_semi_angle.append(loss_semi_angle.item())
+
+                test_loss_beta.append(loss_beta.item())
+                test_loss_axis_norm.append(axis_norm_loss.item())
+                test_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
+                test_loss_geom_cone.append(geom_cone_l.item())
 
                 test_loss.append(loss.item())
 
@@ -178,12 +281,22 @@ def main(args):
             test_loss_prep_mean = np.mean(test_loss_prep).item()
             test_loss_semi_angle_mean = np.mean(test_loss_semi_angle).item()
 
+            test_loss_beta_mean = np.mean(test_loss_beta).item()
+            test_loss_axis_norm_mean = np.mean(test_loss_axis_norm).item()
+            test_loss_foot_axis_perp_mean = np.mean(test_loss_foot_axis_perp).item()
+            test_loss_geom_mean = np.mean(test_loss_geom_cone).item()
+
             test_loss_mean = np.mean(test_loss).item()
 
             writer.add_scalar('test/apex', test_loss_apex_mean, epoch)
             writer.add_scalar('test/axis', test_loss_axis_mean, epoch)
             writer.add_scalar('test/prep', test_loss_prep_mean, epoch)
             writer.add_scalar('test/semi_angle', test_loss_semi_angle_mean, epoch)
+
+            writer.add_scalar('test/beta', test_loss_beta_mean, epoch)
+            writer.add_scalar('test/axis_norm', test_loss_axis_norm_mean, epoch)
+            writer.add_scalar('test/foot_axis_perp', test_loss_foot_axis_perp_mean, epoch)
+            writer.add_scalar('test/geom', test_loss_geom_mean, epoch)
 
             writer.add_scalar('test/loss', test_loss_mean, epoch)
 
@@ -193,6 +306,11 @@ def main(args):
         print(f' axis: {train_loss_axis_mean:.4f}, {test_loss_axis_mean:.4f}')
         print(f' prep: {train_loss_prep_mean:.4f}, {test_loss_prep_mean:.4f}')
         print(f'angle: {train_loss_semi_angle_mean:.4f}, {test_loss_semi_angle_mean:.4f}')
+
+        print(f' beta: {train_loss_beta_mean:.4f}, {test_loss_beta_mean:.4f}')
+        print(f'axisn: {train_loss_axis_norm_mean:.4f}, {test_loss_axis_norm_mean:.4f}')
+        print(f'fprep: {train_loss_foot_axis_perp_mean:.4f}, {test_loss_foot_axis_perp_mean:.4f}')
+        print(f' geom: {train_loss_geom_mean:.4f}, {test_loss_geom_mean:.4f}')
 
         print(f'total: {train_loss_mean:.4f}, {test_loss_mean:.4f}')
 
