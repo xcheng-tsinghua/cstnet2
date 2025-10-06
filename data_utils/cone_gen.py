@@ -1,4 +1,6 @@
+import math
 import os.path
+import shutil
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,19 +18,43 @@ class Cone(object):
     半锥角 semi_angle (float / rad)
     """
     def __init__(self, apex, axis, semi_angle, points=None):
+        """
+        apex: np.array.size[3]
+        axis: np.array.size[3]
+        semi_angle: float
+        points: np.array.size[n, 3]
+        """
         super().__init__()
 
         self.apex = apex
         self.axis = axis
+        self.unify_axis()
         self.semi_angle = semi_angle
-
-        self.axis = self.axis / np.linalg.norm(self.axis)
         self.points = points
 
         # 计算原点到轴线的垂足
         t = - np.dot(self.apex, self.axis)
         self.foot_to_apex = -t
         self.perp_foot = self.apex + t * self.axis
+
+    def unify_axis(self, eps=1e-6):
+        """
+        保证 轴线方向唯一，同一轴线可定义两个向量
+        """
+        # 先归一化
+        self.axis = self.axis / np.linalg.norm(self.axis)
+
+        ax_x, ax_y, ax_z = self.axis[0], self.axis[1], self.axis[2]
+
+        if ax_z < -eps:  # z < 0 时, 反转
+            self.axis = -1.0 * self.axis
+        elif abs(ax_z) <= eps and ax_y < -eps:  # z为零, y为负数, 反转
+            self.axis = -1.0 * self.axis
+        elif abs(ax_z) <= eps and abs(ax_y) <= eps and ax_x < -eps:  # z为零, y为零, x为负数, 反转
+            self.axis = -1.0 * self.axis
+        else:
+            # 无需反转
+            pass
 
     def sample_points(self, n, theta_range=(0, 2 * np.pi), h_range=(0.5, 2.0), is_normalize=True):
         """
@@ -256,21 +282,43 @@ def set_axes_equal(ax):
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
 
-def show_cones(n_cones=1000, n_points=2000):
+def show_cones(n_cones=5000, n_points=2000, test_rate=0.2, save_dir=r'D:\document\DeepLearning\DataSet\pcd_cstnet2\cone'):
     # 生成圆锥参数
     random_cones = generate_cones(n_cones)
     random_theta, random_h = generate_random_theta_and_h_range(n_cones)
 
     n_fail = 0
-    for idx, c_cone in tqdm(enumerate(random_cones), total=n_cones):
 
+    train_dir = os.path.join(save_dir, 'train')
+    test_dir = os.path.join(save_dir, 'test')
+
+    if os.path.exists(train_dir) or os.path.exists(test_dir):
+        user = input(f"数据集文件夹已存在文件，删除它？(yes / no)").strip()
+        if user.lower() == 'yes':
+            print('delete dir' + train_dir)
+            shutil.rmtree(train_dir)
+            print('delete dir' + test_dir)
+            shutil.rmtree(test_dir)
+        else:
+            exit(0)
+
+    os.makedirs(train_dir)
+    os.makedirs(test_dir)
+
+    n_test = math.ceil(n_cones * test_rate)
+    for idx, c_cone in tqdm(enumerate(random_cones), total=n_cones):
         try:
             c_theta = random_theta[idx]
             c_h = random_h[idx]
 
             new_cone = c_cone.sample_points(n_points, c_theta, c_h)
             # new_cone.show()
-            new_cone.save_data(r'D:\document\DeepLearning\DataSet\pcd_cstnet2\cone\test')
+
+            if idx < n_test:
+                new_cone.save_data(test_dir)
+            else:
+                new_cone.save_data(train_dir)
+
         except:
             n_fail += 1
             print('an error cone')
