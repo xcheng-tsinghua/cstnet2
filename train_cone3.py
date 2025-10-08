@@ -50,6 +50,20 @@ def point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred):
     return semi_angle
 
 
+def safe_normalize(v, eps=1e-6, min_norm=0.1):
+    """
+    v: [bs, point, 3]
+    防止向量长度过短
+    """
+    norm = v.norm(dim=-1, keepdim=True)
+    norm = torch.clamp(norm, min=eps)
+    v_normalized = v / norm
+
+    # 只惩罚过短向量，防止不稳定
+    length_loss = torch.relu(min_norm - norm).mean()
+    return v_normalized, length_loss
+
+
 def canonicalize_vectors_hard(v, eps=1e-6):
     """
     对每个三维向量执行字典序标准化反转，带容差判断。
@@ -91,14 +105,17 @@ def cone_loss(xyz, pred, target, eps=1e-8):
     t_label = target[:, 10]
 
     # axis 为单位向量
-    axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
+    # axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
+
+    axis_pred, loss_axis_len = safe_normalize(axis_pred)
 
     # 将axis方向进行标准化
     axis_pred = canonicalize_vectors_hard(axis_pred)
 
+    # beta = log(1 + t)
+    # t = exp(beta) - 1
     # apex = perp_foot + t * axis
-    beta_pred = (torch.pi / 2) * torch.tanh(beta_pred)
-    t_pred = torch.tan(beta_pred)
+    t_pred = torch.exp(beta_pred) - 1.0
     apex_pred = perp_pred + t_pred.unsqueeze(1) * axis_pred
 
     loss_apex = F.mse_loss(apex_pred, apex_label)
@@ -113,14 +130,15 @@ def cone_loss(xyz, pred, target, eps=1e-8):
     # 点位于圆锥上的几何损失
     on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    loss = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss
+    loss = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss + loss_axis_len
     loss_branch = {'apex': loss_apex.item(),
                    'axis': loss_axis.item(),
                    'prep': loss_prep.item(),
                    'angle': loss_semi_angle.item(),
                    't': loss_t.item(),
                    'foot_prep': foot_axis_perp_loss.item(),
-                   'on_cone': on_cone_loss.item()
+                   'on_cone': on_cone_loss.item(),
+                   'axis_len': loss_axis_len.item(),
                    }
 
     return loss_branch, loss
@@ -162,7 +180,7 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'cone_geom_loss2_squeeze_'
+    save_str = 'cone_geom_loss2_squeeze_log_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))

@@ -111,7 +111,7 @@ def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
         # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
         apex_to_xyz = xyz - loc_pred
         dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
-        dot2 = mad_pred.norm(dim=1) * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
+        dot2 = mad_pred * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
         semi_angle = (dot1 - dot2).abs().mean()
 
         return semi_angle
@@ -193,7 +193,7 @@ def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_
 
 
 def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx):
+                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx, eps=1e-6):
     """
     计算损失，包含一般损失和几何损失
 
@@ -214,10 +214,21 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     :param nor_gt: [bs, point, 3]
     :param loc_gt: [bs, point, 3]
     :param affil_idx: [bs, point]
+
+    :param eps: 防止除 0 的调整实数
     """
 
     # 基元类型
     pmt_nll = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
+
+    # 主方向的长度不应接近 0
+    mad_pred, loss_mad_min_len = safe_normalize(mad_pred)
+
+    # 法线长度不应接近 0
+    nor_pred, loss_nor_min_len = safe_normalize(nor_pred)
+
+    # 主方向先进行方向的归一化
+    mad_pred = canonicalize_vectors_hard(mad_pred)
 
     # 主方向损失
     mad_mse = mse_loss_with_pmt_considered(mad_pred, mad_gt, pmt_gt, (0, 1, 2))
@@ -248,7 +259,7 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
 
     # 总损失
     # loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_consistent
+    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_mad_min_len + loss_nor_min_len + loss_consistent
 
     loss_dict = {
         'all': value_item(loss_all),
@@ -261,6 +272,8 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         'loss_cylinder': value_item(loss_cylinder),
         'loss_cone': value_item(loss_cone),
         'loss_sphere': value_item(loss_sphere),
+        'loss_mad_min_len': value_item(loss_mad_min_len),
+        'loss_nor_min_len': value_item(loss_nor_min_len),
         'loss_consistent': value_item(loss_consistent),
     }
 
@@ -268,6 +281,43 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         print(loss_dict)
 
     return loss_all, loss_dict
+
+
+def canonicalize_vectors_hard(v, eps=1e-6):
+    """
+    归一化并进行方向标准化的向量处理函数。
+    输入 v: [bs, point, 3]
+    """
+
+    x, y, z = v[..., 0], v[..., 1], v[..., 2]
+    z_zero = (z.abs() < eps)
+    y_zero = (y.abs() < eps)
+    x_zero = (x.abs() < eps)
+
+    flip_mask = (
+        (z < 0) |
+        (z_zero & (y < 0)) |
+        (z_zero & y_zero & (x < 0))
+    )
+
+    flip_mask = flip_mask.unsqueeze(-1)  # [bs, point, 1]
+    v = torch.where(flip_mask, -v, v)
+
+    return v
+
+
+def safe_normalize(v, eps=1e-6, min_norm=0.1):
+    """
+    v: [bs, point, 3]
+    防止向量长度过短
+    """
+    norm = v.norm(dim=-1, keepdim=True)
+    norm = torch.clamp(norm, min=eps)
+    v_normalized = v / norm
+
+    # 只惩罚过短向量，防止不稳定
+    length_loss = torch.relu(min_norm - norm).mean()
+    return v_normalized, length_loss
 
 
 def value_item(atensor):
