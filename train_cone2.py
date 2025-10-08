@@ -210,7 +210,6 @@ def main(args):
     # training
     for epoch in range(args.epoch):
 
-        print(f'{epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")}')
         train_loss_branch = []
         train_loss = []
 
@@ -233,10 +232,6 @@ def main(args):
         scheduler.step()
         torch.save(classifier.state_dict(), 'model_trained/' + save_str + '.pth')
 
-        loss_branch_process_and_save(train_loss_branch, writer, epoch, 'train')
-        train_loss_mean = np.mean(train_loss).item()
-        writer.add_scalar('train/loss', train_loss_mean, epoch)
-
         with torch.no_grad():
 
             test_loss_branch = []
@@ -253,9 +248,15 @@ def main(args):
                 test_loss_branch.append(loss_branch)
                 test_loss.append(loss.item())
 
-            loss_branch_process_and_save(test_loss_branch, writer, epoch, 'test')
-            test_loss_mean = np.mean(test_loss).item()
-            writer.add_scalar('test/loss', test_loss_mean, epoch)
+        print(f'--> {epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")} <--')
+
+        loss_branch_process_and_save(train_loss_branch, writer, epoch, 'train')
+        train_loss_mean = np.mean(train_loss).item()
+        writer.add_scalar('train/loss', train_loss_mean, epoch)
+
+        loss_branch_process_and_save(test_loss_branch, writer, epoch, 'test')
+        test_loss_mean = np.mean(test_loss).item()
+        writer.add_scalar('test/loss', test_loss_mean, epoch)
 
         print(f'total: {train_loss_mean:.4f}, {test_loss_mean:.4f}')
 
