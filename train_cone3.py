@@ -1,8 +1,6 @@
 
 """
 用于测试是否能回归出几个属性, 使用额外的几何损失
-进一步优化版
-只挑部分有效的属性预测
 """
 
 import torch
@@ -14,12 +12,13 @@ import os
 from torch.nn import functional as F
 from tensorboardX import SummaryWriter
 from colorama import Fore, Back, init
+import statistics
 
 from data_utils.datasets import ConeDataset
 from models.pointnet2 import PointNet2Reg
 
 
-def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-6):
+def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-8):
     """
     原点到垂足的向量与圆锥轴线方向垂直
     axis_pred: 预测主轴 [bs, 3]
@@ -30,6 +29,25 @@ def perpendicular_loss_normalized(axis_pred, perp_label, eps=1e-6):
     dot = torch.sum(axis_pred * perp_label, dim=1)
     loss = torch.mean(dot ** 2)
     return loss
+
+
+def point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred):
+    """
+    :param xyz: [bs, point, 3]
+    :param axis_pred: [bs, 3]
+    :param semi_angle_pred: [bs,]
+    :param apex_pred: [bs, 3]
+    """
+    # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
+    apex_to_xyz = xyz - apex_pred.unsqueeze(1)  # [bs, point, 3]
+    dot1 = torch.einsum('bpc,bc->bp', apex_to_xyz, axis_pred)
+
+    axis_pred_norm = axis_pred.norm(dim=1).unsqueeze(1)
+    apex_to_xyz_norm = apex_to_xyz.norm(dim=2)
+    dot2 = axis_pred_norm * apex_to_xyz_norm * torch.cos(semi_angle_pred.unsqueeze(1))
+    semi_angle = (dot1 - dot2).abs().mean()
+
+    return semi_angle
 
 
 def canonicalize_vectors_hard(v, eps=1e-6):
@@ -58,12 +76,13 @@ def canonicalize_vectors_hard(v, eps=1e-6):
 def cone_loss(xyz, pred, target, eps=1e-8):
     """
     xyz: [bs, n, 3]
-    pred: [bs, 7]
+    pred: [bs, 8]
     target: [bs, 11]
     """
     perp_pred = pred[:, :3]
     axis_pred = pred[:, 3:6]
     semi_angle_pred = pred[:, 6]
+    beta_pred = pred[:, 7]
 
     apex_label = target[:, :3]
     axis_label = target[:, 3:6]
@@ -77,19 +96,50 @@ def cone_loss(xyz, pred, target, eps=1e-8):
     # 将axis方向进行标准化
     axis_pred = canonicalize_vectors_hard(axis_pred)
 
+    # apex = perp_foot + t * axis
+    beta_pred = (torch.pi / 2) * torch.tanh(beta_pred)
+    t_pred = torch.tan(beta_pred)
+    apex_pred = perp_pred + t_pred.unsqueeze(1) * axis_pred
+
+    loss_apex = F.mse_loss(apex_pred, apex_label)
     loss_axis = F.mse_loss(axis_pred, axis_label)
     loss_prep = F.mse_loss(perp_pred, perp_label)
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-
-    # axis_norm_loss = (1.0 - torch.norm(axis_pred, dim=1)).abs().mean()
-    # axis_norm_loss = torch.tensor(0)
+    loss_t = F.mse_loss(t_pred, t_label)
 
     # 原点到 foot 的向量与 axis 垂直
     foot_axis_perp_loss = perpendicular_loss_normalized(axis_pred, perp_label)
 
-    loss_all = loss_axis + loss_prep + loss_semi_angle + foot_axis_perp_loss
+    # 点位于圆锥上的几何损失
+    on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    return loss_axis, loss_prep, loss_semi_angle, foot_axis_perp_loss, loss_all
+    loss = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss
+    loss_branch = {'apex': loss_apex.item(),
+                   'axis': loss_axis.item(),
+                   'prep': loss_prep.item(),
+                   'angle': loss_semi_angle.item(),
+                   't': loss_t.item(),
+                   'foot_prep': foot_axis_perp_loss.item(),
+                   'on_cone': on_cone_loss.item()
+                   }
+
+    return loss_branch, loss
+
+
+def loss_branch_process_and_save(loss_branches: list[dict], writer, epoch, tag):
+    """
+    将 loss 求均值并且保存在 writer 中
+    """
+    mean_dict = {
+        key: statistics.mean(d[key] for d in loss_branches)
+        for key in loss_branches[0].keys()
+    }
+
+    for key, value in mean_dict.items():
+        writer.add_scalar(f'{tag}/{key}', value, epoch)
+
+    formatted = {k: f"{v:.6f}" for k, v in mean_dict.items()}
+    print(formatted)
 
 
 def parse_args():
@@ -112,7 +162,7 @@ def parse_args():
 
 def main(args):
     # parameters
-    save_str = 'cone_loss_3'
+    save_str = 'cone_geom_loss2_squeeze_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -133,8 +183,8 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
-    # foot(3) + axis(3) + semi_angle(1)
-    classifier = PointNet2Reg(7)
+    # foot(3) + axis(3) + semi_angle(1) + beta(1)
+    classifier = PointNet2Reg(8)
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'
@@ -162,11 +212,7 @@ def main(args):
     # training
     for epoch in range(args.epoch):
 
-        train_loss_axis = []
-        train_loss_prep = []
-        train_loss_semi_angle = []
-        train_loss_foot_axis_perp = []
-
+        train_loss_branch = []
         train_loss = []
 
         classifier = classifier.train()
@@ -177,12 +223,9 @@ def main(args):
             optimizer.zero_grad()
 
             pred = classifier(points)
-            loss_axis, loss_prep, loss_semi_angle, foot_axis_perp_loss, loss = cone_loss(points, pred, target)
+            loss_branch, loss = cone_loss(points, pred, target)
 
-            train_loss_axis.append(loss_axis.item())
-            train_loss_prep.append(loss_prep.item())
-            train_loss_semi_angle.append(loss_semi_angle.item())
-            train_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
+            train_loss_branch.append(loss_branch)
             train_loss.append(loss.item())
 
             loss.backward()
@@ -191,26 +234,9 @@ def main(args):
         scheduler.step()
         torch.save(classifier.state_dict(), 'model_trained/' + save_str + '.pth')
 
-        train_loss_axis_mean = np.mean(train_loss_axis).item()
-        train_loss_prep_mean = np.mean(train_loss_prep).item()
-        train_loss_semi_angle_mean = np.mean(train_loss_semi_angle).item()
-        train_loss_foot_axis_perp_mean = np.mean(train_loss_foot_axis_perp).item()
-
-        train_loss_mean = np.mean(train_loss).item()
-
-        writer.add_scalar('train/axis', train_loss_axis_mean, epoch)
-        writer.add_scalar('train/prep', train_loss_prep_mean, epoch)
-        writer.add_scalar('train/semi_angle', train_loss_semi_angle_mean, epoch)
-        writer.add_scalar('train/foot_axis_perp', train_loss_foot_axis_perp_mean, epoch)
-
-        writer.add_scalar('train/loss', train_loss_mean, epoch)
-
         with torch.no_grad():
 
-            test_loss_axis = []
-            test_loss_prep = []
-            test_loss_semi_angle = []
-            test_loss_foot_axis_perp = []
+            test_loss_branch = []
             test_loss = []
 
             classifier = classifier.eval()
@@ -219,31 +245,20 @@ def main(args):
                 target = data[1].float().cuda()
 
                 pred = classifier(points)
-                loss_axis, loss_prep, loss_semi_angle, foot_axis_perp_loss, loss = cone_loss(points, pred, target)
+                loss_branch, loss = cone_loss(points, pred, target)
 
-                test_loss_axis.append(loss_axis.item())
-                test_loss_prep.append(loss_prep.item())
-                test_loss_semi_angle.append(loss_semi_angle.item())
-                test_loss_foot_axis_perp.append(foot_axis_perp_loss.item())
+                test_loss_branch.append(loss_branch)
                 test_loss.append(loss.item())
 
-            test_loss_axis_mean = np.mean(test_loss_axis).item()
-            test_loss_prep_mean = np.mean(test_loss_prep).item()
-            test_loss_semi_angle_mean = np.mean(test_loss_semi_angle).item()
-            test_loss_foot_axis_perp_mean = np.mean(test_loss_foot_axis_perp).item()
-            test_loss_mean = np.mean(test_loss).item()
+        print(f'--> {epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")} <--')
 
-            writer.add_scalar('test/axis', test_loss_axis_mean, epoch)
-            writer.add_scalar('test/prep', test_loss_prep_mean, epoch)
-            writer.add_scalar('test/semi_angle', test_loss_semi_angle_mean, epoch)
-            writer.add_scalar('test/foot_axis_perp', test_loss_foot_axis_perp_mean, epoch)
-            writer.add_scalar('test/loss', test_loss_mean, epoch)
+        loss_branch_process_and_save(train_loss_branch, writer, epoch, 'train')
+        train_loss_mean = np.mean(train_loss).item()
+        writer.add_scalar('train/loss', train_loss_mean, epoch)
 
-        print(f'{epoch} / {args.epoch} - {datetime.now().strftime("%Y-%m-%d %H-%M-%S")}')
-        print(Fore.GREEN + '-type---train---test-')
-        print(f' axis: {train_loss_axis_mean:.4f}, {test_loss_axis_mean:.4f}')
-        print(f' prep: {train_loss_prep_mean:.4f}, {test_loss_prep_mean:.4f}')
-        print(f'angle: {train_loss_semi_angle_mean:.4f}, {test_loss_semi_angle_mean:.4f}')
+        loss_branch_process_and_save(test_loss_branch, writer, epoch, 'test')
+        test_loss_mean = np.mean(test_loss).item()
+        writer.add_scalar('test/loss', test_loss_mean, epoch)
 
         print(f'total: {train_loss_mean:.4f}, {test_loss_mean:.4f}')
 
