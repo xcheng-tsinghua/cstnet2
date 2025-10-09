@@ -320,7 +320,7 @@ class CstNet2Dataset(Dataset):
             exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
 
         xyz = point_set[:, :3]  # [n, 3]
-        pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]
+        pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]. plane 0, cylinder 1, cone 2, sphere 3, freeform 4
         mad = point_set[:, 4:7]  # 主方向 [n, 3]
         dim = point_set[:, 7]  # 主尺寸 [n, ]
         nor = point_set[:, 8:11]  # 法线 [n, 3]
@@ -338,6 +338,18 @@ class CstNet2Dataset(Dataset):
         # dim = update_dim(pmt, dim, scale)
         # loc = update_loc(pmt, loc, mad, move_dir)
         # loc = loc * scale
+
+        # 将圆锥的主位置替换为原点到轴线的垂足坐标
+        cone_mask = (pmt == 2)
+        if cone_mask.sum() != 0:
+            cone_mad = mad[cone_mask]
+            cone_apex = loc[cone_mask]
+
+            t = - np.einsum('ij,ij->i', cone_mad, cone_apex)
+
+            # 垂足坐标
+            perpendicular_foot = cone_apex + t[:, None] * cone_mad
+            loc[cone_mask] = perpendicular_foot
 
         if self.data_augmentation:
             xyz += np.random.normal(0, 0.02, size=xyz.shape)

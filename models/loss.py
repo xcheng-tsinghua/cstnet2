@@ -90,8 +90,40 @@ def geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
         return 0.0
 
 
+# def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
+#     """
+#     点在圆锥上
+#     :param xyz: [bs, point, 3]
+#     :param mad_pred: [bs, point, 3]
+#     :param dim_pred: [bs, point]
+#     :param loc_pred: [bs, point, 3]
+#     :param pmt_gt: [bs, point] (int, index)
+#     """
+#     # 找到全部圆锥类型的点
+#     mask = (pmt_gt == 2)  # [bs, point]
+#
+#     if mask.sum() > 0:
+#
+#         xyz = xyz[mask]  # [n_item, 3]
+#         mad_pred = mad_pred[mask]  # [n_item, 3]
+#         dim_pred = dim_pred[mask]  # [n_item, ]
+#         loc_pred = loc_pred[mask]  # [n_item, 3]
+#
+#         # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
+#         apex_to_xyz = xyz - loc_pred
+#         dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
+#         dot2 = mad_pred * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
+#         semi_angle = (dot1 - dot2).abs().mean()
+#
+#         return semi_angle
+#
+#     else:
+#         return 0.0
+
+
 def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
     """
+    点在圆锥上
     :param xyz: [bs, point, 3]
     :param mad_pred: [bs, point, 3]
     :param dim_pred: [bs, point]
@@ -103,18 +135,13 @@ def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
 
     if mask.sum() > 0:
 
-        xyz = xyz[mask]  # [n_item, 3]
         mad_pred = mad_pred[mask]  # [n_item, 3]
-        dim_pred = dim_pred[mask]  # [n_item, ]
         loc_pred = loc_pred[mask]  # [n_item, 3]
 
-        # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
-        apex_to_xyz = xyz - loc_pred
-        dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
-        dot2 = mad_pred * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
-        semi_angle = (dot1 - dot2).abs().mean()
+        # 原点到垂足的向量与主方向垂直
+        dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
 
-        return semi_angle
+        return dot_product
 
     else:
         return 0.0
@@ -306,7 +333,7 @@ def canonicalize_vectors_hard(v, eps=1e-6):
     return v
 
 
-def safe_normalize(v, eps=1e-6, min_norm=0.1):
+def safe_normalize(v, eps=1e-6, min_norm=0.5):
     """
     v: [bs, point, 3]
     防止向量长度过短

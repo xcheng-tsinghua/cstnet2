@@ -46,7 +46,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'cst_pred_'
+    save_str = 'cst_pred_v2_'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
