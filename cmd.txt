@@ -4,7 +4,7 @@ cd /opt/data/private/networks/cstnet2/ && conda activate dp
 git status && git add . && git commit -m "change" && git push
 
 # 显示 tensorbroab
-tensorboard --logdir=./log/cst_pcd_3
+tensorboard --logdir=./log/cst_pred_v2
 
 
 

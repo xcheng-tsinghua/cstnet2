@@ -333,7 +333,7 @@ def canonicalize_vectors_hard(v, eps=1e-6):
     return v
 
 
-def safe_normalize(v, eps=1e-6, min_norm=0.5):
+def safe_normalize(v, eps=1e-6, min_norm=0.05):
     """
     v: [bs, point, 3]
     防止向量长度过短
