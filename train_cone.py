@@ -21,23 +21,21 @@ def cone_loss(pred, target):
     pred: [bs, 10]
     target: [bs, 10]
     """
-    apex_pred = pred[:, :3]
-    axis_pred = pred[:, 3:6]
-    perp_pred = pred[:, 6:9]
-    semi_angle_pred = pred[:, 9]
+    axis_pred = pred[:, :3]
+    perp_pred = pred[:, 3:6]
+    semi_angle_pred = pred[:, 6]
 
     apex_label = target[:, :3]
     axis_label = target[:, 3:6]
     perp_label = target[:, 6:9]
     semi_angle_label = target[:, 9]
 
-    loss_apex = F.mse_loss(apex_pred, apex_label)
     loss_axis = F.mse_loss(axis_pred, axis_label)
     loss_prep = F.mse_loss(perp_pred, perp_label)
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-    loss_all = loss_apex + loss_axis + loss_prep + loss_semi_angle
+    loss_all = loss_axis + loss_prep + loss_semi_angle
 
-    return loss_apex, loss_axis, loss_prep, loss_semi_angle, loss_all
+    return loss_axis, loss_prep, loss_semi_angle, loss_all
 
 
 def parse_args():
@@ -80,7 +78,7 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.bs, shuffle=False, num_workers=4)
 
     # loading model
-    classifier = PointNet2Reg(10)
+    classifier = PointNet2Reg(7)
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'

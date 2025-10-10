@@ -82,7 +82,7 @@ def cone_loss(xyz, pred, target, eps=1e-8):
     perp_pred = pred[:, :3]
     axis_pred = pred[:, 3:6]
     semi_angle_pred = pred[:, 6]
-    t_pred = pred[:, 7]
+    # t_pred = pred[:, 7]
 
     apex_label = target[:, :3]
     axis_label = target[:, 3:6]
@@ -91,37 +91,60 @@ def cone_loss(xyz, pred, target, eps=1e-8):
     t_label = target[:, 10]
 
     # axis 为单位向量
-    axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
+    axis_pred, axis_len_loss = safe_normalize(axis_pred)
+    # axis_pred = axis_pred / (torch.norm(axis_pred, dim=1, keepdim=True) + eps)
 
     # 将axis方向进行标准化
     axis_pred = canonicalize_vectors_hard(axis_pred)
 
     # apex = perp_foot + t * axis
-    apex_pred = perp_pred + t_pred.unsqueeze(1) * axis_pred
+    # apex_pred = perp_pred + t_pred.unsqueeze(1) * axis_pred
 
-    loss_apex = F.mse_loss(apex_pred, apex_label)
+    # loss_apex = F.mse_loss(apex_pred, apex_label)
     loss_axis = F.mse_loss(axis_pred, axis_label)
     loss_prep = F.mse_loss(perp_pred, perp_label)
     loss_semi_angle = F.mse_loss(semi_angle_pred, semi_angle_label)
-    loss_t = F.mse_loss(t_pred, t_label)
+    # loss_t = F.mse_loss(t_pred, t_label)
 
     # 原点到 foot 的向量与 axis 垂直
     foot_axis_perp_loss = perpendicular_loss_normalized(axis_pred, perp_label)
 
     # 点位于圆锥上的几何损失
-    on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
+    # on_cone_loss = point_on_cone_loss(xyz, axis_pred, semi_angle_pred, apex_pred)
 
-    loss = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss
-    loss_branch = {'apex': loss_apex.item(),
-                   'axis': loss_axis.item(),
+    # loss = loss_apex + loss_axis + loss_prep + loss_semi_angle + loss_t + foot_axis_perp_loss + on_cone_loss
+    # loss_branch = {'apex': loss_apex.item(),
+    #                'axis': loss_axis.item(),
+    #                'prep': loss_prep.item(),
+    #                'angle': loss_semi_angle.item(),
+    #                't': loss_t.item(),
+    #                'foot_prep': foot_axis_perp_loss.item(),
+    #                'on_cone': on_cone_loss.item()
+    #                }
+
+    loss = loss_axis + loss_prep + loss_semi_angle + foot_axis_perp_loss + axis_len_loss
+    loss_branch = {'axis': loss_axis.item(),
                    'prep': loss_prep.item(),
                    'angle': loss_semi_angle.item(),
-                   't': loss_t.item(),
                    'foot_prep': foot_axis_perp_loss.item(),
-                   'on_cone': on_cone_loss.item()
+                   'axis_len_loss': axis_len_loss.item(),
                    }
 
     return loss_branch, loss
+
+
+def safe_normalize(v, eps=1e-6, min_norm=0.05):
+    """
+    v: [bs, point, 3]
+    防止向量长度过短
+    """
+    norm = v.norm(dim=-1, keepdim=True)
+    norm = torch.clamp(norm, min=eps)
+    v_normalized = v / norm
+
+    # 只惩罚过短向量，防止不稳定
+    length_loss = torch.relu(min_norm - norm).mean()
+    return v_normalized, length_loss
 
 
 def loss_branch_process_and_save(loss_branches: list[dict], writer, epoch, tag):
@@ -182,7 +205,7 @@ def main(args):
 
     # loading model
     # foot(3) + axis(3) + semi_angle(1) + beta(1)
-    classifier = PointNet2Reg(8)
+    classifier = PointNet2Reg(7)
 
     if eval(args.is_load_weight):
         model_savepth = 'model_trained/' + save_str + '.pth'
