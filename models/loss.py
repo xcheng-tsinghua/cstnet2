@@ -25,6 +25,72 @@ def mse_loss_with_pmt_considered(attr_pred, attr_gt, pmt_gt, valid_pmt):
         return 0.0
 
 
+def unit_len_loss(attr_pred):
+    """
+    计算长度为1的loss
+    :param attr_pred: [bs, ..., X]
+    """
+    # 计算每个向量的长度 (L2 norm)
+    lengths = torch.norm(attr_pred, dim=-1)  # shape [bs]
+
+    # 希望每个长度接近 1，可以用 MSE loss
+    loss = F.mse_loss(lengths, torch.ones_like(lengths))
+    return loss
+
+
+def unit_len_loss_with_pmt_considered(attr_pred, pmt_gt, valid_pmt):
+    """
+    计算 attr_pred 长度与 1 之间的 loss，只有有效类型的店才会参与计算
+
+    :param attr_pred: [bs, point, 3]
+    :param pmt_gt: [bs, point] (int, index)
+    :param valid_pmt: tuple: (1, 2, ...), (0=plane,1=cylinder,2=cone,3=sphere,4=freeform)
+    :return:
+    """
+    # 筛选 mask：GT or 预测的基元类型是否在有效集合里
+    mask = torch.isin(pmt_gt, torch.tensor(valid_pmt, device=pmt_gt.device))
+
+    if mask.sum() > 0:
+        valid_attr_pred = attr_pred[mask]
+        loss = unit_len_loss(valid_attr_pred)
+        return loss
+
+    else:
+        return 0.0
+
+
+def perpendicular_loss(vec1, vec2, eps=1e-6):
+    """
+    计算对应位置向量垂直的 Loss
+    :param vec1: [..., X]
+    :param vec2: [..., X]
+    :param eps: [..., X]
+    """
+    # 归一化（防止除零）
+    a_norm = vec1 / (vec1.norm(dim=-1, keepdim=True) + eps)
+    b_norm = vec2 / (vec2.norm(dim=-1, keepdim=True) + eps)
+
+    # 点积
+    dot = (a_norm * b_norm).sum(dim=-1)  # [bs, point]
+
+    # loss: 点积平方的平均值
+    loss = (dot ** 2).mean()
+    return loss
+
+
+def parallel_loss(vec1, vec2, eps=1e-6):
+    # 归一化（防止除零）
+    a_norm = vec1 / (vec1.norm(dim=-1, keepdim=True) + eps)
+    b_norm = vec2 / (vec2.norm(dim=-1, keepdim=True) + eps)
+
+    # 计算余弦相似度
+    cos_sim = (a_norm * b_norm).sum(dim=-1)  # [-1, 1]
+
+    # 平行时 |cos|=1
+    loss = ((1 - cos_sim.abs()) ** 2).mean()
+    return loss
+
+
 def geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt):
     """
     :param xyz: [bs, point, 3]
@@ -43,25 +109,29 @@ def geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt):
         nor_pred = nor_pred[mask]  # [n_item, 3]
         loc_pred = loc_pred[mask]  # [n_item, 3]
 
-        # 点到垂足的向量与主方向垂直，内积要接近 0
-        dot_product = torch.einsum('ij, ij -> i', (loc_pred - xyz), mad_pred).abs().mean()
+        # 点到预测平面的距离为 0，主要
+        foot_to_xyz = xyz - loc_pred  # [bs, n, 3]
+        nor_pred = nor_pred / (nor_pred.norm(dim=-1, keepdim=True) + 1e-8)
+        dist = (foot_to_xyz * nor_pred).sum(dim=-1)
+        on_plane_loss = (dist ** 2).mean()
 
-        # 原点到垂足的向量与主方向平行
-        parallel1 = (torch.norm(loc_pred, dim=1) - torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs()).abs().mean()
+        # 原点到垂足的向量与主方向平行，次要
+        foot_pall_mad = parallel_loss(loc_pred, mad_pred)
 
-        # 主方向和法线共线
-        parallel2 = (1.0 - torch.einsum('ij, ij -> i', mad_pred, nor_pred).abs()).abs().mean()
+        # 主方向和法线平行，次要
+        mad_pall_nor = parallel_loss(mad_pred, nor_pred)
 
-        return dot_product + 0.5 * parallel1 + 0.5 * parallel2
+        return on_plane_loss + 0.2 * foot_pall_mad + 0.2 * mad_pall_nor
 
     else:
         return 0.0
 
 
-def geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
+def geom_loss_cylinder(xyz, mad_pred, nor_pred, dim_pred, loc_pred, pmt_gt):
     """
     :param xyz: [bs, point, 3]
     :param mad_pred: [bs, point, 3]
+    :param nor_pred: [bs, point, 3]
     :param dim_pred: [bs, point]
     :param loc_pred: [bs, point, 3]
     :param pmt_gt: [bs, point] (int, index)
@@ -73,18 +143,23 @@ def geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
 
         xyz = xyz[mask]  # [n_item, 3]
         mad_pred = mad_pred[mask]  # [n_item, 3]
+        nor_pred = nor_pred[mask]  # [n_item, 3]
         dim_pred = dim_pred[mask]  # [n_item, 3]
         loc_pred = loc_pred[mask]  # [n_item, 3]
 
-        # 半径与预测主尺寸相等
+        # 半径与预测主尺寸相等，即点在圆柱上
         radius = torch.cross(xyz - loc_pred, mad_pred, dim=1)
         radius = radius.norm(dim=1)
-        radius = (radius - dim_pred).abs().mean()
+        xyz_on_cylin = (radius - dim_pred).abs().mean()
 
         # 原点到垂足的向量与主方向垂直
-        dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
+        foot_prep_mad_loss = perpendicular_loss(loc_pred, mad_pred)
+        # dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
 
-        return radius + dot_product
+        # 法线与主方向垂直
+        mad_prep_nor = perpendicular_loss(mad_pred, nor_pred)
+
+        return xyz_on_cylin + 0.2 * foot_prep_mad_loss + 0.2 * mad_prep_nor
 
     else:
         return 0.0
@@ -139,18 +214,20 @@ def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
         loc_pred = loc_pred[mask]  # [n_item, 3]
 
         # 原点到垂足的向量与主方向垂直
-        dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
+        foot_perp_mad = perpendicular_loss(loc_pred, mad_pred)
+        # foot_perp_mad = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
 
-        return dot_product
+        return foot_perp_mad
 
     else:
         return 0.0
 
 
-def geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt):
+def geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt):
     """
     :param xyz: [bs, point, 3]
     :param dim_pred: [bs, point]
+    :param nor_pred: [bs, point, 3]
     :param loc_pred: [bs, point, 3]
     :param pmt_gt: [bs, point] (int, index)
     """
@@ -161,13 +238,17 @@ def geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt):
 
         xyz = xyz[mask]  # [n_item, 3]
         dim_pred = dim_pred[mask]  # [n_item, ]
+        nor_pred = nor_pred[mask]  # [n_item, 3]
         loc_pred = loc_pred[mask]  # [n_item, 3]
 
         # 球面上的点到主位置的距离等于主尺寸
         center_to_xyz = xyz - loc_pred
-        radius = (center_to_xyz.norm(dim=1) - dim_pred).abs().mean()
+        xyz_on_sphere_loss = (center_to_xyz.norm(dim=1) - dim_pred).abs().mean()
 
-        return radius
+        # 球心到 xyz 的向量与 nor 垂直
+        center_to_xyz_pall_nor_loss = parallel_loss(center_to_xyz, nor_pred)
+
+        return xyz_on_sphere_loss + 0.2 * center_to_xyz_pall_nor_loss
 
     else:
         return 0.0
@@ -216,7 +297,7 @@ def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_
             loss_total += (loss_pmt + loss_mad + loss_dim + loss_loc)
 
     # 归一化
-    return loss_total / bs
+    return 0.2 * (loss_total / bs)
 
 
 def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
@@ -248,17 +329,25 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # 基元类型
     pmt_nll = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
 
-    # 主方向的长度不应接近 0
-    mad_pred, loss_mad_min_len = safe_normalize(mad_pred)
+    # # 主方向的长度不应接近 0
+    # mad_pred, loss_mad_min_len = safe_normalize(mad_pred)
+    #
+    # # 法线长度不应接近 0
+    # nor_pred, loss_nor_min_len = safe_normalize(nor_pred)
 
-    # 法线长度不应接近 0
-    nor_pred, loss_nor_min_len = safe_normalize(nor_pred)
+    # 主方向和法线的长度应接近1，注意法线所有基元类型都有，但是主方向只有平面(0)、圆柱(1)、圆锥(2)有
+    unit_len_mad = unit_len_loss_with_pmt_considered(mad_pred, pmt_gt, (0, 1, 2))
+    unit_len_nor = unit_len_loss(nor_pred)
+
+    # 长度归一化
+    mad_pred = mad_pred / (mad_pred.norm(dim=-1, keepdim=True) + eps)
+    nor_pred = nor_pred / (nor_pred.norm(dim=-1, keepdim=True) + eps)
 
     # 主方向先进行方向的归一化
-    mad_pred = canonicalize_vectors_hard(mad_pred)
+    # mad_pred = canonicalize_vectors_hard(mad_pred)
 
     # 主方向损失
-    mad_mse = mse_loss_with_pmt_considered(mad_pred, mad_gt, pmt_gt, (0, 1, 2))
+    mad_mse = mse_loss_with_pmt_considered(mad_pred, mad_gt, pmt_gt, (2, ))
 
     # 主尺寸损失
     dim_mse = mse_loss_with_pmt_considered(dim_pred, dim_gt, pmt_gt, (1, 2, 3))
@@ -267,26 +356,25 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     nor_mse = mse_loss_with_pmt_considered(nor_pred, nor_gt, pmt_gt, (0, 1, 2, 3, 4))
 
     # 主位置损失
-    loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (0, 1, 2, 3))  # 测试这个损失很大，可能造成训练不稳定，故注释
+    loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (2, ))  # 测试这个损失很大，可能造成训练不稳定，故注释
 
     # 平面几何损失
     loss_plane = geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt)
 
     # 圆柱几何损失
-    loss_cylinder = geom_loss_cylinder(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
+    loss_cylinder = geom_loss_cylinder(xyz, mad_pred, nor_pred, dim_pred, loc_pred, pmt_gt)
 
     # 圆锥几何损失
     loss_cone = geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
 
     # 球几何损失
-    loss_sphere = geom_loss_sphere(xyz, dim_pred, loc_pred, pmt_gt)
+    loss_sphere = geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt)
 
     # 实例一致性损失
     loss_consistent = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
 
     # 总损失
-    # loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_cons
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + loss_mad_min_len + loss_nor_min_len + loss_consistent
+    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + unit_len_mad + unit_len_nor + loss_consistent
 
     loss_dict = {
         'all': value_item(loss_all),
@@ -299,8 +387,8 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         'loss_cylinder': value_item(loss_cylinder),
         'loss_cone': value_item(loss_cone),
         'loss_sphere': value_item(loss_sphere),
-        'loss_mad_min_len': value_item(loss_mad_min_len),
-        'loss_nor_min_len': value_item(loss_nor_min_len),
+        'loss_mad_unit_len': value_item(unit_len_mad),
+        'loss_nor_unit_len': value_item(unit_len_nor),
         'loss_consistent': value_item(loss_consistent),
     }
 
