@@ -336,8 +336,8 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     # nor_pred, loss_nor_min_len = safe_normalize(nor_pred)
 
     # 主方向和法线的长度应接近1，注意法线所有基元类型都有，但是主方向只有平面(0)、圆柱(1)、圆锥(2)有
-    unit_len_mad = unit_len_loss_with_pmt_considered(mad_pred, pmt_gt, (0, 1, 2))
-    unit_len_nor = unit_len_loss(nor_pred)
+    # unit_len_mad = unit_len_loss_with_pmt_considered(mad_pred, pmt_gt, (0, 1, 2))
+    # unit_len_nor = unit_len_loss(nor_pred)
 
     # 长度归一化
     mad_pred = mad_pred / (mad_pred.norm(dim=-1, keepdim=True) + eps)
@@ -371,10 +371,10 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     loss_sphere = geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt)
 
     # 实例一致性损失
-    loss_consistent = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
+    # loss_consistent = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
 
     # 总损失
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere + unit_len_mad + unit_len_nor + loss_consistent
+    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere
 
     loss_dict = {
         'all': value_item(loss_all),
@@ -387,9 +387,9 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         'loss_cylinder': value_item(loss_cylinder),
         'loss_cone': value_item(loss_cone),
         'loss_sphere': value_item(loss_sphere),
-        'loss_mad_unit_len': value_item(unit_len_mad),
-        'loss_nor_unit_len': value_item(unit_len_nor),
-        'loss_consistent': value_item(loss_consistent),
+        # 'loss_mad_unit_len': value_item(unit_len_mad),
+        # 'loss_nor_unit_len': value_item(unit_len_nor),
+        # 'loss_consistent': value_item(loss_consistent),
     }
 
     if loss_all.isnan().item() or loss_all.item() >= 20:
