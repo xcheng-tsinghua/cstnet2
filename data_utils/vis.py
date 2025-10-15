@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import torch
 
 
 def vis_3dpnts(points):
@@ -53,6 +54,54 @@ def vis_pcd(pcd_file):
     print(f'xmax {xyz[:, 0].max()}, xmin {xyz[:, 0].min()}, ymax {xyz[:, 1].max()}, ymin {xyz[:, 1].min()}, zmax {xyz[:, 2].max()}, zmin {xyz[:, 2].min()}')
 
     vis_pcd_plt(xyz, loc)
+
+def vis_3d_points_knn(points: torch.Tensor, index: int, neighbors: torch.IntTensor):
+    dim = points.dim()
+    print("points.dim: ", dim)
+    # 如果有batch维度，选择第一个batch
+    if dim == 3:
+        points = points[0, :, :]
+        neighbors = neighbors[0, :, :]
+        print("可视化batch中的第一个点云")
+
+    # 将torch.Tensor转为numpy数组
+    points = points.detach().cpu().numpy()
+    neighbors = neighbors.detach().cpu().numpy()
+
+    fig = plt.figure(figsize=(6, 5))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # 3d points全部画出来
+    print("points: ", points[:, :].shape)
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2],
+               c='dodgerblue',  # 颜色
+               s=15,  # 点大小
+               marker='o',
+               alpha=0.4)
+
+    # 画出来被索引的点points[index]
+    print("index points: ", points[index, :].shape)
+    ax.scatter(points[index, 0], points[index, 1], points[index, 2],
+               c='r',  # 颜色
+               s=20,  # 点大小
+               marker='*',
+               alpha=0.4)
+
+    # 画出来所有的临近点 注意neighbors [N, K] -> 索引
+    print("neighbors: ", points[neighbors[index], :].shape)
+    ax.scatter(points[neighbors[index], 0], points[neighbors[index], 1], points[neighbors[index], 2],
+               c='k',  # 颜色
+               s=17,  # 点大小
+               marker='o',
+               alpha=0.4)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D Point Cloud')
+
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == '__main__':

@@ -24,6 +24,7 @@ class MLP(nn.Module):
         :param final_proc: is adding BatchNormalization, Active function, DropOut after final linear layers
         """
         super().__init__()
+        self.dimension = dimension
 
         self.linear_layers = nn.ModuleList()
         self.batch_normals = nn.ModuleList()
@@ -45,7 +46,7 @@ class MLP(nn.Module):
         elif dimension == 1:
             fc = partial(nn.Conv1d, kernel_size=1)
             bn = nn.BatchNorm1d
-            dp = nn.Dropout1d
+            dp = nn.Dropout
 
         elif dimension == 2:
             fc = partial(nn.Conv2d, kernel_size=1)
@@ -85,9 +86,15 @@ class MLP(nn.Module):
             dp = self.drop_outs[i]
 
             if self.is_drop:
-                fea = dp(at(bn(fc(fea))))
+                if self.dimension == 0:
+                    fea = dp(at(bn(fc(fea).permute(0, 2, 1)))).permute(0, 2, 1)
+                else:
+                    fea = dp(at(bn(fc(fea))))
             else:
-                fea = at(bn(fc(fea)))
+                if self.dimension == 0:
+                    fea = at(bn(fc(fea).permute(0, 2, 1))).permute(0, 2, 1)
+                else:
+                    fea = at(bn(fc(fea)))
 
         fea = self.outlayer(fea)
 
@@ -133,6 +140,41 @@ class PointAttention(nn.Module):
 
         return y_i
 
+class PointAttention2(nn.Module):
+    def __init__(self, channel_in, channel_out):
+        super().__init__()
+
+        channel_mid = int((channel_in * channel_out) ** 0.5)
+        self.fai = MLP(2, (channel_in, channel_mid, channel_out))
+        self.psi = MLP(2, (channel_in, channel_mid, channel_out))
+
+    def forward(self, x_i, x_j):
+        """
+        x_i: [bs, n_point, channel], center
+        x_j: [bs, n_point, n_near, channel], neighbor
+
+        """
+        x_i = x_i.unsqueeze(2).permute(0, 3, 2, 1) # -> [bs, channel, 1, npoint]
+        x_j = x_j.permute(0, 3, 2, 1)   # -> [bs, channel, n_near, npoint]
+
+        bs, channel, n_near, n_point = x_j.size()
+        x_i = x_i.repeat(1, 1, n_near, 1)
+
+        # print("x_i: ", x_i[0, 0, 0, :10])
+        # print("x_j: ", x_j[0, 0, 0, :10])
+
+        # print("torch.is_nan(x_i).any(): ", torch.isnan(x_i).any(), "torch.is_nan(x_j).any(): ", torch.isnan(x_j).any())
+
+        # print("x_i - x_j: ", (x_i - x_j).shape)
+        # print("x_i - x_j: ", (x_i - x_j)[0, 0, 0, :10])
+        # print("(x_i - x_j).min: ", (x_i - x_j).min(), "(x_i - x_j).max(): ", (x_i - x_j).max())
+        # print("torch.abs(x_i - x_j): ", torch.abs(x_i - x_j).shape)
+        y_i = channel * F.softmax(self.fai(torch.abs(x_i - x_j)), dim=1) * self.psi(x_i)  # -> [bs, channel, n_near, npoint]
+        y_i = torch.sum(y_i, dim=2)  # -> [bs, channel, npoint]
+        y_i = y_i / n_near  # -> [bs, channel, npoint]
+        y_i = y_i.permute(0, 2, 1)  # -> [bs, npoint, channel]
+
+        return y_i
 
 class FeaAttention(nn.Module):
     def __init__(self, channel_in, channel_out):
@@ -172,6 +214,39 @@ class FeaAttention(nn.Module):
 
         return y_i
 
+class FeaAttention2(nn.Module):
+    def __init__(self, channel_in, channel_out):
+        super().__init__()
+
+        channel_mid = int((channel_in * channel_out) ** 0.5)
+        self.fai = MLP(2, (channel_in, channel_mid, channel_out))
+        self.psi = MLP(2, (channel_in, channel_mid, channel_out))
+
+    def forward(self, xyz_fea, pmt_fea, mad_fea, dim_fea, nor_fea, loc_fea, fea):
+        """
+        :param mad_fea: [bs, n_points, f]
+        :param adj_fea: [bs, n_points, f]
+        :param pt_fea: [bs, n_points, f]
+        :param cst_fea: [bs, n_points, f]
+        :return:
+        """
+
+        # x_i: [bs, channel, 1, n_point]
+        x_i = fea.unsqueeze(2).permute(0, 3, 2, 1)
+
+        # x_j: [bs, channel, 3, n_point]
+        x_j = torch.cat([xyz_fea.unsqueeze(2), pmt_fea.unsqueeze(2), mad_fea.unsqueeze(2),
+                         dim_fea.unsqueeze(2), nor_fea.unsqueeze(2), loc_fea.unsqueeze(2)], dim=2).permute(0, 3, 2, 1)
+
+        bs, channel, n_near, n_point = x_j.size()
+
+        y_i = (channel * F.softmax(self.fai(torch.abs(x_i - x_j)), dim=1)) * self.psi(x_i)  # -> [bs, channel, n_near, npoint]
+        y_i = torch.sum(y_i, dim=2)  # -> [bs, channel, npoint]
+        y_i = y_i / n_near  # -> [bs, channel, npoint]
+        y_i = y_i.permute(0, 2, 1)  # -> [bs, npoint, channel]
+
+        return y_i
+
 
 def index_points(points, idx):
     device = points.device
@@ -189,7 +264,7 @@ def indexes_val(vals, inds):
     bs, n_item, n_vals = inds.size()
     sequence = torch.arange(bs)
     sequence_expanded = sequence.unsqueeze(1)
-    sequence_3d = sequence_expanded.tile((1, n_item))
+    sequence_3d = sequence_expanded.repeat((1, n_item))
     sequence_4d = sequence_3d.unsqueeze(-1)
     batch_indices = sequence_4d.repeat(1, 1, n_vals)
     view_shape = [n_item, n_vals]
@@ -200,7 +275,7 @@ def indexes_val(vals, inds):
     return vals[batch_indices, channel_indices, inds]
 
 
-def fps(xyz, n_samples):
+def fps(xyz, n_samples, dim=3):
     device = xyz.device
     B, N, C = xyz.shape
 
@@ -211,7 +286,7 @@ def fps(xyz, n_samples):
 
     for i in range(n_samples):
         centroids[:, i] = farthest
-        centroid = xyz[batch_indices, farthest, :].view(B, 1, 3)
+        centroid = xyz[batch_indices, farthest, :].view(B, 1, dim)
         dist = torch.sum((xyz - centroid) ** 2, -1)
         mask = dist < distance
         distance[mask] = dist[mask].float()
