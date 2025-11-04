@@ -7,5 +7,15 @@ git status && git add . && git commit -m "change" && git push
 tensorboard --logdir=./log/cst_pred_v2_2_2
 
 
+# 对于目录
+# 需要将 ${directory} 更换为已被Git同步但是需要解除同步的文件夹
+git rm --cached -r ${directory}
+
+# 对于文件
+# 需要将 ${file} 更换为已被Git同步但是需要解除同步的文件
+git rm --cached ${file}
+
+
+
 
 

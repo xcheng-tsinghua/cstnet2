@@ -174,6 +174,14 @@ class FeaAttention(nn.Module):
 
 
 def index_points(points, idx):
+    """
+    返回 points 中 索引 idx 对应的点
+    Input:
+        points: input points data, [B, N, C]
+        idx: sample index data, [B, S]
+    Return:
+        new_points:, indexed points data, [B, S, C]
+    """
     device = points.device
     B = points.shape[0]
     view_shape = list(idx.shape)
