@@ -6,4 +6,4 @@ cst_fea/__pycache__/
 model_trained/
 log/
 backups/
-cst_pred\cst_pcd_3dgcn.py
+cst_pred/cst_pcd_3dgcn.py
