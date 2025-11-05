@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 from data_utils.datasets import CstNet2Dataset
 from models.cst_pcd import CstPcd
-# from models.cst_pcd_3dgcn import CstPcd
+# from models_3rd.cst_pcd_3dgcn import CstPcd
 from models.loss import constraint_loss
 
 
