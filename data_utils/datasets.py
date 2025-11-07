@@ -2,18 +2,18 @@ import os
 import numpy as np
 from torch.utils.data import Dataset
 
-from models import utils
+from modules import utils
 
 
 class CstPntDataset(Dataset):
     def __init__(self,
                  root,
-                 npoints=2500,
+                 n_points=2500,
                  data_augmentation=True
                  ):
         print('CstPnt dataset, from:' + root)
 
-        self.npoints = npoints
+        self.n_points = n_points
         self.data_augmentation = data_augmentation
         self.datapath = utils.get_allfiles(root)
 
@@ -24,9 +24,9 @@ class CstPntDataset(Dataset):
         point_set = np.loadtxt(fn)  # [x, y, z, ex, ey, ez, adj, pt]
 
         try:
-            choice = np.random.choice(point_set.shape[0], self.npoints, replace=True)
+            choice = np.random.choice(point_set.shape[0], self.n_points, replace=True)
         except:
-            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.n_points}')
 
         point_set = point_set[choice, :]
 
@@ -52,7 +52,7 @@ class Param20KDataset(Dataset):
     def __init__(self,
                  root,
                  is_train=True,
-                 npoints=2500,
+                 n_points=2500,
                  data_augmentation=True,
                  is_backcst=True
                  ):
@@ -89,7 +89,7 @@ class Param20KDataset(Dataset):
         """
         print('Param20K dataset, from:' + root)
 
-        self.npoints = npoints
+        self.n_points = n_points
         self.data_augmentation = data_augmentation
         self.is_backcst = is_backcst
 
@@ -121,9 +121,9 @@ class Param20KDataset(Dataset):
         point_set = np.loadtxt(fn[1])  # (x, y, z, mad, adj, pt)
 
         try:
-            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+            choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
         except:
-            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.n_points}')
 
         point_set = point_set[choice, :]
         xyz = point_set[:, :3]
@@ -153,10 +153,10 @@ class Param20KDataset(Dataset):
 
 
 class RegressionDataset(Dataset):
-    def __init__(self, root, is_train, npoints):
+    def __init__(self, root, is_train, n_points):
 
         print('RegressionDataset dataset, from:' + root)
-        self.npoints = npoints
+        self.n_points = n_points
 
         if is_train:
             inner_root = os.path.join(root, 'train')
@@ -183,9 +183,9 @@ class RegressionDataset(Dataset):
         point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
-            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+            choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
         except:
-            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.n_points}')
 
         point_set = point_set[choice, :]
         xyz = point_set[:, :3]
@@ -197,10 +197,10 @@ class RegressionDataset(Dataset):
 
 
 class ConeDataset(Dataset):
-    def __init__(self, root, is_train, npoints):
+    def __init__(self, root, is_train, n_points):
 
         print('cone dataset, from:' + root)
-        self.npoints = npoints
+        self.n_points = n_points
 
         if is_train:
             inner_root = os.path.join(root, 'train')
@@ -226,9 +226,9 @@ class ConeDataset(Dataset):
         point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
-            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+            choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
         except:
-            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.n_points}')
 
         point_set = point_set[choice, :]
         xyz = point_set[:, :3]
@@ -246,7 +246,7 @@ class CstNet2Dataset(Dataset):
     def __init__(self,
                  root,
                  is_train=True,
-                 npoints=2000,
+                 n_points=2000,
                  data_augmentation=False
                  ):
         """
@@ -282,7 +282,7 @@ class CstNet2Dataset(Dataset):
         """
         print('CstNet2 dataset, from:' + root)
 
-        self.npoints = npoints
+        self.n_points = n_points
         self.data_augmentation = data_augmentation
 
         if is_train:
@@ -314,10 +314,10 @@ class CstNet2Dataset(Dataset):
 
         # 随机选出指定数量的点
         try:
-            choice = np.random.choice(point_set.shape[0], self.npoints, replace=False)
+            choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
             point_set = point_set[choice, :]
         except:
-            exit(f'insufficient point number of the point cloud: all points: {point_set.shape[0]}, required points: {self.npoints}')
+            exit(f'insufficient points, current: {point_set.shape[0]}, required: {self.n_points}')
 
         xyz = point_set[:, :3]  # [n, 3]
         pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]. plane 0, cylinder 1, cone 2, sphere 3, freeform 4
@@ -325,7 +325,7 @@ class CstNet2Dataset(Dataset):
         dim = point_set[:, 7]  # 主尺寸 [n, ]
         nor = point_set[:, 8:11]  # 法线 [n, 3]
         loc = point_set[:, 11:14]  # 主位置 [n, 3]
-        affil_idx = point_set[:, 14].astype(np.int32)  # 从属索引 [n, ]
+        affiliate_idx = point_set[:, 14].astype(np.int32)  # 从属索引 [n, ]
 
         # 已弃用在加载时调整点云，直接在点云生成时归一化三维模型，使其处于 [-1, 1]^3
         # # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
@@ -340,21 +340,21 @@ class CstNet2Dataset(Dataset):
         # loc = loc * scale
 
         # 将圆锥的主位置替换为原点到轴线的垂足坐标
-        cone_mask = (pmt == 2)
-        if cone_mask.sum() != 0:
-            cone_mad = mad[cone_mask]
-            cone_apex = loc[cone_mask]
-
-            t = - np.einsum('ij,ij->i', cone_mad, cone_apex)
-
-            # 垂足坐标
-            perpendicular_foot = cone_apex + t[:, None] * cone_mad
-            loc[cone_mask] = perpendicular_foot
+        # cone_mask = (pmt == 2)
+        # if cone_mask.sum() != 0:
+        #     cone_mad = mad[cone_mask]
+        #     cone_apex = loc[cone_mask]
+        #
+        #     t = - np.einsum('ij,ij->i', cone_mad, cone_apex)
+        #
+        #     # 垂足坐标
+        #     perpendicular_foot = cone_apex + t[:, None] * cone_mad
+        #     loc[cone_mask] = perpendicular_foot
 
         if self.data_augmentation:
             xyz += np.random.normal(0, 0.02, size=xyz.shape)
 
-        return xyz, cls, pmt, mad, dim, nor, loc, affil_idx
+        return xyz, cls, pmt, mad, dim, nor, loc, affiliate_idx
 
     def __len__(self):
         return len(self.datapath)

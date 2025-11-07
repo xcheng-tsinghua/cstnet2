@@ -2,7 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-from models import utils
+from modules import pointnet2
+from modules import utils
 
 
 class DownSample(nn.Module):
@@ -84,90 +85,31 @@ class UpSample(nn.Module):
 
 
 class CstPcd(nn.Module):
-    def __init__(self, n_points_all, sample_rate=0.9):
+    def __init__(self):
         super().__init__()
         print('constraint prediction original version')
 
-        self.dn1 = DownSample(int(n_points_all * sample_rate), 50, 3, 64)
-        self.dn2 = DownSample(int(n_points_all * sample_rate ** 2), 40, 64, 128)
-        self.dn3 = DownSample(int(n_points_all * sample_rate ** 3), 30, 128, 256)
-
-        self.up3 = UpSample((256 + 128, 256, 128))
-        self.up2 = UpSample((128 + 64, 128, 64))
-        self.up1 = UpSample((64 + 6, 64, 32))
-
-        self.mlp_pmt = utils.MLP(1, (32, 16, 5))  # 5 类基元
-        self.mlp_mad = utils.MLP(1, (32, 16, 3))  # 主方向 3 个坐标分量
-        self.mlp_dim = utils.MLP(1, (32, 16, 1))  # 主尺寸 1 个实数
-        self.mlp_nor = utils.MLP(1, (32, 16, 3))  # 法线 3 个坐标分量
-        self.mlp_loc = utils.MLP(1, (32, 16, 3))  # 主位置 3 个坐标分量
+        self.point_fea_encoder = pointnet2.PointNet2PointFeaEncoder()  # 获取逐点特征
+        self.point_pmt_mlp = utils.MLP(1, (128, 64, 5))  # 5类基元
 
     def forward(self, xyz):
         """
-        xyz: [bs, n_point, 3]
+        xyz: [bs, 3, n_points]
+
+        return: pmt_log: [bs, n_points, 5], raw_fea: [bs, 128, n_points]
         """
-        l1_xyz, l1_fea = self.dn1(xyz, xyz)
-        l2_xyz, l2_fea = self.dn2(l1_xyz, l1_fea)
-        l3_xyz, l3_fea = self.dn3(l2_xyz, l2_fea)
+        raw_fea = self.point_fea_encoder(xyz)  # [bs, fea, n_points]
 
-        l2_fea = self.up3(l2_xyz, l3_xyz, l2_fea, l3_fea)
-        l1_fea = self.up2(l1_xyz, l2_xyz, l1_fea, l2_fea)
-        l0_fea = self.up1(xyz, l1_xyz, torch.cat([xyz, xyz], 2), l1_fea).permute(0, 2, 1)
+        pmt_fea = self.point_pmt_mlp(raw_fea)  # [bs, fea, n_points]
+        pmt_log = F.log_softmax(pmt_fea, 1)
+        pmt_log = pmt_log.transpose(1, 2)  # [bs, n_points, 5]
 
-        # FC layers
-        pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
-        log_pmt = F.log_softmax(pmt, dim=2)  # 分类，使用 log_softmax
-
-        mad = self.mlp_mad(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        dim = self.mlp_dim(l0_fea).squeeze()  # [bs, n_points_all]
-        nor = self.mlp_nor(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        loc = self.mlp_loc(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 4]
-
-        return log_pmt, mad, dim, nor, loc
-
-
-class CstPcdSimplify(nn.Module):
-    def __init__(self, n_points_all, sample_rate=0.9):
-        super().__init__()
-        print('simplified constraint prediction from point cloud')
-
-        self.dn1 = DownSample(int(n_points_all * sample_rate), 50, 3, 64)
-        self.dn2 = DownSample(int(n_points_all * sample_rate ** 2), 40, 64, 128)
-
-        self.up2 = UpSample((128 + 64, 128, 64))
-        self.up1 = UpSample((64 + 6, 64, 32))
-
-        self.mlp_pmt = utils.MLP(1, (32, 16, 5))  # 5 类基元
-        self.mlp_mad = utils.MLP(1, (32, 16, 3))  # 主方向 3 个坐标分量
-        self.mlp_dim = utils.MLP(1, (32, 16, 1))  # 主尺寸 1 个实数
-        self.mlp_nor = utils.MLP(1, (32, 16, 3))  # 法线 3 个坐标分量
-        self.mlp_loc = utils.MLP(1, (32, 16, 3))  # 主位置 3 个坐标分量
-
-    def forward(self, xyz):
-        """
-        xyz: [bs, n_point, 3]
-        """
-        l1_xyz, l1_fea = self.dn1(xyz, xyz)
-        l2_xyz, l2_fea = self.dn2(l1_xyz, l1_fea)
-
-        l1_fea = self.up2(l1_xyz, l2_xyz, l1_fea, l2_fea)
-        l0_fea = self.up1(xyz, l1_xyz, torch.cat([xyz, xyz], 2), l1_fea).permute(0, 2, 1)
-
-        # FC layers
-        pmt = self.mlp_pmt(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 5]
-        log_pmt = F.log_softmax(pmt, dim=2)  # 分类，使用 log_softmax
-
-        mad = self.mlp_mad(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        dim = self.mlp_dim(l0_fea).squeeze()  # [bs, n_points_all]
-        nor = self.mlp_nor(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 3]
-        loc = self.mlp_loc(l0_fea).permute(0, 2, 1)  # [bs, n_points_all, 4]
-
-        return log_pmt, mad, dim, nor, loc
+        return pmt_log, raw_fea
 
 
 if __name__ == '__main__':
     test_tensor = torch.rand(16, 2000, 3).cuda()
-    anet = CstPcdSimplify(2000).cuda()
+    anet = CstPcd().cuda()
 
     _log_pmt, _mad, _dim, _nor, _loc = anet(test_tensor)
     print(_log_pmt.size(), _mad.size(), _dim.size(), _nor.size(), _loc.size())

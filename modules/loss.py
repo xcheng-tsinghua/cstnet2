@@ -1,5 +1,312 @@
 import torch.nn.functional as F
 import torch
+import numpy as np
+
+
+class EmbeddingLoss:
+    """
+    从 parsenet 转移过来的损失函数
+    """
+    def __init__(self, margin=1.0, if_mean_shift=False):
+        """
+        Defines loss function to train embedding network.
+        :param margin: margin to be used in triplet loss.
+        :param if_mean_shift: bool, whether to use mean shift
+        iterations. This is only used in end to end training.
+        """
+        self.margin = margin
+        self.if_mean_shift = if_mean_shift
+        self.meanshift = MeanShift()
+
+    def triplet_loss(self, output, labels: np.ndarray, iterations=5):
+        """
+        Triplet loss
+        :param output: output embedding from the network. size: B x 128 x N
+        where B is the batch size, 128 is the dim size and N is the number of points.
+        :param labels: B x N
+        """
+        max_segments = 5
+        batch_size = output.shape[0]
+        N = output.shape[2]
+        loss_diff = torch.tensor([0.], requires_grad=True).cuda()
+        relu = torch.nn.ReLU()
+
+        output = output.permute(0, 2, 1)
+        output = torch.nn.functional.normalize(output, p=2, dim=2)
+        new_output = []
+
+        if self.if_mean_shift:
+            for b in range(batch_size):
+                new_X, bw = self.meanshift.mean_shift(output[b], 4000,
+                                                 0.015, iterations=iterations,
+                                                 nms=False)
+                new_output.append(new_X)
+            output = torch.stack(new_output, 0)
+
+        num_sample_points = {}
+        sampled_points = {}
+        for i in range(batch_size):
+            sampled_points[i] = {}
+            p = labels[i]
+            # print("labels: ", labels.shape)
+            unique_labels = np.unique(p)
+            # print("unique_labels: ", unique_labels.shape)
+
+            # number of points from each cluster.
+            num_sample_points[i] = min([N // unique_labels.shape[0] + 1, 30])
+            # print("num_sample_points: ", num_sample_points[i])
+            for l in unique_labels:
+                ix = np.isin(p, l)
+                sampled_indices = np.where(ix)[0]
+                # print("sampled_indices: ", sampled_indices.shape)
+                # point indices that belong to a certain cluster.
+                sampled_points[i][l] = np.random.choice(
+                    list(sampled_indices),
+                    num_sample_points[i],
+                    replace=True)
+                # print(f"sampled_points[{i}][{l}]: ", sampled_points[i][l].shape)
+
+        sampled_predictions = {}
+        for i in range(batch_size):
+            sampled_predictions[i] = {}
+            for k, v in sampled_points[i].items():
+                pred = output[i, v, :]
+                # print("pred: ", pred.shape)
+                sampled_predictions[i][k] = pred
+
+        all_satisfied = 0
+        only_one_segments = 0
+        for i in range(batch_size):
+            len_keys = len(sampled_predictions[i].keys())
+            keys = list(sorted(sampled_predictions[i].keys()))
+            num_iterations = min([max_segments * max_segments, len_keys * len_keys])
+            normalization = 0
+            if len_keys == 1:
+                only_one_segments += 1
+                continue
+
+            loss_shape = torch.tensor([0.], requires_grad=True).cuda()
+            for _ in range(num_iterations):
+                k1 = np.random.choice(len_keys, 1)[0]
+                k2 = np.random.choice(len_keys, 1)[0]
+                if k1 == k2:
+                    continue
+                else:
+                    normalization += 1
+
+                pred1 = sampled_predictions[i][keys[k1]]
+                pred2 = sampled_predictions[i][keys[k2]]
+
+                Anchor = pred1.unsqueeze(1)
+                Pos = pred1.unsqueeze(0)
+                Neg = pred2.unsqueeze(0)
+
+                diff_pos = torch.sum(torch.pow((Anchor - Pos), 2), 2)
+                diff_neg = torch.sum(torch.pow((Anchor - Neg), 2), 2)
+                constraint = diff_pos - diff_neg + self.margin
+                constraint = relu(constraint)
+
+                # remove diagonals corresponding to same points in anchors
+                loss = torch.sum(constraint) - constraint.trace()
+
+                satisfied = torch.sum(constraint > 0) + 1.0
+                satisfied = satisfied.type(torch.cuda.FloatTensor)
+
+                loss_shape = loss_shape + loss / satisfied.detach()
+
+            loss_shape = loss_shape / (normalization + 1e-8)
+            loss_diff = loss_diff + loss_shape
+        loss_diff = loss_diff / (batch_size - only_one_segments + 1e-8)
+        return loss_diff
+
+
+class MeanShift:
+    def __init__(self, ):
+        """
+        Differentiable mean shift clustering inspired from
+        https://arxiv.org/pdf/1712.08273.pdf
+        """
+        pass
+
+    def mean_shift(self, X, num_samples, quantile, iterations, kernel_type="gaussian", bw=None, nms=True):
+        """
+        Complete function to do mean shift clutering on the input X
+        :param num_samples: number of samples to consider for band width
+        calculation
+        :param X: input, N x d
+        :param quantile: to be used for computing number of nearest
+        neighbors, 0.05 works fine.
+        :param iterations:
+        """
+        if bw == None:
+            with torch.no_grad():
+                bw = self.compute_bandwidth(X, num_samples, quantile)
+
+                print("bandwidth: ", bw.item())
+
+                # avoid numerical issues.
+                bw = torch.clamp(bw, min=0.003)
+        new_X, _ = self.mean_shift_(X, b=bw, iterations=iterations, kernel_type=kernel_type)
+        if not nms:
+            return new_X, bw
+
+        with torch.no_grad():
+            _, indices, new_labels = self.nms(new_X, X, b=bw)
+        center = new_X[indices]
+
+        return new_X, center, bw, new_labels
+
+    def mean_shift_(self, X, b, iterations=10, kernel_type="gaussian"):
+        """
+        Differentiable mean shift clustering.
+        X are assumed to lie on the hyper shphere, and thus are normalized
+        to have unit norm. This is done for computational
+        efficiency and will not work if the assumptions are voilated.
+        :param X: N x d, points to be clustered
+        :param b: bandwidth
+        :param iterations: number of iterations
+        """
+        # initialize all the points as the seed points
+        new_X = X.clone()
+        delta = 1
+        for i in range(iterations):
+            if kernel_type == "gaussian":
+                dist = 2.0 - 2.0 * new_X @ torch.transpose(X, 1, 0)
+
+                # TODO Normalization is still remaining.
+                K = guard_exp(- dist / (b ** 2) / 2)
+            else:
+                # epanechnikov
+                dist = 2.0 - 2.0 * new_X @ torch.transpose(X, 1, 0)
+                dist = 3 / 4 * (1 - dist / (b ** 2))
+                K = torch.nn.functional.relu(dist)
+
+            D = 1 / (torch.sum(K, 1, keepdim=True))
+
+            # K: N x N, X: N x d, D: N x 1
+            M = (K @ X) * D - new_X
+            new_X = new_X + delta * M
+
+            # re-normalize it to lie on unit hyper-sphere.
+            new_X = new_X / torch.norm(new_X, dim=1, p=2, keepdim=True)
+        # new_X: center of the clusters
+        return new_X, X
+
+    def guard_mean_shift(self, embedding, quantile, iterations, kernel_type="gaussian"):
+        """
+        Some times if band width is small, number of cluster can be larger than 50, that
+        but we would like to keep max clusters 50 as it is the max number in our dataset.
+        in that case you increase the quantile to increase the band width to decrease
+        the number of clusters.
+        """
+        while True:
+            _, center, bandwidth, cluster_ids = self.mean_shift(
+                embedding, 5000, quantile, iterations, kernel_type=kernel_type
+            )
+            if torch.unique(cluster_ids).shape[0] > 49:
+                quantile *= 2
+            else:
+                break
+        return center, bandwidth, cluster_ids
+
+    def kernel(self, X, kernel_type, bw):
+        """
+        Assuing that the feature vector in X are normalized.
+        """
+        if kernel_type == "gaussian":
+            # gaussian
+            dist = 2.0 - 2.0 * X @ torch.transpose(X, 1, 0)
+            # TODO not considering the normalization factor
+            K = guard_exp(- dist / (bw ** 2) / 2)
+
+        elif kernel_type == "epa":
+            # epanechnikov
+            dist = 2.0 - 2.0 * X @ torch.transpose(X, 1, 0)
+            dist = 3 / 4 * (1 - dist / (bw ** 2))
+            K = torch.nn.functional.relu(dist)
+        return K
+
+    def compute_bandwidth(self, X, num_samples, quantile):
+        """
+        Compute the bandwidth for mean shift clustering.
+        Assuming the X is normalized to lie on hypersphere.
+        :param X: input data, N x d
+        :param num_samples: number of samples to be used
+        for computing distance, <= N
+        :param quantile: nearest neighbors used for computing
+        the bandwidth.
+        """
+        N = X.shape[0]
+        L = np.arange(N)
+        np.random.shuffle(L)
+        X = X[L[0:num_samples]]
+        # dist = (torch.unsqueeze(X, 1) - torch.unsqueeze(X, 0)) ** 2
+        dist = 2 - 2 * X @ torch.transpose(X, 1, 0)
+        # dist = torch.sum(dist, 1)
+        K = int(quantile * num_samples)
+        top_k = torch.topk(dist, k=K, dim=1, largest=False)[0]
+
+        max_top_k = guard_sqrt(top_k[:, -1], 1e-6)
+
+        return torch.mean(max_top_k)
+
+    def nms(self, centers, X, b):
+        """
+        Non max suprression.
+        :param centers: center of clusters
+        :param X: points to be clustered
+        :param b: band width used to get the centers
+        """
+        membership = 2.0 - 2.0 * centers @ torch.transpose(X, 1, 0)
+
+        # which cluster center is closer to the points
+        membership = torch.min(membership, 0)[1]
+
+        # Find the unique clusters which is closer to at least one point
+        uniques, counts_ = np.unique(membership.data.cpu().numpy(), return_counts=True)
+
+        # count of the number of points belonging to unique cluster ids above
+        counts = torch.from_numpy(counts_.astype(np.float32)).cuda(torch.get_device(centers))
+
+        num_mem_cluster = torch.zeros((X.shape[0])).cuda(torch.get_device(centers))
+
+        # Contains the count of number of points belonging to a
+        # unique cluster
+        num_mem_cluster[uniques] = counts
+
+        # distance of clusters from each other
+        dist = 2.0 - 2.0 * centers @ torch.transpose(centers, 1, 0)
+
+        # find the nearest neighbors to each cluster based on some threshold
+        # TODO this could be b ** 2
+        cluster_nbrs = dist < b
+        cluster_nbrs = cluster_nbrs.float()
+
+        cluster_center_ids = torch.unique(torch.max(cluster_nbrs[uniques] * num_mem_cluster.reshape((1, -1)), 1)[1])
+        # pruned centers
+        centers = centers[cluster_center_ids]
+
+        # assign labels to the input points
+        # It is assumed that the embeddings lie on the hypershphere and are normalized
+        temp = centers @ torch.transpose(X, 1, 0)
+        labels = torch.max(temp, 0)[1]
+        return centers, cluster_center_ids, labels
+
+    def pdist(self, x, y):
+        x = torch.unsqueeze(x, 1)
+        y = torch.unsqueeze(y, 0)
+        dist = torch.sum((x - y) ** 2, 2)
+        return dist
+
+
+def guard_exp(x, max_value=75, min_value=-75):
+    x = torch.clamp(x, max=max_value, min=min_value)
+    return torch.exp(x)
+
+
+def guard_sqrt(x, minimum=1e-5):
+    x = torch.clamp(x, min=minimum)
+    return torch.sqrt(x)
 
 
 def mse_loss_with_pmt_considered(attr_pred, attr_gt, pmt_gt, valid_pmt):

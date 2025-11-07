@@ -322,18 +322,55 @@ class PointNetFeaturePropagation(nn.Module):
         return new_points
 
 
-class PointNet2Cls(nn.Module):
-    # num_class = 40，normal_channel = false
-    def __init__(self, num_class: int, fea_channel=0):
+class PointNet2GlobalFeaEncoder(nn.Module):
+    def __init__(self, with_normal=False):
+        """
+        输出全局特征维度固定为 1024
+        """
         super().__init__()
 
+        if with_normal:
+            additional_channel = 3
+        else:
+            additional_channel = 0
+        self.with_normal = with_normal
+
         # 三个 set abstraction 层，in_channel = 3,
-        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=fea_channel + 3, mlp=[64, 64, 128],
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=additional_channel + 3, mlp=[64, 64, 128],
                                           group_all=False)
         self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=128 + 3, mlp=[128, 128, 256],
                                           group_all=False)
         self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=256 + 3,
                                           mlp=[256, 512, 1024], group_all=True)
+
+    def forward(self, xyz):
+        """
+        xyz: [bs, 3, n_points] or [bs, 6, n_points]
+
+        return: [bs, channel_out]
+        """
+        bs = xyz.size(0)
+
+        if self.with_normal:
+            l0_points = xyz
+            l0_xyz = xyz[:, :3, :]
+        else:
+            l0_points = xyz
+            l0_xyz = xyz
+
+        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+        x = l3_points.view(bs, 1024)
+
+        return x
+
+
+class PointNet2Cls(nn.Module):
+    # num_class = 40，normal_channel = false
+    def __init__(self, num_class: int, with_normal=False):
+        super().__init__()
+        self.encoder = PointNet2GlobalFeaEncoder(with_normal)
 
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
@@ -343,120 +380,113 @@ class PointNet2Cls(nn.Module):
         self.drop2 = nn.Dropout(0.4)
         self.fc3 = nn.Linear(256, num_class)
 
-    def forward(self, xyz, fea=None):
+    def forward(self, xyz):
         """
-        xyz: [bs, n_points, 3]
-        fea: [bs, n_point, channel]
+        xyz: [bs, 3, n_points]
+
+        return: [bs, n_classes]
         """
-        bs = xyz.size(0)
-        xyz = xyz.permute(0, 2, 1)
+        x = self.encoder(xyz)
 
-        if fea is not None:
-            fea = fea.permute(0, 2, 1)
-
-        l1_xyz, l1_points = self.sa1(xyz, fea)
-        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        x = l3_points.view(bs, 1024)
         x = self.drop1(F.relu(self.bn1(self.fc1(x))))
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
-        x = F.log_softmax(x, -1)
 
+        x = F.log_softmax(x, -1)
         return x
 
 
-class PointNet2Reg(nn.Module):
-    # num_class = 40，normal_channel = false
-    def __init__(self, channel_out=3, channel_fea=0):
+class PointNet2PointFeaEncoder(nn.Module):
+    def __init__(self, with_normal=False):
         """
-        channel_fea: 点的特征维度，带法向量就是3，不带就是0
-        channel_out: 回归输出的特征长度
+        输出维度固定为 128
+        channel_out: 输出的逐点特征长度
+        with_normal: 是否使用法线
         """
         super().__init__()
-
-        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=channel_fea + 3, mlp=[16, 16, 32])
-        self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=32 + 3, mlp=[32, 32, 64])
-        self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=64 + 3, mlp=[128, 128, 256], group_all=True)
-
-        self.fc1 = nn.Linear(256, 128)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.drop1 = nn.Dropout(0.4)
-
-        self.fc2 = nn.Linear(128, 32)
-        self.bn2 = nn.BatchNorm1d(32)
-        self.drop2 = nn.Dropout(0.4)
-
-        self.fc3 = nn.Linear(32, channel_out)
-
-    def forward(self, xyz, fea=None):
-        """
-        xyz: [bs, n_points, 3]
-        """
-        xyz = xyz.permute(0, 2, 1)
-
-        l1_xyz, l1_fea = self.sa1(xyz, fea)
-        l2_xyz, l2_fea = self.sa2(l1_xyz, l1_fea)
-        l3_xyz, l3_fea = self.sa3(l2_xyz, l2_fea)
-        glo_fea = l3_fea.squeeze()
-
-        res = self.drop1(F.relu(self.bn1(self.fc1(glo_fea))))
-        res = self.drop2(F.relu(self.bn2(self.fc2(res))))
-        res = self.fc3(res)
-
-        return res
-
-
-class PointNet2Seg(nn.Module):
-    def __init__(self, num_classes, normal_channel=False):
-        super().__init__()
-        if normal_channel:
+        if with_normal:
             additional_channel = 3
         else:
             additional_channel = 0
-        self.normal_channel = normal_channel
+        self.with_normal = with_normal
+
         self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=6+additional_channel, mlp=[64, 64, 128], group_all=False)
         self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=128 + 3, mlp=[128, 128, 256], group_all=False)
         self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=256 + 3, mlp=[256, 512, 1024], group_all=True)
+
         self.fp3 = PointNetFeaturePropagation(in_channel=1280, mlp=[256, 256])  # in_chanell = points2_chanell + points1_channel
         self.fp2 = PointNetFeaturePropagation(in_channel=384, mlp=[256, 128])
-        self.fp1 = PointNetFeaturePropagation(in_channel=128+16+6+additional_channel, mlp=[128, 128, 128])
-        self.conv1 = nn.Conv1d(128, 128, 1)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.drop1 = nn.Dropout(0.5)
-        self.conv2 = nn.Conv1d(128, num_classes, 1)
+        self.fp1_cls = PointNetFeaturePropagation(in_channel=128+16+6+additional_channel, mlp=[128, 128, 128])
+        self.fp1 = PointNetFeaturePropagation(in_channel=128+6+additional_channel, mlp=[128, 128, 128])
 
-    def forward(self, xyz, cls_label):
+    def forward(self, xyz, cls_label=None):
+        """
+        xyz: [bs, 3, n_points] or [bs, 6, n_points]
+        cls_label: [bs, n_classes], 点云的类别数
+
+        return: [bs, 128, n_points]
+        """
         # Set Abstraction layers
-        B,C,N = xyz.shape
-        if self.normal_channel:
+        B, C, N = xyz.shape
+        if self.with_normal:
             l0_points = xyz
             l0_xyz = xyz[:,:3,:]
         else:
             l0_points = xyz
             l0_xyz = xyz
+
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
         # Feature Propagation layers
         l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)
         l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)
-        cls_label_one_hot = cls_label.view(B,16,1).repeat(1,1,N)
-        l0_points = self.fp1(l0_xyz, l1_xyz, torch.cat([cls_label_one_hot,l0_xyz,l0_points],1), l1_points)
+
+        if cls_label is not None:
+            cls_label_one_hot = cls_label.view(B,16,1).repeat(1,1,N)
+            l0_points = torch.cat([cls_label_one_hot,l0_xyz,l0_points],1)
+            l0_points = self.fp1_cls(l0_xyz, l1_xyz, l0_points, l1_points)
+        else:
+            l0_points = torch.cat([l0_xyz, l0_points], 1)
+            l0_points = self.fp1(l0_xyz, l1_xyz, l0_points, l1_points)
+
+        return l0_points
+
+
+class PointNet2Seg(nn.Module):
+    def __init__(self, num_classes, normal_channel=False):
+        super().__init__()
+        self.encoder = PointNet2PointFeaEncoder(normal_channel)
+
+        self.conv1 = nn.Conv1d(128, 128, 1)
+        self.bn1 = nn.BatchNorm1d(128)
+        self.drop1 = nn.Dropout(0.5)
+        self.conv2 = nn.Conv1d(128, num_classes, 1)
+
+    def forward(self, xyz, cls_label=None):
+        """
+        xyz: [bs, 3, n_points]
+        cls_label: [bs, n_classes], 点云的类别数
+
+        return: [bs, n_classes, n_points]
+        """
+        point_wise_fea = self.encoder(xyz, cls_label)
+
         # FC layers
-        feat = F.relu(self.bn1(self.conv1(l0_points)))
+        feat = F.relu(self.bn1(self.conv1(point_wise_fea)))
         x = self.drop1(feat)
         x = self.conv2(x)
+
         x = F.log_softmax(x, dim=1)
-        x = x.permute(0, 2, 1)
-        return x, l3_points
+
+        return x
 
 
 if __name__ == '__main__':
-    _x = torch.rand((2, 1024, 3)).cuda()
-    featensor = torch.rand((2, 7, 1024)).cuda()
+    _x = torch.rand((2, 3, 1024)).cuda()
 
-    anet = PointNet2Reg().cuda()
+    anet = PointNet2Seg(20).cuda()
     y = anet(_x)
     print("Input Shape of PointNet: ", _x.shape, "\nOutput Shape of PointNet: ", y.shape)
 

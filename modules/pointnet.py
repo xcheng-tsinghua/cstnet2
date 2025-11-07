@@ -83,8 +83,9 @@ class STNkd(nn.Module):
         x = x.view(-1, self.k, self.k)
         return x
 
+
 class PointNetfeat(nn.Module):
-    def __init__(self, global_feat = True, feature_transform = False, fea_channel=0):
+    def __init__(self, global_feat=True, feature_transform=False, fea_channel=0):
         super().__init__()
         self.stn = STN3d()
         self.conv1 = torch.nn.Conv1d(3+fea_channel, 64, 1)
@@ -211,7 +212,7 @@ class PointNetSeg(nn.Module):
         out_max = torch.max(out5, 2, keepdim=True)[0]
         out_max = out_max.view(-1, 2048)
 
-        out_max = torch.cat([out_max,label.squeeze(1)],1)
+        out_max = torch.cat([out_max, label.squeeze(1)],1)
         expand = out_max.view(-1, 2048+16, 1).repeat(1, 1, N)
         concat = torch.cat([expand, out1, out2, out3, out4, out5], 1)
         net = F.relu(self.bns1(self.convs1(concat)))

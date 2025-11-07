@@ -13,9 +13,8 @@ from typing import Union
 import torch.nn.functional as F
 
 from data_utils.datasets import CstNet2Dataset
-from models.cst_pcd import CstPcd
-# from models_3rd.cst_pcd_3dgcn import CstPcd
-from models.loss import constraint_loss
+from cst_pred.cst_pcd import CstPcd
+from modules.loss import EmbeddingLoss
 
 
 def parse_args():
@@ -23,7 +22,7 @@ def parse_args():
     parser.add_argument('--bs', type=int, default=32, help='batch size in training')
     parser.add_argument('--epoch', default=2000, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate in training')
-    parser.add_argument('--npoints', type=int, default=2000, help='Point Number')
+    parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
     parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
@@ -46,7 +45,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'cst_pred_v2_2_'
+    save_str = 'cst_pcd'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -57,14 +56,14 @@ def main(args):
     # data
     data_root = args.root_local if eval(args.local) else args.root_sever
 
-    train_set = CstNet2Dataset(root=data_root, is_train=True, npoints=args.npoints)
+    train_set = CstNet2Dataset(root=data_root, is_train=True, n_points=args.n_points)
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
-    test_set = CstNet2Dataset(root=data_root, is_train=False, npoints=args.npoints)
+    test_set = CstNet2Dataset(root=data_root, is_train=False, n_points=args.n_points)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
     # model
-    predictor = CstPcd(args.npoints).cuda()
+    predictor = CstPcd().cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
 
@@ -86,83 +85,88 @@ def main(args):
         weight_decay=args.decay_rate
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
+    emb_loss = EmbeddingLoss()
 
-    # train
+    # 训练
     train_batch = 0
     test_batch = 0
     for epoch in range(args.epoch):
-        train_loss_all = []
-        train_loss_dict_all = []
+        train_loss_list_pmt = []
+        train_loss_list_tri = []
+
+        # 设置为训练模式，启用 dropout、batchNormalization 等模块
         predictor = predictor.train()
 
         for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
-            xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
+            xyz, pmt_gt, affiliate_idx = data[0].float().cuda(), data[2].long().cuda(), data[-1].long().cuda()
 
-            xyz = xyz.float().cuda()
-            pmt_gt = pmt_gt.long().cuda()
-            mad_gt = mad_gt.float().cuda()
-            dim_gt = dim_gt.float().cuda()
-            nor_gt = nor_gt.float().cuda()
-            loc_gt = loc_gt.float().cuda()
-            affil_idx = affil_idx.long().cuda()
-
+            # 清空梯度，否则梯度会累加
             optimizer.zero_grad()
-            # log_pmt_pred = predictor(xyz)
-            # loss = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
-            log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred = predictor(xyz)
-            loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-                                              pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
 
+            # 将数据输入模型进行推理
+            xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
+            log_pmt, pnt_fea = predictor(xyz)
+
+            # 计算损失
+            pmt_loss = F.nll_loss(log_pmt.reshape(-1, 5), pmt_gt.view(-1))
+            tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
+            loss = pmt_loss + tri_loss
+
+            # 梯度反向传播
             loss.backward()
+
+            # 优化器根据梯度进行权重更新
             optimizer.step()
 
-            c_loss = loss.item()
-            train_loss_all.append(c_loss)
-            train_loss_dict_all.append(loss_dict)
-            writer.add_scalar('train/loss_batch', c_loss, train_batch)
-            write_loss_dict(writer, loss_dict, train_batch, 'detailed/batch/train')
+            # 记录损失
+            train_loss_list_pmt.append(pmt_loss.item())
+            train_loss_list_tri.append(tri_loss.item())
+
+            writer.add_scalar('train/loss_batch_pmt', pmt_loss.item(), train_batch)
+            writer.add_scalar('train/loss_batch_tri', tri_loss.item(), train_batch)
             train_batch += 1
 
-        train_loss_epoch = np.mean(train_loss_all).item()
-        writer.add_scalar('train/loss_epoch', train_loss_epoch, epoch)
-        write_loss_dict(writer, train_loss_dict_all, epoch, 'detailed/epoch/train')
+        train_loss_epoch_pmt = np.mean(train_loss_list_pmt).item()
+        train_loss_epoch_tri = np.mean(train_loss_list_tri).item()
+        writer.add_scalar('train/loss_epoch_pmt', train_loss_epoch_pmt, epoch)
+        writer.add_scalar('train/loss_epoch_tri', train_loss_epoch_tri, epoch)
 
+        # 学习率调整器计数加一
         scheduler.step()
+
+        # 保存权重
         torch.save(predictor.state_dict(), model_savepth)
 
-        # test
+        # 测试
         with torch.no_grad():
-            test_loss_all = []
-            test_loss_dict_all = []
+            test_loss_list_pmt = []
+            test_loss_list_tri = []
+
+            # 设置为评估模式，禁用 dropout、batchNormalization 等模块
             predictor = predictor.eval()
 
             for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
-                xyz, cls, pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx = data
+                xyz, pmt_gt, affiliate_idx = data[0].float().cuda(), data[2].long().cuda(), data[-1].long().cuda()
 
-                xyz = xyz.float().cuda()
-                pmt_gt = pmt_gt.long().cuda()
-                mad_gt = mad_gt.float().cuda()
-                dim_gt = dim_gt.float().cuda()
-                nor_gt = nor_gt.float().cuda()
-                loc_gt = loc_gt.float().cuda()
-                affil_idx = affil_idx.long().cuda()
+                xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
+                log_pmt, pnt_fea = predictor(xyz)
 
-                log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred, = predictor(xyz)
-                loss, loss_dict = constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-                                       pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx)
+                pmt_loss = F.nll_loss(log_pmt.view(-1, 5), pmt_gt.view(-1))
+                tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
 
-                c_loss = loss.item()
-                test_loss_all.append(c_loss)
-                test_loss_dict_all.append(loss_dict)
-                writer.add_scalar('test/loss_batch', c_loss, epoch)
-                write_loss_dict(writer, loss_dict, test_batch, 'detailed/batch/test')
+                test_loss_list_pmt.append(pmt_loss.item())
+                test_loss_list_tri.append(tri_loss.item())
+
+                writer.add_scalar('test/loss_batch_pmt', pmt_loss.item(), test_batch)
+                writer.add_scalar('test/loss_batch_tri', tri_loss.item(), test_batch)
                 test_batch += 1
 
-            test_loss_epoch = np.mean(test_loss_all).item()
-            writer.add_scalar('test/loss_epoch', test_loss_epoch, test_batch)
-            write_loss_dict(writer, test_loss_dict_all, epoch, 'detailed/epoch/test')
+            test_loss_epoch_pmt = np.mean(test_loss_list_pmt).item()
+            test_loss_epoch_tri = np.mean(test_loss_list_tri).item()
+            writer.add_scalar('test/loss_epoch_pmt', test_loss_epoch_pmt, epoch)
+            writer.add_scalar('test/loss_epoch_tri', test_loss_epoch_tri, epoch)
 
-            print(f'{epoch} / {args.epoch}: train_loss: {train_loss_epoch}. test_loss: {test_loss_epoch}')
+            print(f'{epoch} / {args.epoch}: train_loss_epoch_pmt: {train_loss_epoch_pmt}, train_loss_epoch_tri: {train_loss_epoch_tri}. test_loss_epoch_pmt: {test_loss_epoch_pmt}, test_loss_epoch_tri: {test_loss_epoch_tri}')
 
     writer.close()
 

@@ -180,8 +180,9 @@ class DGCNNEncoderGn(nn.Module):
             self.bnmlp1 = nn.GroupNorm(8, 1024)
 
     def forward(self, x):
-        batch_size = x.size(0)
-        num_points = x.shape[2]
+        """
+        x: [bs, 3, n_points]
+        """
 
         if self.mode == 0 or self.mode == 1:
             # print("x: ", x.shape)
@@ -238,10 +239,12 @@ class PrimitivesEmbeddingDGCNGn(nn.Module):
     point embedding or membership function. This defines the membership loss
     inside the forward function so that data distributed loss can be made faster.
     """
-
     def __init__(self, emb_size=128, num_primitives=10, primitives=True, embedding=True, mode=0, num_channels=3,
                  loss_function=None, nn_nb=80):
-        super(PrimitivesEmbeddingDGCNGn, self).__init__()
+        """
+
+        """
+        super().__init__()
         self.mode = mode
         self.encoder = DGCNNEncoderGn(mode=mode, input_channels=num_channels, nn_nb=nn_nb)
         self.drop = 0.0
@@ -300,10 +303,12 @@ class PrimitivesEmbeddingDGCNGn(nn.Module):
             x = F.dropout(F.relu(self.bn_prim_prob1(self.mlp_prim_prob1(x_all))), self.drop)
             x = self.mlp_prim_prob2(x)
             primitives_log_prob = self.logsoftmax(x)
+
         if compute_loss:
             embed_loss = self.loss_function(embedding, labels.data.cpu().numpy())
         else:
             embed_loss = torch.zeros(1).cuda()
+
         return embedding, primitives_log_prob, embed_loss
 
 
