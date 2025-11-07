@@ -29,6 +29,8 @@ freeform: 4
 # 环境
 conda env export --no-builds | grep -v '^prefix:' > environment.yml
 
+conda activate dp
+
 # 模块
 ## modules
 包含一些全局特征、局部特征提取模块，例如 pointnet 或 pointnet++ (pointnet2)
