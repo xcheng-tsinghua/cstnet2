@@ -127,7 +127,6 @@ def get_graph_feature(x, k1=20, k2=20, idx=None):
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
     # print("idx_base shape: ", idx_base.shape)
 
-
     idx = idx + idx_base
 
     idx = idx.view(-1)
@@ -151,33 +150,33 @@ def get_graph_feature(x, k1=20, k2=20, idx=None):
 
 
 class DGCNNEncoderGn(nn.Module):
-    def __init__(self, mode=0, input_channels=3, nn_nb=80):
+    def __init__(self, mode=0, input_channels=3, k=80):
         super().__init__()
-        self.k = nn_nb
+        self.k = k
         self.dilation_factor = 1
         self.mode = mode
         self.drop = 0.0
-        if self.mode == 0 or self.mode == 5:
-            self.bn1 = nn.GroupNorm(2, 64)
-            self.bn2 = nn.GroupNorm(2, 64)
-            self.bn3 = nn.GroupNorm(2, 128)
-            self.bn4 = nn.GroupNorm(4, 256)
-            self.bn5 = nn.GroupNorm(8, 1024)
 
-            self.conv1 = nn.Sequential(nn.Conv2d(input_channels * 2, 64, kernel_size=1, bias=False),
-                                       self.bn1,
-                                       nn.LeakyReLU(negative_slope=0.2))
-            self.conv2 = nn.Sequential(nn.Conv2d(64 * 2, 64, kernel_size=1, bias=False),
-                                       self.bn2,
-                                       nn.LeakyReLU(negative_slope=0.2))
-            self.conv3 = nn.Sequential(nn.Conv2d(64 * 2, 128, kernel_size=1, bias=False),
-                                       self.bn3,
-                                       nn.LeakyReLU(negative_slope=0.2))
+        self.bn1 = nn.GroupNorm(2, 64)
+        self.bn2 = nn.GroupNorm(2, 64)
+        self.bn3 = nn.GroupNorm(2, 128)
+        self.bn4 = nn.GroupNorm(4, 256)
+        self.bn5 = nn.GroupNorm(8, 1024)
 
-            self.mlp1 = nn.Conv1d(256, 1024, 1)
-            self.bnmlp1 = nn.GroupNorm(8, 1024)
-            self.mlp1 = nn.Conv1d(256, 1024, 1)
-            self.bnmlp1 = nn.GroupNorm(8, 1024)
+        self.conv1 = nn.Sequential(nn.Conv2d(input_channels * 2, 64, kernel_size=1, bias=False),
+                                   self.bn1,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv2 = nn.Sequential(nn.Conv2d(64 * 2, 64, kernel_size=1, bias=False),
+                                   self.bn2,
+                                   nn.LeakyReLU(negative_slope=0.2))
+        self.conv3 = nn.Sequential(nn.Conv2d(64 * 2, 128, kernel_size=1, bias=False),
+                                   self.bn3,
+                                   nn.LeakyReLU(negative_slope=0.2))
+
+        self.mlp1 = nn.Conv1d(256, 1024, 1)
+        self.bnmlp1 = nn.GroupNorm(8, 1024)
+        self.mlp1 = nn.Conv1d(256, 1024, 1)
+        self.bnmlp1 = nn.GroupNorm(8, 1024)
 
     def forward(self, x):
         """
@@ -233,22 +232,17 @@ class DGCNNEncoderGn(nn.Module):
             return x4, x_features
 
 
-class PrimitivesEmbeddingDGCNGn(nn.Module):
+class DGCNGn(nn.Module):
     """
     Segmentation model that takes point cloud as input and returns per
     point embedding or membership function. This defines the membership loss
     inside the forward function so that data distributed loss can be made faster.
     """
-    def __init__(self, emb_size=128, num_primitives=10, primitives=True, embedding=True, mode=0, num_channels=3,
-                 loss_function=None, nn_nb=80):
-        """
-
-        """
+    def __init__(self, emb_size=128, num_primitives=10, primitives=True, embedding=True, mode=0, num_channels=3, k=80):
         super().__init__()
         self.mode = mode
-        self.encoder = DGCNNEncoderGn(mode=mode, input_channels=num_channels, nn_nb=nn_nb)
+        self.encoder = DGCNNEncoderGn(mode=mode, input_channels=num_channels, k=k)
         self.drop = 0.0
-        self.loss_function = loss_function
 
         if self.mode == 0 or self.mode == 3 or self.mode == 4 or self.mode == 5 or self.mode == 6:
             self.conv1 = torch.nn.Conv1d(1024 + 256, 512, 1)
@@ -277,7 +271,7 @@ class PrimitivesEmbeddingDGCNGn(nn.Module):
             self.mlp_prim_prob2 = torch.nn.Conv1d(256, num_primitives, 1)
             self.bn_prim_prob1 = nn.GroupNorm(4, 256)
 
-    def forward(self, points, labels=None, compute_loss=False):
+    def forward(self, points):
         """
         points: [bs, 3, n_point]
         """
@@ -292,9 +286,6 @@ class PrimitivesEmbeddingDGCNGn(nn.Module):
         x = F.dropout(F.relu(self.bn1(self.conv1(x))), self.drop)
         x_all = F.dropout(F.relu(self.bn2(self.conv2(x))), self.drop)
 
-        # print("x_all: ", x_all.shape)
-        # print("x: ", x.shape)
-
         if self.embedding:
             x = F.dropout(F.relu(self.bn_seg_prob1(self.mlp_seg_prob1(x_all))), self.drop)
             embedding = self.mlp_seg_prob2(x)
@@ -304,17 +295,12 @@ class PrimitivesEmbeddingDGCNGn(nn.Module):
             x = self.mlp_prim_prob2(x)
             primitives_log_prob = self.logsoftmax(x)
 
-        if compute_loss:
-            embed_loss = self.loss_function(embedding, labels.data.cpu().numpy())
-        else:
-            embed_loss = torch.zeros(1).cuda()
-
-        return embedding, primitives_log_prob, embed_loss
+        return embedding, primitives_log_prob
 
 
 if __name__ == '__main__':
-    anet = PrimitivesEmbeddingDGCNGn().cuda()
-    atensor = torch.rand(5, 3, 1000).cuda()
+    anet = DGCNGn().cuda()
+    atensor = torch.rand(9, 3, 1000).cuda()
 
     ares = anet(atensor)
     print(ares[0].size(), ares[1].size())

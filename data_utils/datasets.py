@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from torch.utils.data import Dataset
+import torch
 
 from modules import utils
 
@@ -361,6 +362,16 @@ class CstNet2Dataset(Dataset):
 
     def n_classes(self):
         return len(self.classes)
+
+    @staticmethod
+    def create_dataloader(root, bs, n_points, num_workers):
+        train_set = CstNet2Dataset(root=root, is_train=True, n_points=n_points)
+        train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=num_workers)
+
+        test_set = CstNet2Dataset(root=root, is_train=False, n_points=n_points)
+        test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, shuffle=True, num_workers=num_workers)
+
+        return train_loader, test_loader
 
 
 def trans_loc_for_planes(pmt: np.ndarray, loc: np.ndarray, mad: np.ndarray, trans: np.ndarray, eps: float = 1e-8):

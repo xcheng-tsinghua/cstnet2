@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from data_utils.datasets import CstNet2Dataset
 from cst_pred.cst_pcd import CstPcd
 from modules.loss import EmbeddingLoss
+from modules.attn_3dgcn import Attn3DGCN
 
 
 def parse_args():
@@ -55,12 +56,14 @@ def main(args):
 
     # data
     data_root = args.root_local if eval(args.local) else args.root_sever
+    train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers)
 
-    train_set = CstNet2Dataset(root=data_root, is_train=True, n_points=args.n_points)
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
-    test_set = CstNet2Dataset(root=data_root, is_train=False, n_points=args.n_points)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
+    # train_set = CstNet2Dataset(root=data_root, is_train=True, n_points=args.n_points)
+    # train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
+    #
+    # test_set = CstNet2Dataset(root=data_root, is_train=False, n_points=args.n_points)
+    # test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.bs, shuffle=True, num_workers=args.workers)
 
     # model
     predictor = CstPcd().cuda()
