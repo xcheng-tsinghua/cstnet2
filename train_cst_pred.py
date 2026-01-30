@@ -179,7 +179,12 @@ def main(args):
             writer.add_scalar('test/loss_epoch_pmt', test_loss_epoch_pmt, epoch)
             writer.add_scalar('test/loss_epoch_tri', test_loss_epoch_tri, epoch)
 
-            print(f'{epoch} / {args.epoch}: train_loss_epoch_pmt: {train_loss_epoch_pmt}, train_loss_epoch_tri: {train_loss_epoch_tri}. test_loss_epoch_pmt: {test_loss_epoch_pmt}, test_loss_epoch_tri: {test_loss_epoch_tri}')
+            print(f'''{epoch} / {args.epoch}: 
+                    train_loss_epoch_pmt: {train_loss_epoch_pmt:.6f}, 
+                    train_loss_epoch_tri: {train_loss_epoch_tri:.6f}. 
+                    test_loss_epoch_pmt: {test_loss_epoch_pmt:.6f}, 
+                    test_loss_epoch_tri: {test_loss_epoch_tri:.6f}'''
+                  )
 
     writer.close()
 
