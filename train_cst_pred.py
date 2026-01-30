@@ -16,6 +16,7 @@ from data_utils.datasets import CstNet2Dataset
 from cst_pred.cst_pcd import CstPcd
 from modules.loss import EmbeddingLoss
 from modules.attn_3dgcn import Attn3DGCN
+from colorama import init, Fore, Back, Style
 
 
 def parse_args():
@@ -46,7 +47,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'cst_pcd'
+    save_str = 'attn_gcn3d'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -59,18 +60,18 @@ def main(args):
     train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers)
 
     # model
-    predictor = CstPcd().cuda()
+    predictor = Attn3DGCN().cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
 
     if eval(args.is_load_weight):
         try:
             predictor.load_state_dict(torch.load(model_savepth))
-            print('training from exist model: ' + model_savepth)
+            print(Fore.WHITE + Back.CYAN + 'training from exist model: ' + model_savepth)
         except:
-            print('no existing model, training from scratch')
+            print(Fore.RED + Back.CYAN + 'no existing model, training from scratch')
     else:
-        print('does not load weight, training from scratch')
+        print(Fore.BLUE + Back.CYAN + 'does not load weight, training from scratch')
 
     # optimizer
     optimizer = torch.optim.Adam(
@@ -168,5 +169,6 @@ def main(args):
 
 
 if __name__ == '__main__':
+    init(autoreset=True)
     main(parse_args())
 
