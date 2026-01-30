@@ -71,7 +71,7 @@ def main(args):
         except:
             print(Fore.RED + Back.CYAN + 'no existing model, training from scratch')
     else:
-        print(Fore.BLUE + Back.CYAN + 'does not load weight, training from scratch')
+        print(Fore.BLACK + Back.CYAN + 'does not load weight, training from scratch')
 
     # optimizer
     optimizer = torch.optim.Adam(
@@ -94,7 +94,8 @@ def main(args):
         # 设置为训练模式，启用 dropout、batchNormalization 等模块
         predictor = predictor.train()
 
-        for batch_id, data in tqdm(enumerate(train_loader), total=len(train_loader)):
+        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader))
+        for batch_id, data in progress_bar:
             xyz, pmt_gt, affiliate_idx = data[0].float().cuda(), data[2].long().cuda(), data[-1].long().cuda()
 
             # 清空梯度，否则梯度会累加
@@ -123,6 +124,13 @@ def main(args):
             writer.add_scalar('train/loss_batch_tri', tri_loss.item(), train_batch)
             train_batch += 1
 
+            # 更新进度条
+            progress_bar.set_postfix({
+                'LossPMT': f"{pmt_loss.item():.4f}",
+                'LossTri': f"{tri_loss.item():.4f}",
+                'LR': f"{optimizer.param_groups[0]['lr']:.6f}"}
+            )
+
         train_loss_epoch_pmt = np.mean(train_loss_list_pmt).item()
         train_loss_epoch_tri = np.mean(train_loss_list_tri).item()
         writer.add_scalar('train/loss_epoch_pmt', train_loss_epoch_pmt, epoch)
@@ -142,7 +150,8 @@ def main(args):
             # 设置为评估模式，禁用 dropout、batchNormalization 等模块
             predictor = predictor.eval()
 
-            for batch_id, data in tqdm(enumerate(test_loader), total=len(test_loader)):
+            progress_bar = tqdm(enumerate(test_loader), total=len(test_loader))
+            for batch_id, data in progress_bar:
                 xyz, pmt_gt, affiliate_idx = data[0].float().cuda(), data[2].long().cuda(), data[-1].long().cuda()
 
                 xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
@@ -157,6 +166,13 @@ def main(args):
                 writer.add_scalar('test/loss_batch_pmt', pmt_loss.item(), test_batch)
                 writer.add_scalar('test/loss_batch_tri', tri_loss.item(), test_batch)
                 test_batch += 1
+
+                # 更新进度条
+                progress_bar.set_postfix({
+                    'LossPMT': f"{pmt_loss.item():.4f}",
+                    'LossTri': f"{tri_loss.item():.4f}",
+                    'LR': f"{optimizer.param_groups[0]['lr']:.6f}"}
+                )
 
             test_loss_epoch_pmt = np.mean(test_loss_list_pmt).item()
             test_loss_epoch_tri = np.mean(test_loss_list_tri).item()

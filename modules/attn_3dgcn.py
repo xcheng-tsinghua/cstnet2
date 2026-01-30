@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from modules import utils
 
 
 def square_distance(src, dst):
@@ -220,7 +221,7 @@ class ConvLayer(nn.Module):
         return feature_fuse
 
 
-class Attn3DGCN(nn.Module):
+class Attn3DGCNEmbedding(nn.Module):
     """
     多层 3DGCN 特征编码器
     输入: xyz [bs, 3, N]
@@ -289,6 +290,30 @@ class Attn3DGCN(nn.Module):
 
         # 输出转成 [bs, channel_out, N]
         return f_attn.permute(0, 2, 1)
+
+
+class Attn3DGCN(nn.Module):
+    """
+    多层 3DGCN 特征编码器
+    输入: xyz [bs, 3, N]
+    输出: fea [bs, channel_out, N]
+    """
+    def __init__(self, channel_coor=3, channel_fea=0, channel_out=128, n_neighbor=20, attn_k=16, n_support=1):
+        super().__init__()
+        self.embedding = Attn3DGCNEmbedding(channel_coor, channel_fea, channel_out, n_neighbor, attn_k, n_support)
+        self.cls_head = utils.MLP(1, (channel_out, 64, 5))
+
+    def forward(self, xyz, fea=None):
+        """
+        xyz: [bs, 3, N]
+        fea: [bs, channel_fea, N]
+        return: [bs, channel_out, N]
+        """
+        embedding = self.embedding(xyz, fea)  # -> [bs, fea, n]
+        cls_fea = self.cls_head(embedding)  # -> [bs, fea, n]
+        cls_log_softmax = F.log_softmax(cls_fea, dim=1)  # -> [bs, fea, n]
+
+        return cls_log_softmax, embedding
 
 
 if __name__ == "__main__":
