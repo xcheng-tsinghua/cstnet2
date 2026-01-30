@@ -84,7 +84,7 @@ class TransformerBlock(nn.Module):
         attn = self.fc_gamma(q[:, :, None] - k + pos_enc)
         attn = F.softmax(attn / np.sqrt(k.size(-1)), dim=-2)  # b x n x k x f
 
-        res = torch.einsum('bmnf,bmnf->bmf', attn, v + pos_enc)
+        res = torch.einsum('bmnf, bmnf -> bmf', attn, v + pos_enc)
         res = self.fc2(res) + pre
         return res, attn
 
