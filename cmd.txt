@@ -15,7 +15,18 @@ git rm --cached -r ${directory}
 # 需要将 ${file} 更换为已被Git同步但是需要解除同步的文件
 git rm --cached ${file}
 
+# 远程同步到本地
+git pull origin main
 
+## 查看 nohup 的进程输出
+tail -f nohup.out
+
+## 查看 nohup 的进程
+ps -ef | grep python
+
+nohup 末尾添加该命令可以指定log文件
+> out.log 2>&1 &
+例如：nohup python script.py > out.log 2>&1 &
 
 
 

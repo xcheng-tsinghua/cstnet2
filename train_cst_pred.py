@@ -48,6 +48,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 def main(args):
     save_str = 'attn_gcn3d_unify_prim'
+    print(Fore.BLUE + Back.CYAN + f'save str: {save_str}')
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
