@@ -23,7 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=32, help='batch size in training')
     parser.add_argument('--epoch', default=2000, type=int, help='number of epoch in training')
-    parser.add_argument('--lr', default=0.001, type=float, help='learning rate in training')
+    parser.add_argument('--lr', default=0.0001, type=float, help='learning rate in training')
     parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
@@ -47,7 +47,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'attn_gcn3d'
+    save_str = 'attn_gcn3d_unify_prim'
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
