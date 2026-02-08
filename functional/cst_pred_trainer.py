@@ -3,7 +3,7 @@ import torch
 from tqdm import tqdm
 import torch.nn.functional as F
 import einops
-from colorama import init, Fore, Back
+from colorama import Fore, Back
 from functional.loss import discriminative_loss, evaluate_clustering
 import json
 
@@ -84,10 +84,10 @@ class CstPredTrainer(object):
             self.scheduler.step()
 
     def save(self):
-        print('save model dict')
+        print(Fore.GREEN + f'save model dict to {self.model_savepth}')
         torch.save(self.model.state_dict(), self.model_savepth)
 
-        print('save training dict')
+        print(Fore.GREEN + f'save training dict to {self.log_savepth}')
         with open(self.log_savepth, 'w') as f:
             json.dump({'train': self.save_dict_train, 'test': self.save_dict_test}, f, ensure_ascii=False, indent=4)
 
@@ -99,7 +99,6 @@ class CstPredTrainer(object):
             self.save_dict_train['clus_acc'].append(ca)
             self.save_dict_train['clus_nmi'].append(cn)
             self.save_dict_train['clus_ari'].append(cr)
-
             print_start = 'train_metrics: '
 
         else:
@@ -109,17 +108,10 @@ class CstPredTrainer(object):
             self.save_dict_test['clus_acc'].append(ca)
             self.save_dict_test['clus_nmi'].append(cn)
             self.save_dict_test['clus_ari'].append(cr)
-
             print_start = 'test_metrics: '
 
-        print(print_start + f'''
-   prim_loss: {pl}
-   clus_loss: {cl}
--> prim_acc: {pa}
-   clus_acc: {ca}
-   clus_nmi: {cn}
--> clus_ari: {cr}
-''')
+        print(print_start + f'prim_loss: {pl:.6f}. clus_loss: {cl:.6f} .'
+                            f'prim_acc: {pa:.4f}. clus_acc: {ca:.4f}. clus_nmi: {cn:.4f}. clus_ari: {cr:.4f}')
 
     def process_epoch(self, current_epoch, is_train):
         pl_lst = []
@@ -171,7 +163,6 @@ class CstPredTrainer(object):
         记录一个 batch 内的操作
         Args:
             data_batch:
-            progress_bar:
             is_train:
 
         Returns:
