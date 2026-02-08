@@ -3,6 +3,7 @@
 """
 import os
 import argparse
+from datetime import datetime
 
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
@@ -53,10 +54,11 @@ def main(args):
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
-        log_savepth = os.path.join('log', save_str + '.json'),
+        log_savepth = os.path.join('log', save_str + f'{datetime.now().strftime("[%Y_%M_%D][%H_%M_%S]")}.json'),
         max_epoch = args.epoch,
         lr = args.lr,
-        is_load_weight = eval(args.is_load_weight)
+        is_load_weight = eval(args.is_load_weight),
+        save_str=save_str
     )
     trainer.start()
 

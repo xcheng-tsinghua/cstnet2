@@ -12,14 +12,17 @@ class CstPredTrainer(object):
     """
     用于训练约束预测模块
     """
-    def __init__(self, model, train_loader, test_loader, model_savepth, log_savepth, max_epoch, lr, is_load_weight):
+    def __init__(self, model, train_loader, test_loader, model_savepth, log_savepth, max_epoch, lr, is_load_weight, save_str):
         super().__init__()
+        print(f'weight save to: {model_savepth}, log save to: {log_savepth}')
+
         self.model = model
         self.train_loader = train_loader
         self.test_loader = test_loader
         self.model_savepth = model_savepth
         self.log_savepth = log_savepth
         self.max_epoch = max_epoch
+        self.save_str = save_str
 
         self.optimizer = None
         self.scheduler = None
@@ -67,11 +70,11 @@ class CstPredTrainer(object):
     def start(self):
         for epoch in range(self.max_epoch):
             # 训练一个 epoch
-            pl, cl, pa, ca, cn, cr = self.process_epoch(is_train=True)
+            pl, cl, pa, ca, cn, cr = self.process_epoch(epoch, True)
             self.append_save_dict(pl, cl, pa, ca, cn, cr, True)
 
             # 测试一个 epoch
-            pl, cl, pa, ca, cn, cr = self.process_epoch(is_train=False)
+            pl, cl, pa, ca, cn, cr = self.process_epoch(epoch, False)
             self.append_save_dict(pl, cl, pa, ca, cn, cr, False)
 
             # 保存权重和训练数据
@@ -118,7 +121,7 @@ class CstPredTrainer(object):
 -> clus_ari: {cr}
 ''')
 
-    def process_epoch(self, is_train):
+    def process_epoch(self, current_epoch, is_train):
         pl_lst = []
         cl_lst = []
         pa_lst = []
@@ -136,7 +139,7 @@ class CstPredTrainer(object):
             self.model.eval()
             loader = self.test_loader
 
-        progress_bar = tqdm(loader, total=len(loader))
+        progress_bar = tqdm(loader, total=len(loader), desc=f'[{current_epoch}/{self.max_epoch}|{self.save_str}]:')
         for data in progress_bar:
             pmt_loss, cluster_loss, pmt_acc, acc, nmi, ari = self.process_batch(data, is_train)
 
