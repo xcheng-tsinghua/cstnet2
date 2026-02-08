@@ -155,7 +155,6 @@ class CstPredTrainer(object):
         ca = np.mean(ca_lst)
         cn = np.mean(cn_lst)
         cr = np.mean(cr_lst)
-
         return pl, cl, pa, ca, cn, cr
 
     def process_batch(self, data_batch, is_train):

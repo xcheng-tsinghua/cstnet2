@@ -27,7 +27,7 @@ ps -ef | grep python
 nohup 末尾添加该命令可以指定log文件
 > out.log 2>&1 &
 例如:
-nohup python train_cst_pred.py --bs=200 > out.log 2>&1 &
+nohup python train_cst_pred.py --bs=400 > out.log 2>&1 &
 
 
 
