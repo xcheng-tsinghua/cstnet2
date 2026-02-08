@@ -160,7 +160,7 @@ def main(args):
                 xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
                 log_pmt, pnt_fea = predictor(xyz)
 
-                pmt_loss = F.nll_loss(log_pmt.view(-1, 5), pmt_gt.view(-1))
+                pmt_loss = F.nll_loss(einops.rearrange(log_pmt, 'b c n -> (b n) c'), einops.rearrange(pmt_gt, 'b n -> (b n)'))
                 tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
                 # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
 
