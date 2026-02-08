@@ -131,7 +131,7 @@ class CstPredTrainer(object):
             self.model.eval()
             loader = self.test_loader
 
-        progress_bar = tqdm(loader, total=len(loader), desc=f'[{current_epoch}/{self.max_epoch}|{self.save_str}]:')
+        progress_bar = tqdm(loader, total=len(loader), desc=f'[{current_epoch}/{self.max_epoch}]{self.save_str}')
         for data in progress_bar:
             pmt_loss, cluster_loss, pmt_acc, acc, nmi, ari = self.process_batch(data, is_train)
 
