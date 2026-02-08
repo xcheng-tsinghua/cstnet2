@@ -38,6 +38,9 @@ def evaluate_clustering(gt_labels, point_emb, delta_v=0.4):
     Returns:
 
     """
+    gt_labels = gt_labels.detach().cpu().numpy()
+    point_emb = point_emb.detach().cpu().numpy()
+
     bs = point_emb.shape[0]
 
     eps = 1.6 * delta_v
@@ -47,8 +50,8 @@ def evaluate_clustering(gt_labels, point_emb, delta_v=0.4):
 
     for b in range(bs):
 
-        emb = F.normalize(point_emb[b], dim=-1).cpu().numpy()
-        gt = gt_labels[b].cpu().numpy()
+        emb = F.normalize(point_emb[b], dim=-1)
+        gt = gt_labels[b]
 
         db = DBSCAN(eps=eps, min_samples=min_samples)
         pred = db.fit_predict(emb)
