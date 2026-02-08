@@ -44,7 +44,7 @@ def main(args):
         bs=args.bs,
         n_points=args.n_points,
         num_workers=args.workers,
-        is_sample=eval(args.workers.is_sample)
+        is_sample=eval(args.is_sample)
     )
 
     # trainer
