@@ -298,10 +298,10 @@ class Attn3DGCN(nn.Module):
     输入: xyz [bs, 3, N]
     输出: fea [bs, channel_out, N]
     """
-    def __init__(self, channel_coor=3, channel_fea=0, channel_out=128, n_neighbor=20, attn_k=16, n_support=1):
+    def __init__(self, channel_coord=3, channel_fea=0, channel_out=32, n_prim_type=5, n_neighbor=20, attn_k=16, n_support=1):
         super().__init__()
-        self.embedding = Attn3DGCNEmbedding(channel_coor, channel_fea, channel_out, n_neighbor, attn_k, n_support)
-        self.cls_head = utils.MLP(1, (channel_out, 64, 5))
+        self.embedding = Attn3DGCNEmbedding(channel_coord, channel_fea, channel_out, n_neighbor, attn_k, n_support)
+        self.cls_head = utils.MLP(1, (channel_out, int((n_prim_type*channel_out)**0.5), n_prim_type))
 
     def forward(self, xyz, fea=None):
         """

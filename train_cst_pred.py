@@ -47,7 +47,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'attn_gcn3d_unify_prim_distloss'
+    save_str = 'attn_gcn3d_c32_unify_prim_distloss'
     print(Fore.BLUE + Back.CYAN + f'save str: {save_str}')
 
     # logger
