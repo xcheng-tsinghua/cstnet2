@@ -43,7 +43,7 @@ def main(args):
 
     # data
     data_root = args.root_local if eval(args.local) else args.root_sever
-    train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers)
+    train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers, 64)
 
     # model
     predictor = CstPredWrapper(args.model).cuda()
