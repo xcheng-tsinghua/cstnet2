@@ -47,7 +47,7 @@ def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tu
 
 
 def main(args):
-    save_str = 'attn_gcn3d_unify_prim'
+    save_str = 'attn_gcn3d_unify_prim_distloss'
     print(Fore.BLUE + Back.CYAN + f'save str: {save_str}')
 
     # logger
@@ -83,7 +83,7 @@ def main(args):
         weight_decay=args.decay_rate
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
-    emb_loss = EmbeddingLoss()
+    # emb_loss = EmbeddingLoss()
 
     # 训练
     train_batch = 0
