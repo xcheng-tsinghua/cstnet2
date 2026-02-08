@@ -3,7 +3,7 @@ import numpy as np
 from torch.utils.data import Dataset
 import torch
 
-from modules import utils
+from networks import utils
 
 
 class CstPntDataset(Dataset):

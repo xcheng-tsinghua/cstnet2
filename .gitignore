@@ -1,4 +1,4 @@
-modules/__pycache__/
+networks/__pycache__/
 data_utils/__pycache__/
 cst_pred/__pycache__/
 cst_fea/__pycache__/

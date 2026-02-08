@@ -4,7 +4,7 @@
 import math
 import torch.nn as nn
 import torch.nn.functional as F
-from modules import utils, attn_3dgcn, point_net, point_net2
+from networks import utils, attn_3dgcn, point_net, point_net2
 
 
 def get_embedding_model(name, channel_coord=3, channel_fea=0, channel_mid=128,):
@@ -37,7 +37,7 @@ def get_embedding_model(name, channel_coord=3, channel_fea=0, channel_mid=128,):
     return embedding_model
 
 
-class CstModelWrapper(nn.Module):
+class CstPredWrapper(nn.Module):
     """
     多层 3DGCN 特征编码器
     输入: xyz [bs, 3, N]

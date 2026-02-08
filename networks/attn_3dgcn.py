@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from modules import utils
+from networks import utils
 
 
 def square_distance(src, dst):

@@ -2,8 +2,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-from modules import point_net2
-from modules import utils
+from networks import point_net2
+from networks import utils
 
 
 class DownSample(nn.Module):
