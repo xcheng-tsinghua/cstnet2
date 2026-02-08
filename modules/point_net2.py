@@ -483,6 +483,47 @@ class PointNet2Seg(nn.Module):
         return x
 
 
+class PointNet2PointEmbedding(nn.Module):
+    def __init__(self, channel_coord=3, channel_fea=0, channel_out=128):
+        """
+        输出维度固定为 128
+        channel_out: 输出的逐点特征长度
+        with_normal: 是否使用法线
+        """
+        super().__init__()
+        channel_xyz_fea = channel_coord * 2 if channel_fea == 0 else channel_coord + channel_fea
+
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=channel_xyz_fea, mlp=[64, 64, 128], group_all=False)
+        self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=128 + 3, mlp=[128, 128, 256], group_all=False)
+        self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=256 + 3, mlp=[256, 512, 1024], group_all=True)
+
+        self.fp3 = PointNetFeaturePropagation(in_channel=1280, mlp=[256, 256])
+        self.fp2 = PointNetFeaturePropagation(in_channel=384, mlp=[256, 128])
+        self.fp1 = PointNetFeaturePropagation(in_channel=128+channel_xyz_fea, mlp=[128, 128, 128])
+
+    def forward(self, xyz, fea=None):
+        """
+        xyz: [bs, 3, n_points] or [bs, 6, n_points]
+        fea: [bs, emb, n_points], 点云的类别数
+
+        return: [bs, emb, n_points]
+        """
+        # Set Abstraction layers
+        fea = xyz if fea is None else fea
+
+        # 下采样
+        l1_xyz, l1_points = self.sa1(xyz, fea)
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
+        # 上采样
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)
+        l0_points = self.fp1(xyz, l1_xyz, torch.cat([xyz, fea], 1), l1_points)
+
+        return l0_points
+
+
 if __name__ == '__main__':
     _x = torch.rand((2, 3, 1024)).cuda()
 

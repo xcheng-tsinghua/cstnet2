@@ -221,16 +221,16 @@ class ConvLayer(nn.Module):
         return feature_fuse
 
 
-class Attn3DGCNEmbedding(nn.Module):
+class Attn3DGcnPointEmbedding(nn.Module):
     """
-    多层 3DGCN 特征编码器
+    多层 3DGCN 逐点特征编码器
     输入: xyz [bs, 3, N]
     输出: fea [bs, channel_out, N]
     """
-    def __init__(self, channel_coor=3, channel_fea=0, channel_out=128, n_neighbor=20, attn_k=16, n_support=1):
+    def __init__(self, channel_coord=3, channel_fea=0, channel_out=128, n_neighbor=20, attn_k=16, n_support=1):
         """
         注意力机制加 GCN3d 实现特征提取
-        :param channel_coor:
+        :param channel_coord:
         :param channel_fea:
         :param channel_out:
         :param n_neighbor:
@@ -244,10 +244,10 @@ class Attn3DGCNEmbedding(nn.Module):
         self.channel_fea = channel_fea
 
         # 4 层卷积结构
-        self.conv0 = ConvSurface(kernel_num=128, n_support=n_support, channel_coor=channel_coor)
-        self.conv1 = ConvLayer(128+channel_fea, 128, n_support=n_support, channel_coor=channel_coor)
-        self.conv2 = ConvLayer(128, 256, n_support=n_support, channel_coor=channel_coor)
-        self.conv3 = ConvLayer(256, channel_out, n_support=n_support, channel_coor=channel_coor)
+        self.conv0 = ConvSurface(kernel_num=128, n_support=n_support, channel_coor=channel_coord)
+        self.conv1 = ConvLayer(128+channel_fea, 128, n_support=n_support, channel_coor=channel_coord)
+        self.conv2 = ConvLayer(128, 256, n_support=n_support, channel_coor=channel_coord)
+        self.conv3 = ConvLayer(256, channel_out, n_support=n_support, channel_coor=channel_coord)
 
         # 激活函数
         self.act = nn.ReLU(inplace=True)

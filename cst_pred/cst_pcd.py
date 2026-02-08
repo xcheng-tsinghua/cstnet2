@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-from modules import pointnet2
+from modules import point_net2
 from modules import utils
 
 

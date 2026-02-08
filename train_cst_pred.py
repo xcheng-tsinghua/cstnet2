@@ -14,9 +14,8 @@ import torch.nn.functional as F
 import einops
 
 from data_utils.datasets import CstNet2Dataset
-from cst_pred.cst_pcd import CstPcd
-from modules.loss import EmbeddingLoss, discriminative_loss
-from modules.attn_3dgcn import Attn3DGCN
+from modules.loss import EmbeddingLoss, discriminative_loss, evaluate_clustering
+from modules.cst_model_wrapper import CstModelWrapper
 from colorama import init, Fore, Back, Style
 
 
@@ -28,7 +27,8 @@ def parse_args():
     parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
-    parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
+    parser.add_argument('--is_load_weight', default='True', choices=['True', 'False'], type=str)
+    parser.add_argument('--model', default='pointnet2', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
@@ -38,18 +38,50 @@ def parse_args():
     return args
 
 
-def write_loss_dict(writer: SummaryWriter, loss_dict: Union[dict, list[dict], tuple[dict]], step: int, tag: str):
+def compute_loss(pnt_fea, affiliate_idx, log_pmt, pmt_gt):
+    """
 
-    if isinstance(loss_dict, (list, tuple)):
-        loss_dict = {k: statistics.mean([d[k] for d in loss_dict]) for k in loss_dict[0]}
+    Args:
+        pnt_fea: [bs, n_point, emb]
+        affiliate_idx: [bs, n_point]
+        log_pmt: [bs, n_point, emb]
+        pmt_gt: [bs, n_point]
 
-    for c_key, c_value in loss_dict.items():
-        writer.add_scalar(f'{tag}/{c_key}', c_value, step)
+    Returns:
+
+    """
+    tri_loss = discriminative_loss(pnt_fea, affiliate_idx)
+
+    log_pmt_fit_loss = einops.rearrange(log_pmt, 'b n c -> (b n) c')
+    pmt_gt_fit_loss = einops.rearrange(pmt_gt, 'b n -> (b n)')
+    pmt_loss = F.nll_loss(log_pmt_fit_loss, pmt_gt_fit_loss)
+
+    return pmt_loss, tri_loss
+
+
+def compute_seg_acc(pred, label):
+    """
+
+    Args:
+        pred: [bs, n_point, emb]
+        label: [bs, n_point]
+
+    Returns:
+
+    """
+    bs, n_points, _ = pred.size()
+    n_items_batch = bs * n_points
+
+    choice_meta_type = pred.data.max(2)[1]
+    correct_meta_type = choice_meta_type.eq(label.data).cpu().sum()
+
+    seg_acc = correct_meta_type.item() / float(n_items_batch)
+    return seg_acc
 
 
 def main(args):
-    save_str = 'attn_gcn3d_c32_unify_prim_distloss'
-    print(Fore.BLUE + Back.CYAN + f'save str: {save_str}')
+    save_str = f'{args.model}_pmt_prim_cluster'
+    print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
     # logger
     log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
@@ -62,10 +94,9 @@ def main(args):
     train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers)
 
     # model
-    predictor = Attn3DGCN().cuda()
+    predictor = CstModelWrapper(args.model).cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
-
     if eval(args.is_load_weight):
         try:
             predictor.load_state_dict(torch.load(model_savepth))
@@ -84,7 +115,6 @@ def main(args):
         weight_decay=args.decay_rate
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
-    # emb_loss = EmbeddingLoss()
 
     # 训练
     train_batch = 0
@@ -92,6 +122,11 @@ def main(args):
     for epoch in range(args.epoch):
         train_loss_list_pmt = []
         train_loss_list_tri = []
+
+        train_acc = []
+        train_nmi = []
+        train_ari = []
+        train_pmt_acc = []
 
         # 设置为训练模式，启用 dropout、batchNormalization 等模块
         predictor = predictor.train()
@@ -104,16 +139,13 @@ def main(args):
             optimizer.zero_grad()
 
             # 将数据输入模型进行推理
-            xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
-            log_pmt, pnt_fea = predictor(xyz)
+            pnt_fea, log_pmt = predictor(xyz)
 
             # 计算损失
-            pmt_loss = F.nll_loss(einops.rearrange(log_pmt, 'b c n -> (b n) c'), einops.rearrange(pmt_gt, 'b n -> (b n)'))
-            # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
-            tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
-            loss = pmt_loss + tri_loss
+            pmt_loss, tri_loss = compute_loss(pnt_fea, affiliate_idx, log_pmt, pmt_gt)
 
             # 梯度反向传播
+            loss = pmt_loss + tri_loss
             loss.backward()
 
             # 优化器根据梯度进行权重更新
@@ -123,21 +155,46 @@ def main(args):
             train_loss_list_pmt.append(pmt_loss.item())
             train_loss_list_tri.append(tri_loss.item())
 
+            # 计算准确率
+            acc, nmi, ari = evaluate_clustering(affiliate_idx, pnt_fea)
+            pmt_acc = compute_seg_acc(log_pmt, pmt_gt)
+
+            train_acc.append(acc.item())
+            train_nmi.append(nmi.item())
+            train_ari.append(ari.item())
+            train_pmt_acc.append(pmt_acc)
+
             writer.add_scalar('train/loss_batch_pmt', pmt_loss.item(), train_batch)
             writer.add_scalar('train/loss_batch_tri', tri_loss.item(), train_batch)
+
+            writer.add_scalar('train/batch_acc', acc.item(), train_batch)
+            writer.add_scalar('train/batch_nmi', nmi.item(), train_batch)
+            writer.add_scalar('train/batch_ari', ari.item(), train_batch)
+            writer.add_scalar('train/batch_pmt_acc', pmt_acc, train_batch)
             train_batch += 1
 
             # 更新进度条
             progress_bar.set_postfix({
-                'LossPMT': f"{pmt_loss.item():.4f}",
-                'LossTri': f"{tri_loss.item():.4f}",
+                'pmt_acc': f"{pmt_acc:.4f}",
+                'cluster_acc': f"{acc:.4f}",
                 'LR': f"{optimizer.param_groups[0]['lr']:.6f}"}
             )
 
         train_loss_epoch_pmt = np.mean(train_loss_list_pmt).item()
         train_loss_epoch_tri = np.mean(train_loss_list_tri).item()
+
         writer.add_scalar('train/loss_epoch_pmt', train_loss_epoch_pmt, epoch)
         writer.add_scalar('train/loss_epoch_tri', train_loss_epoch_tri, epoch)
+
+        epoch_acc = np.mean(train_acc).item()
+        epoch_nmi = np.mean(train_nmi).item()
+        epoch_ari = np.mean(train_ari).item()
+        epoch_pmt_acc = np.mean(train_pmt_acc).item()
+
+        writer.add_scalar('train/epoch_acc', epoch_acc, epoch)
+        writer.add_scalar('train/epoch_nmi', epoch_nmi, epoch)
+        writer.add_scalar('train/epoch_ari', epoch_ari, epoch)
+        writer.add_scalar('train/epoch_pmt_acc', epoch_pmt_acc, epoch)
 
         # 学习率调整器计数加一
         scheduler.step()
@@ -150,6 +207,11 @@ def main(args):
             test_loss_list_pmt = []
             test_loss_list_tri = []
 
+            test_acc = []
+            test_nmi = []
+            test_ari = []
+            test_pmt_acc = []
+
             # 设置为评估模式，禁用 dropout、batchNormalization 等模块
             predictor = predictor.eval()
 
@@ -158,38 +220,64 @@ def main(args):
                 xyz, pmt_gt, affiliate_idx = data[0].float().cuda(), data[2].long().cuda(), data[-1].long().cuda()
 
                 xyz = xyz.transpose(1, 2)  # [bs, 3, n_points]
-                log_pmt, pnt_fea = predictor(xyz)
+                pnt_fea, log_pmt = predictor(xyz)
 
-                pmt_loss = F.nll_loss(einops.rearrange(log_pmt, 'b c n -> (b n) c'), einops.rearrange(pmt_gt, 'b n -> (b n)'))
-                tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
-                # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
+                pmt_loss, tri_loss = compute_loss(pnt_fea, affiliate_idx, log_pmt, pmt_gt)
 
                 test_loss_list_pmt.append(pmt_loss.item())
                 test_loss_list_tri.append(tri_loss.item())
 
+                # 计算准确率
+                acc, nmi, ari = evaluate_clustering(affiliate_idx, pnt_fea)
+                pmt_acc = compute_seg_acc(log_pmt, pmt_gt)
+
+                test_acc.append(acc.item())
+                test_nmi.append(nmi.item())
+                test_ari.append(ari.item())
+                test_pmt_acc.append(pmt_acc)
+
                 writer.add_scalar('test/loss_batch_pmt', pmt_loss.item(), test_batch)
                 writer.add_scalar('test/loss_batch_tri', tri_loss.item(), test_batch)
+
+                writer.add_scalar('test/batch_acc', acc.item(), train_batch)
+                writer.add_scalar('test/batch_nmi', nmi.item(), train_batch)
+                writer.add_scalar('test/batch_ari', ari.item(), train_batch)
+                writer.add_scalar('test/batch_pmt_acc', pmt_acc, train_batch)
                 test_batch += 1
 
                 # 更新进度条
                 progress_bar.set_postfix({
-                    'LossPMT': f"{pmt_loss.item():.4f}",
-                    'LossTri': f"{tri_loss.item():.4f}",
+                    'pmt_acc': f"{pmt_acc:.4f}",
+                    'cluster_acc': f"{acc:.4f}",
                     'LR': f"{optimizer.param_groups[0]['lr']:.6f}"}
                 )
 
             test_loss_epoch_pmt = np.mean(test_loss_list_pmt).item()
             test_loss_epoch_tri = np.mean(test_loss_list_tri).item()
+
             writer.add_scalar('test/loss_epoch_pmt', test_loss_epoch_pmt, epoch)
             writer.add_scalar('test/loss_epoch_tri', test_loss_epoch_tri, epoch)
+
+            epoch_acc = np.mean(test_acc).item()
+            epoch_nmi = np.mean(test_nmi).item()
+            epoch_ari = np.mean(test_ari).item()
+            epoch_pmt_acc = np.mean(test_pmt_acc).item()
+
+            writer.add_scalar('test/epoch_acc', epoch_acc, epoch)
+            writer.add_scalar('test/epoch_nmi', epoch_nmi, epoch)
+            writer.add_scalar('test/epoch_ari', epoch_ari, epoch)
+            writer.add_scalar('test/epoch_pmt_acc', epoch_pmt_acc, epoch)
 
             print(f'''{epoch} / {args.epoch}: 
                     train_loss_epoch_pmt: {train_loss_epoch_pmt:.6f}, 
                     train_loss_epoch_tri: {train_loss_epoch_tri:.6f}. 
                     test_loss_epoch_pmt: {test_loss_epoch_pmt:.6f}, 
-                    test_loss_epoch_tri: {test_loss_epoch_tri:.6f}'''
-                  )
-
+                    test_loss_epoch_tri: {test_loss_epoch_tri:.6f}, 
+                    acc: {epoch_acc}
+                    nmi: {epoch_nmi}
+                    ari: {epoch_ari}
+                    pmt_acc: {epoch_pmt_acc}
+''')
     writer.close()
 
 

@@ -1,6 +1,72 @@
 import torch.nn.functional as F
 import torch
 import numpy as np
+from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score
+from scipy.optimize import linear_sum_assignment
+from sklearn.cluster import DBSCAN
+
+
+def clustering_accuracy(y_true, y_pred):
+    y_true = y_true.astype(np.int64)
+    y_pred = y_pred.astype(np.int64)
+
+    # 去掉 DBSCAN 的噪声点
+    mask = y_pred != -1
+    y_true = y_true[mask]
+    y_pred = y_pred[mask]
+
+    if len(y_pred) == 0:
+        return 0.0
+
+    D = max(y_pred.max(), y_true.max()) + 1
+    w = np.zeros((D, D), dtype=np.int64)
+
+    for i in range(y_pred.size):
+        w[y_pred[i], y_true[i]] += 1
+
+    row, col = linear_sum_assignment(w.max() - w)
+    return sum(w[r, c] for r, c in zip(row, col)) / y_pred.size
+
+
+def evaluate_clustering(gt_labels, point_emb, delta_v=0.4):
+    """
+    评估聚类效果
+    Args:
+        gt_labels: torch.size([ns, n_point])
+        point_emb: torch.size([bs, n_point, emb])
+        delta_v:
+    Returns:
+
+    """
+    bs = point_emb.shape[0]
+
+    eps = 1.6 * delta_v
+    min_samples = 5
+
+    accs, nmis, aris = [], [], []
+
+    for b in range(bs):
+
+        emb = F.normalize(point_emb[b], dim=-1).cpu().numpy()
+        gt = gt_labels[b].cpu().numpy()
+
+        db = DBSCAN(eps=eps, min_samples=min_samples)
+        pred = db.fit_predict(emb)
+
+        # 去掉噪声点再算 NMI / ARI
+        mask = pred != -1
+        if mask.sum() < 2:
+            continue
+
+        acc = clustering_accuracy(gt, pred)
+        nmi = normalized_mutual_info_score(gt[mask], pred[mask])
+        ari = adjusted_rand_score(gt[mask], pred[mask])
+
+        accs.append(acc)
+        nmis.append(nmi)
+        aris.append(ari)
+
+    return np.mean(accs), np.mean(nmis), np.mean(aris)
 
 
 def discriminative_loss(pnt_fea, affiliate_idx,

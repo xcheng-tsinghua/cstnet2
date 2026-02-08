@@ -226,6 +226,73 @@ class PointNetSeg(nn.Module):
         return net, trans_feat
 
 
+class PointNetPointEmbedding(nn.Module):
+    """
+    PointNet 逐点特征提取器
+    """
+    def __init__(self, channel_coord=3, channel_fea=0, channel_out=128, is_return_trans_feat=False):
+        super().__init__()
+        self.is_return_trans_feat = is_return_trans_feat
+
+        self.stn = STN3d(channel_coord + channel_fea)
+        self.conv1 = torch.nn.Conv1d(channel_coord + channel_fea, 64, 1)
+        self.conv2 = torch.nn.Conv1d(64, 128, 1)
+        self.conv3 = torch.nn.Conv1d(128, 128, 1)
+        self.conv4 = torch.nn.Conv1d(128, 512, 1)
+        self.conv5 = torch.nn.Conv1d(512, 2048, 1)
+        self.bn1 = nn.BatchNorm1d(64)
+        self.bn2 = nn.BatchNorm1d(128)
+        self.bn3 = nn.BatchNorm1d(128)
+        self.bn4 = nn.BatchNorm1d(512)
+        self.bn5 = nn.BatchNorm1d(2048)
+        self.fstn = STNkd(k=128)
+        self.convs1 = torch.nn.Conv1d(4944, 256, 1)
+        self.convs2 = torch.nn.Conv1d(256, 256, 1)
+        self.convs3 = torch.nn.Conv1d(256, channel_out, 1)
+        self.bns1 = nn.BatchNorm1d(256)
+        self.bns2 = nn.BatchNorm1d(256)
+        self.bns3 = nn.BatchNorm1d(128)
+
+    def forward(self, xyz, fea=None):
+        """
+
+        Args:
+            xyz: [bs, emb, n_point]
+            fea: [bs, emb, n_point]
+
+        Returns:
+            [bs, emb, n_point]
+        """
+        B, D, N = xyz.size()
+        trans = self.stn(xyz) if fea is None else self.stn(torch.cat((xyz, fea), dim=1))
+        xyz = xyz.transpose(2, 1)
+        xyz = torch.bmm(xyz, trans)
+        xyz = xyz.transpose(2, 1)
+        xyz = xyz if fea is None else torch.cat([xyz, fea], dim=1)
+
+        out1 = F.relu(self.bn1(self.conv1(xyz)))
+        out2 = F.relu(self.bn2(self.conv2(out1)))
+        out3 = F.relu(self.bn3(self.conv3(out2)))
+
+        trans_feat = self.fstn(out3)
+        x = out3.transpose(2, 1)
+        net_transformed = torch.bmm(x, trans_feat)
+        net_transformed = net_transformed.transpose(2, 1)
+
+        out4 = F.relu(self.bn4(self.conv4(net_transformed)))
+        out5 = self.bn5(self.conv5(out4))
+        out_max = torch.max(out5, 2, keepdim=True)[0]
+        out_max = out_max.view(-1, 2048)
+
+        expand = out_max.view(-1, 2048, 1).repeat(1, 1, N)
+        concat = torch.cat([expand, out1, out2, out3, out4, out5], 1)
+        net = F.relu(self.bns1(self.convs1(concat)))
+        net = F.relu(self.bns2(self.convs2(net)))
+        net = F.relu(self.bns3(self.convs3(net)))
+
+        return net, trans_feat if self.is_return_trans_feat else net
+
+
 class PointNetLoss(torch.nn.Module):
     def __init__(self, mat_diff_loss_scale=0.001):
         super().__init__()
