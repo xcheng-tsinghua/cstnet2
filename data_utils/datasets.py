@@ -370,6 +370,7 @@ class CstNet2Dataset(Dataset):
 
         # 不采样，使用全量数据
         if is_sample:
+            print('-> sample the dataset for test')
             sampler = torch.utils.data.RandomSampler(train_set, num_samples=bs * 4, replacement=False)  # 随机选取 sample 个样本
             train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
             sampler = torch.utils.data.RandomSampler(test_set, num_samples=bs * 2, replacement=False)  # 随机选取 sample 个样本
