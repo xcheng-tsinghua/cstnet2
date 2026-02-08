@@ -364,21 +364,20 @@ class CstNet2Dataset(Dataset):
         return len(self.classes)
 
     @staticmethod
-    def create_dataloader(root, bs, n_points, num_workers, sample):
+    def create_dataloader(root, bs, n_points, num_workers, is_sample):
         train_set = CstNet2Dataset(root=root, is_train=True, n_points=n_points)
         test_set = CstNet2Dataset(root=root, is_train=False, n_points=n_points)
 
-
         # 不采样，使用全量数据
-        if sample is None:
-            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=num_workers)
-            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, shuffle=True, num_workers=num_workers)
+        if is_sample:
+            sampler = torch.utils.data.RandomSampler(train_set, num_samples=bs * 4, replacement=False)  # 随机选取 sample 个样本
+            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
+            sampler = torch.utils.data.RandomSampler(test_set, num_samples=bs * 2, replacement=False)  # 随机选取 sample 个样本
+            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
 
         else:
-            sampler = torch.utils.data.RandomSampler(train_set, num_samples=sample, replacement=False)  # 随机选取 sample 个样本
-            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
-            sampler = torch.utils.data.RandomSampler(test_set, num_samples=sample, replacement=False)  # 随机选取 sample 个样本
-            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
+            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=num_workers)
+            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, shuffle=True, num_workers=num_workers)
 
         return train_loader, test_loader
 

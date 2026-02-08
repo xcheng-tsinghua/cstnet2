@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
     parser.add_argument('--is_load_weight', default='True', choices=['True', 'False'], type=str)
     parser.add_argument('--model', default='pointnet2', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
+    parser.add_argument('--is_sample', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
@@ -33,23 +34,22 @@ def main(args):
     save_str = f'{args.model}_pmt_prim_cluster'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
-    # logger
-    # log_dir = os.path.join('log', save_str + datetime.now().strftime("%Y-%m-%d %H-%M-%S"))
-    # log_dir = os.path.join('log', save_str)
-    # os.makedirs(log_dir, exist_ok=True)
-
     os.makedirs('log', exist_ok=True)
     os.makedirs('model_trained', exist_ok=True)
 
     # data
     data_root = args.root_local if eval(args.local) else args.root_sever
-    train_loader, test_loader = CstNet2Dataset.create_dataloader(data_root, args.bs, args.n_points, args.workers, 64)
+    train_loader, test_loader = CstNet2Dataset.create_dataloader(
+        root=data_root,
+        bs=args.bs,
+        n_points=args.n_points,
+        num_workers=args.workers,
+        is_sample=eval(args.workers.is_sample)
+    )
 
-    # model
-    predictor = CstPredWrapper(args.model).cuda()
-
+    # trainer
     trainer = CstPredTrainer(
-        model = predictor,
+        model = CstPredWrapper(args.model).cuda(),
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
