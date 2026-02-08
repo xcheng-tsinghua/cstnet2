@@ -54,7 +54,7 @@ def main(args):
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
-        log_savepth = os.path.join('log', save_str + f'{datetime.now().strftime("[%Y_%M_%D][%H_%M_%S]")}.json'),
+        log_savepth = os.path.join('log', save_str + f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.json'),
         max_epoch = args.epoch,
         lr = args.lr,
         is_load_weight = eval(args.is_load_weight),
