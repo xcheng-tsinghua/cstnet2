@@ -63,7 +63,9 @@ class CstModelWrapper(nn.Module):
         fea: [bs, N, channel_fea]
         return: [bs, N, channel_out], [bs, N, channel_out]
         """
-        xyz, fea = xyz.permute(0, 2, 1), fea.permute(0, 2, 1)
+        xyz = xyz.permute(0, 2, 1)
+        if fea is not None:
+            fea = fea.permute(0, 2, 1)
 
         # 提取逐点特征
         embedding = self.embedding(xyz, fea)  # -> [bs, fea, n]
