@@ -2,6 +2,7 @@ import os
 import numpy as np
 from torch.utils.data import Dataset
 import torch
+from colorama import Fore
 
 from networks import utils
 
@@ -368,15 +369,17 @@ class CstNet2Dataset(Dataset):
         train_set = CstNet2Dataset(root=root, is_train=True, n_points=n_points)
         test_set = CstNet2Dataset(root=root, is_train=False, n_points=n_points)
 
-        # 不采样，使用全量数据
+        # 采样，用于测试
         if is_sample:
-            print('-> sample the dataset for test')
+            print(Fore.RED + '-> sample the dataset for test')
             sampler = torch.utils.data.RandomSampler(train_set, num_samples=bs * 4, replacement=False)  # 随机选取 sample 个样本
             train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
             sampler = torch.utils.data.RandomSampler(test_set, num_samples=bs * 2, replacement=False)  # 随机选取 sample 个样本
             test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
 
+        # 不采样，使用全量数据
         else:
+            print(Fore.GREEN + '-> create full set dataloader')
             train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=num_workers)
             test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, shuffle=True, num_workers=num_workers)
 
