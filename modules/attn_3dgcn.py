@@ -311,6 +311,10 @@ class Attn3DGCN(nn.Module):
         """
         embedding = self.embedding(xyz, fea)  # -> [bs, fea, n]
         cls_fea = self.cls_head(embedding)  # -> [bs, fea, n]
+
+        # 将输出的 embedding 进行 L2 正则化，加速聚类
+        embedding = F.normalize(embedding, dim=1)
+
         cls_log_softmax = F.log_softmax(cls_fea, dim=1)  # -> [bs, fea, n]
 
         return cls_log_softmax, embedding

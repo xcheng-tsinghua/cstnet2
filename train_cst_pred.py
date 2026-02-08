@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 from data_utils.datasets import CstNet2Dataset
 from cst_pred.cst_pcd import CstPcd
-from modules.loss import EmbeddingLoss
+from modules.loss import EmbeddingLoss, discriminative_loss
 from modules.attn_3dgcn import Attn3DGCN
 from colorama import init, Fore, Back, Style
 
@@ -108,7 +108,8 @@ def main(args):
 
             # 计算损失
             pmt_loss = F.nll_loss(log_pmt.reshape(-1, 5), pmt_gt.view(-1))
-            tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
+            # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
+            tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
             loss = pmt_loss + tri_loss
 
             # 梯度反向传播
@@ -159,7 +160,8 @@ def main(args):
                 log_pmt, pnt_fea = predictor(xyz)
 
                 pmt_loss = F.nll_loss(log_pmt.view(-1, 5), pmt_gt.view(-1))
-                tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
+                tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
+                # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
 
                 test_loss_list_pmt.append(pmt_loss.item())
                 test_loss_list_tri.append(tri_loss.item())

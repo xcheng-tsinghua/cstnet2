@@ -3,6 +3,76 @@ import torch
 import numpy as np
 
 
+def discriminative_loss(pnt_fea, affiliate_idx,
+                        delta_v=0.4, delta_d=1.5,
+                        alpha=1.0, beta=1.2, gamma=0.001):
+    """
+    同簇靠近，否则远离
+    Args:
+        pnt_fea: torch.size([bs, n_point, emb])
+        affiliate_idx: torch.size([bs, n_point])
+        delta_v:
+        delta_d:
+        alpha:
+        beta:
+        gamma:
+
+    Returns:
+
+    """
+    bs, N, D = pnt_fea.shape
+    total_var, total_dist, total_reg = 0.0, 0.0, 0.0
+
+    for b in range(bs):
+        fea = pnt_fea[b]            # [N, D]
+        labels = affiliate_idx[b]  # [N]
+
+        unique_labels = labels.unique()
+        K = len(unique_labels)
+
+        if K <= 1:
+            continue
+
+        centers = []
+        var_loss = 0.0
+
+        # ---------- 类内紧凑 ----------
+        for lbl in unique_labels:
+            mask = labels == lbl
+            fea_k = fea[mask]             # [Nk, D]
+            center = fea_k.mean(dim=0)    # [D]
+            centers.append(center)
+
+            dist = torch.norm(fea_k - center, dim=1)
+            var_loss += torch.mean(torch.clamp(dist - delta_v, min=0.0) ** 2)
+
+        var_loss /= K
+        centers = torch.stack(centers)  # [K, D]
+
+        # ---------- 类间分离 ----------
+        dist_loss = 0.0
+        for i in range(K):
+            for j in range(i+1, K):
+                dist_ij = torch.norm(centers[i] - centers[j])
+                dist_loss += torch.clamp(delta_d - dist_ij, min=0.0) ** 2
+
+        dist_loss /= (K * (K - 1) / 2)
+
+        # ---------- 正则 ----------
+        reg_loss = torch.mean(torch.norm(centers, dim=1))
+
+        total_var += var_loss
+        total_dist += dist_loss
+        total_reg += reg_loss
+
+    total_var /= bs
+    total_dist /= bs
+    total_reg /= bs
+
+    loss = alpha * total_var + beta * total_dist + gamma * total_reg
+    return loss
+
+
 class EmbeddingLoss:
     """
     从 parsenet 转移过来的损失函数
