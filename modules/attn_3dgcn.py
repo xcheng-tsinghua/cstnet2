@@ -300,8 +300,11 @@ class Attn3DGCN(nn.Module):
     """
     def __init__(self, channel_coord=3, channel_fea=0, channel_out=32, n_prim_type=5, n_neighbor=20, attn_k=16, n_support=1):
         super().__init__()
-        self.embedding = Attn3DGCNEmbedding(channel_coord, channel_fea, channel_out, n_neighbor, attn_k, n_support)
-        self.cls_head = utils.MLP(1, (channel_out, int((n_prim_type*channel_out)**0.5), n_prim_type))
+        channel_mid = 128
+        self.embedding = Attn3DGCNEmbedding(channel_coord, channel_fea, channel_mid, n_neighbor, attn_k, n_support)
+
+        self.emb_head = utils.MLP(1, (channel_mid, math.ceil((channel_out*channel_mid)**0.5), channel_out))
+        self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))
 
     def forward(self, xyz, fea=None):
         """
@@ -310,20 +313,22 @@ class Attn3DGCN(nn.Module):
         return: [bs, channel_out, N]
         """
         embedding = self.embedding(xyz, fea)  # -> [bs, fea, n]
+        pnt_fea = self.emb_head(embedding)  # -> [bs, fea, n]
         cls_fea = self.cls_head(embedding)  # -> [bs, fea, n]
 
         # 将输出的 embedding 进行 L2 正则化，加速聚类
-        embedding = F.normalize(embedding, dim=1)
+        pnt_fea = F.normalize(pnt_fea, dim=1)  # -> [bs, fea, n]
 
+        # 进行 log_softmax 处理，便于后续使用 nll_loss
         cls_log_softmax = F.log_softmax(cls_fea, dim=1)  # -> [bs, fea, n]
 
-        return cls_log_softmax, embedding
+        return cls_log_softmax, pnt_fea
 
 
 if __name__ == "__main__":
     input_data = torch.randn(32, 2, 2000)
     input_fea = torch.randn(32, 30, 2000)
-    model = Attn3DGCN(channel_coor=2, channel_fea=30)
+    model = Attn3DGCN(channel_coord=2, channel_fea=30)
     output = model(input_data, input_fea)
     print(output.shape)
 

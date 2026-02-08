@@ -11,6 +11,7 @@ from tensorboardX import SummaryWriter
 import statistics
 from typing import Union
 import torch.nn.functional as F
+import einops
 
 from data_utils.datasets import CstNet2Dataset
 from cst_pred.cst_pcd import CstPcd
@@ -107,7 +108,7 @@ def main(args):
             log_pmt, pnt_fea = predictor(xyz)
 
             # 计算损失
-            pmt_loss = F.nll_loss(log_pmt.reshape(-1, 5), pmt_gt.view(-1))
+            pmt_loss = F.nll_loss(einops.rearrange(log_pmt, 'b c n -> (b n) c'), einops.rearrange(pmt_gt, 'b n -> (b n)'))
             # tri_loss = emb_loss.triplet_loss(pnt_fea, affiliate_idx.cpu().numpy())
             tri_loss = discriminative_loss(pnt_fea.permute(0, 2, 1), affiliate_idx)
             loss = pmt_loss + tri_loss
