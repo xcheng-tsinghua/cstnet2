@@ -6,6 +6,7 @@ import einops
 from colorama import Fore, Back
 from functional.loss import discriminative_loss, evaluate_clustering
 import json
+from time import time
 
 
 class CstPredTrainer(object):
@@ -70,12 +71,18 @@ class CstPredTrainer(object):
     def start(self):
         for epoch in range(self.max_epoch):
             # 训练一个 epoch
+            start_time = time()
             pl, cl, pa, ca, cn, cr = self.process_epoch(epoch, True)
             self.append_save_dict(pl, cl, pa, ca, cn, cr, True)
+            end_time = time()
+            print(Fore.BLUE + f'训练耗时: {end_time - start_time:.4f} 秒')
 
             # 测试一个 epoch
+            start_time = time()
             pl, cl, pa, ca, cn, cr = self.process_epoch(epoch, False)
             self.append_save_dict(pl, cl, pa, ca, cn, cr, False)
+            end_time = time()
+            print(Fore.BLUE + f'评估耗时: {end_time - start_time:.4f} 秒')
 
             # 保存权重和训练数据
             self.save()
