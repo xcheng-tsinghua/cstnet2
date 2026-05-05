@@ -4,6 +4,8 @@
 import os
 import argparse
 from datetime import datetime
+import torch
+import wandb
 
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
@@ -13,19 +15,23 @@ from colorama import init, Fore, Back
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--bs', type=int, default=32, help='batch size in training')
-    parser.add_argument('--epoch', default=2000, type=int, help='number of epoch in training')
-    parser.add_argument('--lr', default=0.0001, type=float, help='learning rate in training')
+    parser.add_argument('--bs', type=int, default=512, help='batch size in training')
+    parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
+    parser.add_argument('--lr', default=0.00001, type=float, help='learning rate in training')
     parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
-    parser.add_argument('--workers', type=int, default=4, help='dataloader workers')
-    parser.add_argument('--is_load_weight', default='True', choices=['True', 'False'], type=str)
+    parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
+    parser.add_argument('--is_load_weight', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--model', default='pointnet2', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
     parser.add_argument('--is_sample', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
-    parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
+    parser.add_argument('--root_sever', type=str, default=rf'data/pcd_cstnet2/Param20K_Extend')
     parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend')
+    parser.add_argument('--use_wandb', default='True', choices=['True', 'False'], type=str)
+    parser.add_argument('--wandb_project', type=str, default='cstnet2')
+    parser.add_argument('--wandb_entity', type=str, default='')
+    parser.add_argument('--wandb_run_name', type=str, default='')
 
     args = parser.parse_args()
     return args
@@ -48,9 +54,20 @@ def main(args):
         is_sample=eval(args.is_sample)
     )
 
+    use_wandb = eval(args.use_wandb)
+    run = None
+    if use_wandb:
+        run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity if args.wandb_entity else None,
+            name=args.wandb_run_name if args.wandb_run_name else save_str,
+            config=vars(args)
+        )
+
     # trainer
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     trainer = CstPredTrainer(
-        model = CstPredWrapper(args.model).cuda(),
+        model = CstPredWrapper(args.model).to(device),
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
@@ -58,9 +75,14 @@ def main(args):
         max_epoch = args.epoch,
         lr = args.lr,
         is_load_weight = eval(args.is_load_weight),
-        save_str=save_str
+        save_str=save_str,
+        wandb_run=run
     )
-    trainer.start()
+    try:
+        trainer.start()
+    finally:
+        if run is not None:
+            run.finish()
 
 
 if __name__ == '__main__':

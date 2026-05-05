@@ -1,34 +1,48 @@
 import torch.nn.functional as F
 import torch
 import numpy as np
-from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score
-from scipy.optimize import linear_sum_assignment
-from sklearn.cluster import DBSCAN
 
 
-def clustering_accuracy(y_true, y_pred):
-    y_true = y_true.astype(np.int64)
-    y_pred = y_pred.astype(np.int64)
-
-    # 去掉 DBSCAN 的噪声点
-    mask = y_pred != -1
-    y_true = y_true[mask]
-    y_pred = y_pred[mask]
-
-    if len(y_pred) == 0:
-        return 0.0
-
-    D = max(y_pred.max(), y_true.max()) + 1
-    w = np.zeros((D, D), dtype=np.int64)
-
-    for i in range(y_pred.size):
-        w[y_pred[i], y_true[i]] += 1
-
-    row, col = linear_sum_assignment(w.max() - w)
-    return sum(w[r, c] for r, c in zip(row, col)) / y_pred.size
+def _contingency_matrix(y_true_idx, y_pred_idx):
+    n_true = int(y_true_idx.max().item()) + 1
+    n_pred = int(y_pred_idx.max().item()) + 1
+    mat = torch.zeros((n_true, n_pred), device=y_true_idx.device, dtype=torch.float32)
+    ones = torch.ones_like(y_true_idx, dtype=torch.float32)
+    mat.index_put_((y_true_idx, y_pred_idx), ones, accumulate=True)
+    return mat
 
 
-def evaluate_clustering(gt_labels, point_emb, delta_v=0.4):
+def _ari_from_contingency(cont):
+    n = cont.sum()
+    if n <= 1:
+        return torch.tensor(0.0, device=cont.device)
+    a = cont.sum(dim=1)
+    b = cont.sum(dim=0)
+    comb_c = (cont * (cont - 1.0) * 0.5).sum()
+    comb_a = (a * (a - 1.0) * 0.5).sum()
+    comb_b = (b * (b - 1.0) * 0.5).sum()
+    comb_n = n * (n - 1.0) * 0.5
+    expected = comb_a * comb_b / (comb_n + 1e-12)
+    max_index = 0.5 * (comb_a + comb_b)
+    return (comb_c - expected) / (max_index - expected + 1e-12)
+
+
+def _nmi_from_contingency(cont):
+    n = cont.sum()
+    if n <= 0:
+        return torch.tensor(0.0, device=cont.device)
+    p_ij = cont / n
+    p_i = p_ij.sum(dim=1, keepdim=True)
+    p_j = p_ij.sum(dim=0, keepdim=True)
+    outer = p_i @ p_j
+    valid = p_ij > 0
+    mi = (p_ij[valid] * torch.log((p_ij[valid] + 1e-12) / (outer[valid] + 1e-12))).sum()
+    h_i = -(p_i[p_i > 0] * torch.log(p_i[p_i > 0] + 1e-12)).sum()
+    h_j = -(p_j[p_j > 0] * torch.log(p_j[p_j > 0] + 1e-12)).sum()
+    return (2.0 * mi) / (h_i + h_j + 1e-12)
+
+
+def evaluate_clustering(gt_labels, point_emb):
     """
     评估聚类效果
     Args:
@@ -38,38 +52,108 @@ def evaluate_clustering(gt_labels, point_emb, delta_v=0.4):
     Returns:
 
     """
-    gt_labels = gt_labels.detach()
-    point_emb = point_emb.detach()
+    gt_labels = gt_labels.detach().long()
+    point_emb = point_emb.detach().float()
     bs = point_emb.shape[0]
-
-    eps = 1.6 * delta_v
-    min_samples = 5
 
     accs, nmis, aris = [], [], []
 
     for b in range(bs):
-
-        emb = F.normalize(point_emb[b], dim=-1).cpu().numpy()
-        gt = gt_labels[b].cpu().numpy()
-
-        db = DBSCAN(eps=eps, min_samples=min_samples)
-        pred = db.fit_predict(emb)
-
-        # 去掉噪声点再算 NMI / ARI
-        mask = pred != -1
-        if mask.sum() < 2:
+        emb = F.normalize(point_emb[b], dim=-1)
+        gt = gt_labels[b]
+        _, gt_idx = torch.unique(gt, sorted=True, return_inverse=True)
+        k = int(gt_idx.max().item()) + 1
+        if k <= 1:
             continue
 
-        acc = clustering_accuracy(gt, pred)
-        nmi = normalized_mutual_info_score(gt[mask], pred[mask])
-        ari = adjusted_rand_score(gt[mask], pred[mask])
+        centers = torch.zeros((k, emb.shape[-1]), device=emb.device, dtype=emb.dtype)
+        centers.index_add_(0, gt_idx, emb)
+        counts = torch.bincount(gt_idx, minlength=k).to(emb.dtype).clamp_min(1.0).unsqueeze(1)
+        centers = F.normalize(centers / counts, dim=-1)
+        pred_idx = torch.argmax(emb @ centers.transpose(0, 1), dim=1)
+        acc = (pred_idx == gt_idx).float().mean()
+        cont = _contingency_matrix(gt_idx, pred_idx)
+        nmi = _nmi_from_contingency(cont)
+        ari = _ari_from_contingency(cont)
 
         accs.append(acc)
         nmis.append(nmi)
         aris.append(ari)
 
-    return np.mean(accs), np.mean(nmis), np.mean(aris)
+    if len(accs) == 0:
+        z = torch.zeros((), device=point_emb.device, dtype=torch.float32)
+        return z, z, z
+    return torch.stack(accs).mean(), torch.stack(nmis).mean(), torch.stack(aris).mean()
 
+
+# def discriminative_loss(pnt_fea, affiliate_idx,
+#                         delta_v=0.4, delta_d=1.5,
+#                         alpha=1.0, beta=1.2, gamma=0.001):
+#     """
+#     同簇靠近，否则远离
+#     Args:
+#         pnt_fea: torch.size([bs, n_point, emb])
+#         affiliate_idx: torch.size([bs, n_point])
+#         delta_v:
+#         delta_d:
+#         alpha:
+#         beta:
+#         gamma:
+
+#     Returns:
+
+#     """
+#     bs, N, D = pnt_fea.shape
+#     total_var, total_dist, total_reg = 0.0, 0.0, 0.0
+
+#     for b in range(bs):
+#         fea = pnt_fea[b]            # [N, D]
+#         labels = affiliate_idx[b]  # [N]
+
+#         unique_labels = labels.unique()
+#         K = len(unique_labels)
+
+#         if K <= 1:
+#             continue
+
+#         centers = []
+#         var_loss = 0.0
+
+#         # ---------- 类内紧凑 ----------
+#         for lbl in unique_labels:
+#             mask = labels == lbl
+#             fea_k = fea[mask]             # [Nk, D]
+#             center = fea_k.mean(dim=0)    # [D]
+#             centers.append(center)
+
+#             dist = torch.norm(fea_k - center, dim=1)
+#             var_loss += torch.mean(torch.clamp(dist - delta_v, min=0.0) ** 2)
+
+#         var_loss /= K
+#         centers = torch.stack(centers)  # [K, D]
+
+#         # ---------- 类间分离 ----------
+#         dist_loss = 0.0
+#         for i in range(K):
+#             for j in range(i+1, K):
+#                 dist_ij = torch.norm(centers[i] - centers[j])
+#                 dist_loss += torch.clamp(delta_d - dist_ij, min=0.0) ** 2
+
+#         dist_loss /= (K * (K - 1) / 2)
+
+#         # ---------- 正则 ----------
+#         reg_loss = torch.mean(torch.norm(centers, dim=1))
+
+#         total_var += var_loss
+#         total_dist += dist_loss
+#         total_reg += reg_loss
+
+#     total_var /= bs
+#     total_dist /= bs
+#     total_reg /= bs
+
+#     loss = alpha * total_var + beta * total_dist + gamma * total_reg
+#     return loss
 
 def discriminative_loss(pnt_fea, affiliate_idx,
                         delta_v=0.4, delta_d=1.5,
@@ -88,43 +172,39 @@ def discriminative_loss(pnt_fea, affiliate_idx,
     Returns:
 
     """
-    bs, N, D = pnt_fea.shape
-    total_var, total_dist, total_reg = 0.0, 0.0, 0.0
+    bs, _, _ = pnt_fea.shape
+    device = pnt_fea.device
+    dtype = pnt_fea.dtype
+    total_var = torch.zeros((), device=device, dtype=dtype)
+    total_dist = torch.zeros((), device=device, dtype=dtype)
+    total_reg = torch.zeros((), device=device, dtype=dtype)
 
     for b in range(bs):
         fea = pnt_fea[b]            # [N, D]
-        labels = affiliate_idx[b]  # [N]
-
-        unique_labels = labels.unique()
-        K = len(unique_labels)
+        labels = affiliate_idx[b]   # [N]
+        _, inv = torch.unique(labels, sorted=True, return_inverse=True)
+        K = int(inv.max().item()) + 1
 
         if K <= 1:
             continue
 
-        centers = []
-        var_loss = 0.0
+        # ---------- 类内紧凑（向量化） ----------
+        centers = torch.zeros((K, fea.shape[1]), device=device, dtype=dtype)
+        centers.index_add_(0, inv, fea)
+        counts = torch.bincount(inv, minlength=K).to(dtype).clamp_min(1.0).unsqueeze(1)
+        centers = centers / counts
 
-        # ---------- 类内紧凑 ----------
-        for lbl in unique_labels:
-            mask = labels == lbl
-            fea_k = fea[mask]             # [Nk, D]
-            center = fea_k.mean(dim=0)    # [D]
-            centers.append(center)
+        dist_per_point = torch.norm(fea - centers[inv], dim=1)
+        var_per_point = torch.clamp(dist_per_point - delta_v, min=0.0) ** 2
+        var_sum = torch.zeros((K,), device=device, dtype=dtype)
+        var_sum.index_add_(0, inv, var_per_point)
+        var_loss = (var_sum / counts.squeeze(1)).mean()
 
-            dist = torch.norm(fea_k - center, dim=1)
-            var_loss += torch.mean(torch.clamp(dist - delta_v, min=0.0) ** 2)
-
-        var_loss /= K
-        centers = torch.stack(centers)  # [K, D]
-
-        # ---------- 类间分离 ----------
-        dist_loss = 0.0
-        for i in range(K):
-            for j in range(i+1, K):
-                dist_ij = torch.norm(centers[i] - centers[j])
-                dist_loss += torch.clamp(delta_d - dist_ij, min=0.0) ** 2
-
-        dist_loss /= (K * (K - 1) / 2)
+        # ---------- 类间分离（向量化） ----------
+        center_dist = torch.cdist(centers, centers, p=2)
+        pair_mask = torch.triu(torch.ones((K, K), device=device, dtype=torch.bool), diagonal=1)
+        pair_d = center_dist[pair_mask]
+        dist_loss = torch.clamp(delta_d - pair_d, min=0.0).pow(2).mean()
 
         # ---------- 正则 ----------
         reg_loss = torch.mean(torch.norm(centers, dim=1))

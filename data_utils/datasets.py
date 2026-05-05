@@ -7,6 +7,32 @@ from colorama import Fore
 from networks import utils
 
 
+def txt_to_npy_path(txt_path: str) -> str:
+    return txt_path + '.npy'
+
+
+def load_npy_or_convert(txt_path: str, allow_auto_convert: bool = True):
+    """
+    默认读取同名 .npy；若不存在且允许自动转换，则从 txt 读取并落盘 .npy。
+    """
+    npy_path = txt_to_npy_path(txt_path)
+    if os.path.exists(npy_path):
+        return np.load(npy_path, mmap_mode='r')
+
+    if not allow_auto_convert:
+        raise FileNotFoundError(f'missing npy cache: {npy_path}')
+
+    point_set = np.loadtxt(txt_path)
+    tmp_path = f'{npy_path}.tmp.{os.getpid()}.npy'
+    try:
+        np.save(tmp_path, point_set)
+        os.replace(tmp_path, npy_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    return point_set
+
+
 class CstPntDataset(Dataset):
     def __init__(self,
                  root,
@@ -23,7 +49,7 @@ class CstPntDataset(Dataset):
 
     def __getitem__(self, index):
         fn = self.datapath[index].strip()
-        point_set = np.loadtxt(fn)  # [x, y, z, ex, ey, ez, adj, pt]
+        point_set = load_npy_or_convert(fn)  # [x, y, z, ex, ey, ez, adj, pt]
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=True)
@@ -120,7 +146,7 @@ class Param20KDataset(Dataset):
     def __getitem__(self, index):
         fn = self.datapath[index]
         cls = self.classes[fn[0]]
-        point_set = np.loadtxt(fn[1])  # (x, y, z, mad, adj, pt)
+        point_set = load_npy_or_convert(fn[1])  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -182,7 +208,7 @@ class RegressionDataset(Dataset):
     def __getitem__(self, index):
 
         c_perpendicular, c_file = self.path_label[index]
-        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
+        point_set = load_npy_or_convert(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -225,7 +251,7 @@ class ConeDataset(Dataset):
 
     def __getitem__(self, index):
         c_coefficient, c_file = self.path_label[index]
-        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
+        point_set = load_npy_or_convert(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -312,7 +338,7 @@ class CstNet2Dataset(Dataset):
     def __getitem__(self, index):
         fn = self.datapath[index]
         cls = self.classes[fn[0]]
-        point_set = np.loadtxt(fn[1])
+        point_set = load_npy_or_convert(fn[1])
 
         # 随机选出指定数量的点
         try:
@@ -368,20 +394,30 @@ class CstNet2Dataset(Dataset):
     def create_dataloader(root, bs, n_points, num_workers, is_sample):
         train_set = CstNet2Dataset(root=root, is_train=True, n_points=n_points)
         test_set = CstNet2Dataset(root=root, is_train=False, n_points=n_points)
+        loader_kwargs = {
+            'batch_size': bs,
+            'num_workers': num_workers,
+            'pin_memory': True,
+        }
+        if num_workers > 0:
+            loader_kwargs.update({
+                'persistent_workers': True,
+                'prefetch_factor': 4,
+            })
 
         # 采样，用于测试
         if is_sample:
             print(Fore.RED + '-> sample the dataset for test')
             sampler = torch.utils.data.RandomSampler(train_set, num_samples=bs * 4, replacement=False)  # 随机选取 sample 个样本
-            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
+            train_loader = torch.utils.data.DataLoader(train_set, sampler=sampler, **loader_kwargs)
             sampler = torch.utils.data.RandomSampler(test_set, num_samples=bs * 2, replacement=False)  # 随机选取 sample 个样本
-            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, num_workers=num_workers, sampler=sampler)
+            test_loader = torch.utils.data.DataLoader(test_set, sampler=sampler, **loader_kwargs)
 
         # 不采样，使用全量数据
         else:
             print(Fore.GREEN + '-> create full set dataloader')
-            train_loader = torch.utils.data.DataLoader(train_set, batch_size=bs, shuffle=True, num_workers=num_workers)
-            test_loader = torch.utils.data.DataLoader(test_set, batch_size=bs, shuffle=True, num_workers=num_workers)
+            train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, **loader_kwargs)
+            test_loader = torch.utils.data.DataLoader(test_set, shuffle=True, **loader_kwargs)
 
         return train_loader, test_loader
 
@@ -488,7 +524,7 @@ def update_loc(pmt, loc, mad, trans):
 
 
 def single_load(pcd_file):
-    point_set = np.loadtxt(pcd_file)
+    point_set = load_npy_or_convert(pcd_file)
 
     xyz = point_set[:, :3]  # [n, 3]
     pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]

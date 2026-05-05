@@ -3,6 +3,7 @@ data_utils/__pycache__/
 cst_pred/__pycache__/
 cst_fea/__pycache__/
 .idea/
+.env
 model_trained/
 log/
 backups/

@@ -1,0 +1,33 @@
+# EvalScope TaskConfig: VLMEvalKit backend + Custom API (e.g. vLLM OpenAI server)
+work_dir: outputs
+eval_backend: VLMEvalKit
+eval_config:
+  model:
+    - type: Qwen2.5-VL-3B-Instruct
+      name: CustomAPIModel
+      api_base: http://localhost:8000/v1/chat/completions
+      key: EMPTY
+      temperature: 0.0
+      # -1 表示不缩放，原图会占满视觉 token，易超 vLLM 的 max_model_len；512/768 为长边上限（thumbnail）
+      img_size: -1
+      # max_tokens: 1024
+      video_llm: false
+  # VLMEvalKit 注册名须与源码一致（大小写敏感）；否则会找 ~/LMUData/<name>.tsv 自定义表
+  data:
+    - MathVista_MINI
+    - MathVision
+    - MMStar
+    - AI2D_TEST
+    - ChartQA_TEST
+    - DynaMath
+    - HallusionBench
+  mode: all
+  limit: 100
+  reuse: false
+  nproc: 16
+  # judge 须为 judge_util.model_map 的键；且 MMStar / 部分 image_mcq 在 evaluate 里写死只允许
+  # chatgpt-0125 | exact_matching | gpt-4-0125（见 vlmeval/dataset/image_mcq.py），用 gpt-4o-mini 会 AssertionError。
+  # 聚合网关用 .env 的 LOCAL_LLM 指定真实 model id；无 LLM judge 可用 exact_matching（精度可能下降）。
+  judge: gpt-4-0125
+
+  #VLLM_USE_MODELSCOPE=true vllm serve ../PeBR-R1/model/Qwen2.5-VL-3B-Instruct/ --port 8000 --dtype bfloat16 --max-model-len 32768 --served-model-name Qwen2.5-VL-3B-Instruct
