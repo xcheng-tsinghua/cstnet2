@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument('--is_sample', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
-    parser.add_argument('--root_sever', type=str, default=rf'data/pcd_cstnet2/Param20K_Extend')
+    parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
     parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend')
     parser.add_argument('--use_wandb', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
