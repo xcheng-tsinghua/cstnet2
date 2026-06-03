@@ -479,10 +479,9 @@ def trans_loc_for_cylinders(pmt, loc, mad, trans):
 
 
 def update_dim(pmt, dim, scale):
-    # 找到圆锥
-    mask_plane = (pmt == 2)
-    other_pmt = ~mask_plane
-    dim[other_pmt] = dim[other_pmt] * scale
+    # Only length-valued dimensions scale. Cone semi-angle and invalid -1 values do not.
+    scale_mask = (pmt == 1) | (pmt == 3)
+    dim[scale_mask] = dim[scale_mask] * scale
 
     return dim
 

@@ -5,12 +5,16 @@ import os
 import argparse
 from datetime import datetime
 import torch
-import wandb
 
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
 from networks.cst_pred_wrapper import CstPredWrapper
 from colorama import init, Fore, Back
+
+try:
+    import wandb
+except ImportError:  # pragma: no cover - optional dependency
+    wandb = None
 
 
 def parse_args():
@@ -28,7 +32,7 @@ def parse_args():
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--root_sever', type=str, default=rf'data/pcd_cstnet2/Param20K_Extend')
     parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend')
-    parser.add_argument('--use_wandb', default='True', choices=['True', 'False'], type=str)
+    parser.add_argument('--use_wandb', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
@@ -55,6 +59,9 @@ def main(args):
     )
 
     use_wandb = eval(args.use_wandb)
+    if use_wandb and wandb is None:
+        print(Fore.YELLOW + 'wandb is not installed; continue without wandb logging')
+        use_wandb = False
     run = None
     if use_wandb:
         run = wandb.init(
@@ -71,7 +78,7 @@ def main(args):
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
-        log_savepth = os.path.join('log', save_str + f'_{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.json'),
+        log_savepth = os.path.join('log', save_str + f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json'),
         max_epoch = args.epoch,
         lr = args.lr,
         is_load_weight = eval(args.is_load_weight),

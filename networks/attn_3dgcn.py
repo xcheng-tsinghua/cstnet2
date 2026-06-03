@@ -255,7 +255,7 @@ class Attn3DGcnPointEmbedding(nn.Module):
             d_points=channel_out,
             d_model=channel_out,
             k=attn_k,
-            channel_coor=channel_coor
+            channel_coor=channel_coord
         )
 
     def forward(self, xyz, fea=None):
@@ -301,7 +301,7 @@ class Attn3DGCN(nn.Module):
     def __init__(self, channel_coord=3, channel_fea=0, channel_out=32, n_prim_type=5, n_neighbor=20, attn_k=16, n_support=1):
         super().__init__()
         channel_mid = 128
-        self.embedding = Attn3DGCNEmbedding(channel_coord, channel_fea, channel_mid, n_neighbor, attn_k, n_support)
+        self.embedding = Attn3DGcnPointEmbedding(channel_coord, channel_fea, channel_mid, n_neighbor, attn_k, n_support)
 
         self.emb_head = utils.MLP(1, (channel_mid, math.ceil((channel_out*channel_mid)**0.5), channel_out))
         self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))

@@ -246,12 +246,12 @@ class PointNetPointEmbedding(nn.Module):
         self.bn4 = nn.BatchNorm1d(512)
         self.bn5 = nn.BatchNorm1d(2048)
         self.fstn = STNkd(k=128)
-        self.convs1 = torch.nn.Conv1d(4944, 256, 1)
+        self.convs1 = torch.nn.Conv1d(4928, 256, 1)
         self.convs2 = torch.nn.Conv1d(256, 256, 1)
         self.convs3 = torch.nn.Conv1d(256, channel_out, 1)
         self.bns1 = nn.BatchNorm1d(256)
         self.bns2 = nn.BatchNorm1d(256)
-        self.bns3 = nn.BatchNorm1d(128)
+        self.bns3 = nn.BatchNorm1d(channel_out)
 
     def forward(self, xyz, fea=None):
         """
@@ -290,7 +290,7 @@ class PointNetPointEmbedding(nn.Module):
         net = F.relu(self.bns2(self.convs2(net)))
         net = F.relu(self.bns3(self.convs3(net)))
 
-        return net, trans_feat if self.is_return_trans_feat else net
+        return (net, trans_feat) if self.is_return_trans_feat else net
 
 
 class PointNetLoss(torch.nn.Module):

@@ -5,13 +5,21 @@ import os
 import torch
 import argparse
 import numpy as np
-import open3d as o3d
-import matplotlib as plt
 from torch.utils.data import Dataset
 import shutil
 from pathlib import Path
 
-from models.cst_pcd import CstPnt
+from cst_pred.cst_pcd import CstPcd
+
+try:
+    import open3d as o3d
+except ImportError:  # pragma: no cover - optional visualization dependency
+    o3d = None
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover - optional visualization dependency
+    plt = None
 
 
 def is_suffix_step(filename):
@@ -104,6 +112,8 @@ class TestStepDataLoader(Dataset):
 
 
 def vis_pointcloud(points, mad, edge_nearby, meta_type, attr=None, show_normal=False, azimuth=45-90, elevation=45+90):
+    if o3d is None:
+        raise ImportError("open3d is required for point-cloud visualization")
     data_all = torch.cat([points, mad, edge_nearby, meta_type], dim=-1).cpu().numpy()
 
     def spherical_to_cartesian():
@@ -138,6 +148,8 @@ def vis_pointcloud(points, mad, edge_nearby, meta_type, attr=None, show_normal=F
         # pcd.normals = o3d.utility.Vector3dVector(normals)
 
     if attr is not None:
+        if plt is None:
+            raise ImportError("matplotlib is required for colored point-cloud visualization")
         labels = data_all[:, attr]
 
         if attr == -1:
@@ -198,6 +210,8 @@ def vis_pointcloud(points, mad, edge_nearby, meta_type, attr=None, show_normal=F
 
 
 def vis_stl_view(stl_path):
+    if o3d is None:
+        raise ImportError("open3d is required for mesh visualization")
     mesh = o3d.io.read_triangle_mesh(stl_path)
     mesh.compute_vertex_normals()
     mesh.paint_uniform_color([0., 1., 1.])
@@ -271,7 +285,7 @@ def main(args):
     eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size, shuffle=True, num_workers=int(args.workers))  # , drop_last=True
 
     '''MODEL LOADING'''
-    predictor = CstPnt(n_points_all=args.num_point, n_primitive=args.n_primitive).cuda()
+    predictor = CstPcd().cuda()
 
     model_savepth = 'model_trained/' + save_str + '.pth'
     try:
@@ -306,10 +320,11 @@ def main(args):
 
             xyz = xyz.float().cuda()
 
-            pred_mad, pred_adj, pred_pt = predictor(xyz)
+            pred_pt_log, _ = predictor(xyz.permute(0, 2, 1))
 
-            pred_adj = pred_adj.data.max(2)[1].unsqueeze(2)
-            pred_pt = pred_pt.data.max(2)[1].unsqueeze(2)
+            pred_mad = torch.zeros_like(xyz)
+            pred_adj = torch.zeros(xyz.size(0), xyz.size(1), 1, device=xyz.device)
+            pred_pt = pred_pt_log.data.max(2)[1].unsqueeze(2)
 
             for c_bs in range(bs):
                 c_xyz = xyz[c_bs, :, :]
