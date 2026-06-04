@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - optional dependency
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=512, help='batch size in training')
-    parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
+    parser.add_argument('--epoch', default=500, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=0.00001, type=float, help='learning rate in training')
     parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
@@ -30,8 +30,8 @@ def parse_args():
     parser.add_argument('--is_sample', default='False', choices=['True', 'False'], type=str)
 
     parser.add_argument('--local', default='False', choices=['True', 'False'], type=str)
-    parser.add_argument('--root_sever', type=str, default=rf'/opt/data/private/data_set/pcd_cstnet2/Param20K_Extend')
-    parser.add_argument('--root_local', type=str, default=rf'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend')
+    parser.add_argument('--root_sever', type=str, default=r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
+    parser.add_argument('--root_local', type=str, default=r'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend')
     parser.add_argument('--use_wandb', default='False', choices=['True', 'False'], type=str)
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
