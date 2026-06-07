@@ -15,6 +15,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
+from colorama import init, Fore, Back
 
 from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
@@ -206,4 +207,5 @@ def main(args):
 
 
 if __name__ == "__main__":
+    init(autoreset=True)
     main(parse_args())
