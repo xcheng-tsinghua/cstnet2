@@ -47,12 +47,12 @@ def parse_args():
     parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2000)
     parser.add_argument("--is_sample", default="False", choices=["True", "False"])
     parser.add_argument("--local", default="False", choices=["True", "False"])
-    parser.add_argument("--root_sever", type=str, default=r"data/pcd_cstnet2/Param20K_Extend")
+    parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
 
     parser.add_argument("--constraint_source", choices=["stage1", "gt"], default="stage1")
     parser.add_argument("--stage1_model", choices=["pointnet2", "pointnet", "attn_3dgcn"], default="pointnet2")
-    parser.add_argument("--stage1_ckpt", type=str, default=r"model_trained/pointnet2_pmt_prim_cluster.pth")
+    parser.add_argument("--stage1_ckpt", type=str, default=r"model_trained/attn_3dgcn_pmt_prim_cluster.pth")
     parser.add_argument("--stage1_cluster_bandwidth", type=float, default=0.35)
     parser.add_argument("--stage1_use_gt_normals", default="False", choices=["True", "False"])
 
