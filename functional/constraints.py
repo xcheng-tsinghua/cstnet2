@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 
 N_PRIMITIVES = 5
-CONSTRAINT_DIM = 15
+CONSTRAINT_DIM = 15  # 5 (primitive_type) + 3 (Direction) + 1 (Dimension) + 3 (Continuity) + 3 (Location)
 INVALID_DIRECTION = (0.0, 0.0, -1.0)
 
 
