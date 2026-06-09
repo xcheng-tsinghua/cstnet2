@@ -20,7 +20,7 @@ class PointwiseMLP(nn.Module):
         for i in range(len(channels) - 1):
             layers.append(nn.Conv1d(channels[i], channels[i + 1], 1, bias=False))
             if i < len(channels) - 2 or activate_last:
-                layers.append(nn.LayerNorm(channels[i + 1]))
+                layers.append(nn.BatchNorm1d(channels[i + 1]))
                 layers.append(nn.SiLU(inplace=True))
         self.net = nn.Sequential(*layers)
 
