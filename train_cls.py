@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--stage1_use_gt_normals", default="False", choices=["True", "False"])
 
     parser.add_argument("--save_name", type=str, default="stage2_cls")
-    parser.add_argument("--resume", default="False", choices=["True", "False"])
+    parser.add_argument("--resume", default="True", choices=["True", "False"])
     return parser.parse_args()
 
 
