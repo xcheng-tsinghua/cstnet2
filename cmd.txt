@@ -30,6 +30,6 @@ nohup 末尾添加该命令可以指定log文件
 nohup python train_cst_pred.py > out.log 2>&1 &
 
 
-nohup python train_cls.py --bs=40 --constraint_source=gt --save_name=stage2_cls_gt > out_gt.log 2>&1 &
+nohup python train_cls.py --bs=20 --constraint_source=gt --save_name=stage2_cls_gt > out_gt.log 2>&1 &
 
 nohup python train_cls.py --bs=20 > out.log 2>&1 &
