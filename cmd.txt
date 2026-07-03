@@ -3,7 +3,7 @@ cd /opt/data/private/networks/cstnet2/ && conda activate dp
 
 git pull && git status && git add . && git commit -m "change" && git push
 
-# 显示 tensorbroab
+# 显示 tensorbroabc
 tensorboard --logdir=./log/cst_pred_v2_2_2
 
 
@@ -30,8 +30,8 @@ nohup 末尾添加该命令可以指定log文件
 nohup python train_cst_pred.py > out.log 2>&1 &
 
 
-nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=discriminative --save_name=stage2_cls_gt_v2 > out_gt.log 2>&1 &
+nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=discriminative --save_name=stage2_cls_gt_v2 > out_gt_v2.log 2>&1 &
 
-nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=token_fusion --save_name=stage2_cls_gt_v3 > out_gt.log 2>&1 &
+nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=token_fusion --save_name=stage2_cls_gt_v3 > out_gt_v3.log 2>&1 &
 
 nohup python train_cls.py --bs=20 --epoch=500 > out.log 2>&1 &
