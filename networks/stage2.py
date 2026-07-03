@@ -11,6 +11,10 @@ from functional.constraints import CONSTRAINT_DIM, split_constraint_tensor
 from networks import utils
 
 
+COMPONENT_STREAM_NAMES = ("primitive_type", "direction", "dimension", "continuity", "location")
+STREAM_NAMES = (*COMPONENT_STREAM_NAMES, "xyz")
+
+
 class PointwiseMLP(nn.Module):
     """Conv1d-based MLP that operates pointwise over a point cloud."""
 
@@ -29,6 +33,23 @@ class PointwiseMLP(nn.Module):
         return self.net(x.transpose(1, 2)).transpose(1, 2)
 
 
+class PointwiseLNMLP(nn.Module):
+    """Linear + LayerNorm MLP that keeps tensors in [B, N, C] format."""
+
+    def __init__(self, channels: tuple[int, ...], activate_last: bool = True):
+        super().__init__()
+        layers = []
+        for i in range(len(channels) - 1):
+            layers.append(nn.Linear(channels[i], channels[i + 1], bias=False))
+            if i < len(channels) - 2 or activate_last:
+                layers.append(nn.LayerNorm(channels[i + 1]))
+                layers.append(nn.SiLU(inplace=True))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class ConstraintStreamInitializer(nn.Module):
     """
     Initialize six independent feature streams from xyz and constraint tensor.
@@ -39,16 +60,23 @@ class ConstraintStreamInitializer(nn.Module):
     Output: Six feature tensors [B, N, feature_dim]
     """
 
-    def __init__(self, feature_dim: int = 96):
+    def __init__(self, feature_dim: int = 96, norm_type: str = "ln"):
         super().__init__()
+        if norm_type == "ln":
+            mlp_cls = PointwiseLNMLP
+        elif norm_type == "bn":
+            mlp_cls = PointwiseMLP
+        else:
+            raise ValueError(f"unsupported norm_type={norm_type!r}, expected 'ln' or 'bn'")
+
         self.encoders = nn.ModuleDict(
             {
-                "primitive_type": PointwiseMLP((3 + 5, feature_dim, feature_dim)),
-                "direction": PointwiseMLP((3 + 3, feature_dim, feature_dim)),
-                "dimension": PointwiseMLP((3 + 1, feature_dim, feature_dim)),
-                "continuity": PointwiseMLP((3 + 3, feature_dim, feature_dim)),
-                "location": PointwiseMLP((3 + 3, feature_dim, feature_dim)),
-                "xyz": PointwiseMLP((3, feature_dim, feature_dim)),
+                "primitive_type": mlp_cls((3 + 5, feature_dim, feature_dim)),
+                "direction": mlp_cls((3 + 3, feature_dim, feature_dim)),
+                "dimension": mlp_cls((3 + 1, feature_dim, feature_dim)),
+                "continuity": mlp_cls((3 + 3, feature_dim, feature_dim)),
+                "location": mlp_cls((3 + 3, feature_dim, feature_dim)),
+                "xyz": mlp_cls((3, feature_dim, feature_dim)),
             }
         )
 
@@ -133,8 +161,8 @@ class LocalVectorAttentionAggregator(nn.Module):
         self.channel_in = channel_in
         self.channel_out = channel_out
 
-        # Position encoding
-        self.position_mlp = PointwiseMLP((3, channel_out, channel_out))
+        # Position encoding uses relative xyz plus raw and normalized distance.
+        self.position_mlp = PointwiseMLP((5, channel_out, channel_out))
 
         # Query, Key, Value projections
         self.query_proj = nn.Linear(channel_in, channel_out)
@@ -175,8 +203,11 @@ class LocalVectorAttentionAggregator(nn.Module):
 
         # Position encoding
         # relative_xyz [B, S, K, 3] -> position_encoded [B, S, K, C_out]
-        flat_relative_xyz = relative_xyz.view(B * S, K, 3)
-        flat_pos_enc = self.position_mlp(flat_relative_xyz)  # [B*S, K, C_out]
+        relative_dist = torch.norm(relative_xyz, dim=-1, keepdim=True)
+        relative_dist_norm = relative_dist / (relative_dist.mean(dim=2, keepdim=True) + 1e-6)
+        pos_input = torch.cat([relative_xyz, relative_dist, relative_dist_norm], dim=-1)
+        flat_pos_input = pos_input.reshape(B * S, K, 5)
+        flat_pos_enc = self.position_mlp(flat_pos_input)  # [B*S, K, C_out]
         pos_enc = flat_pos_enc.view(B, S, K, self.channel_out)  # [B, S, K, C_out]
 
         # Query from center, Key and Value from neighbors
@@ -265,6 +296,7 @@ class ComponentToConstraintCrossAttention(nn.Module):
         super().__init__()
         self.channel_dim = channel_dim
         self.n_heads = n_heads
+        self.component_type_embedding = nn.Parameter(torch.randn(5, channel_dim) * 0.02)
 
         # Multi-head cross-attention
         self.attention = nn.MultiheadAttention(
@@ -303,6 +335,7 @@ class ComponentToConstraintCrossAttention(nn.Module):
             [primitive_feature, direction_feature, dimension_feature, continuity_feature, location_feature],
             dim=2,
         )
+        component_context = component_context + self.component_type_embedding.view(1, 1, 5, C)
 
         # Reshape for point-wise attention: treat each point independently
         # query: [B, S, 1, C] -> [B*S, 1, C]
@@ -386,6 +419,46 @@ class MultiStreamConstraintEncoder(nn.Module):
         history["streams"][-1] = streams2
 
         return streams2, history
+
+
+class GlobalMultiPooling(nn.Module):
+    """Concatenate max, mean, and learned attention pooling over points."""
+
+    def __init__(self, channel_dim: int):
+        super().__init__()
+        hidden_dim = max(channel_dim // 2, 1)
+        self.score_mlp = nn.Sequential(
+            nn.Linear(channel_dim, hidden_dim),
+            nn.SiLU(inplace=True),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, S, C]
+        max_pool = x.max(dim=1)[0]
+        mean_pool = x.mean(dim=1)
+        score = self.score_mlp(x)
+        weight = torch.softmax(score, dim=1)
+        attention_pool = (x * weight).sum(dim=1)
+        return torch.cat([max_pool, mean_pool, attention_pool], dim=-1)
+
+
+class StreamLevelTokenPooler(nn.Module):
+    """Pool one stream at one encoder level into a Transformer token."""
+
+    def __init__(self, channel_dim: int, token_dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.pool = GlobalMultiPooling(channel_dim)
+        self.projection = nn.Sequential(
+            nn.Linear(3 * channel_dim, token_dim),
+            nn.LayerNorm(token_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, feature: torch.Tensor) -> torch.Tensor:
+        pooled = self.pool(feature)
+        return self.projection(pooled)
 
 
 # class ConstraintFeaturePropagation(nn.Module):
@@ -565,8 +638,6 @@ class ConstraintFeaturePropagation(nn.Module):
         return current_feature  # 最终输出: [B, N, 320]
     
 
-
-
 class CstNetStage2Classifier(nn.Module):
     """
     Constraint-aware classification head using multi-stream encoder.
@@ -576,7 +647,7 @@ class CstNetStage2Classifier(nn.Module):
 
     def __init__(self, n_classes: int, feature_dim: int = 96, latent_dim: int = 512):
         super().__init__()
-        self.constraint_init = ConstraintStreamInitializer(feature_dim)
+        self.constraint_init = ConstraintStreamInitializer(feature_dim, norm_type="bn")
         self.encoder = MultiStreamConstraintEncoder(feature_dim, latent_dim)
         self.proj = nn.Sequential(
             nn.Linear(320, latent_dim),
@@ -616,6 +687,326 @@ class CstNetStage2Classifier(nn.Module):
         return F.log_softmax(logits, dim=-1)
 
 
+class CstNetStage2ClassifierV2(nn.Module):
+    def __init__(self, n_classes: int, feature_dim: int = 96, latent_dim: int = 512):
+        super().__init__()
+        self.constraint_init = ConstraintStreamInitializer(feature_dim, norm_type="bn")
+        self.encoder = MultiStreamConstraintEncoder(feature_dim, latent_dim)
+
+        self.component_names = ["primitive_type", "direction", "dimension", "continuity", "location"]
+
+        self.component_summary_proj = nn.Sequential(
+            nn.Linear(320 * 5, 320),
+            nn.LayerNorm(320),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.2),
+        )
+
+        self.gate = nn.Sequential(
+            nn.Linear(320 * 2, 320),
+            nn.Sigmoid(),
+        )
+
+        self.proj = nn.Sequential(
+            nn.Linear(320, latent_dim),
+            nn.LayerNorm(latent_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.3),
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(latent_dim, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(256, n_classes),
+        )
+
+    def forward(self, xyz: torch.Tensor, constraints: torch.Tensor) -> torch.Tensor:
+        if constraints.shape[-1] != CONSTRAINT_DIM:
+            raise ValueError(f"expected constraints [B, N, {CONSTRAINT_DIM}], got {tuple(constraints.shape)}")
+
+        streams = self.constraint_init(xyz, constraints)
+        final_streams, _ = self.encoder(xyz, streams)
+
+        constraint_pool = final_streams["xyz"].max(dim=1)[0]
+
+        component_pool = torch.cat(
+            [final_streams[name].max(dim=1)[0] for name in self.component_names],
+            dim=-1,
+        )
+        component_pool = self.component_summary_proj(component_pool)
+
+        gate = self.gate(torch.cat([constraint_pool, component_pool], dim=-1))
+        fused = constraint_pool + gate * component_pool
+
+        latent = self.proj(fused)
+        logits = self.head(latent)
+        return F.log_softmax(logits, dim=-1)
+
+
+class CstNetStage2ClassifierDiscriminative(nn.Module):
+    """
+    Stronger Stage 2 classifier that keeps the xyz stream as the main branch
+    while explicitly fusing all five final component streams.
+    """
+
+    def __init__(
+        self,
+        n_classes: int,
+        feature_dim: int = 96,
+        latent_dim: int = 512,
+        norm_type: str = "ln",
+    ):
+        super().__init__()
+        final_channel = 320
+        pooled_dim = 3 * final_channel
+
+        self.constraint_init = ConstraintStreamInitializer(feature_dim, norm_type=norm_type)
+        self.encoder = MultiStreamConstraintEncoder(feature_dim, latent_dim)
+        self.poolers = nn.ModuleDict({name: GlobalMultiPooling(final_channel) for name in STREAM_NAMES})
+
+        self.component_summary_proj = nn.Sequential(
+            nn.Linear(len(COMPONENT_STREAM_NAMES) * pooled_dim, pooled_dim),
+            nn.LayerNorm(pooled_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.2),
+        )
+
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(2 * pooled_dim, pooled_dim),
+            nn.Sigmoid(),
+        )
+
+        self.proj = nn.Sequential(
+            nn.Linear(pooled_dim, latent_dim),
+            nn.LayerNorm(latent_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.3),
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(latent_dim, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(256, n_classes),
+        )
+
+        self.aux_component_head = nn.Sequential(
+            nn.LayerNorm(pooled_dim),
+            nn.Linear(pooled_dim, n_classes),
+        )
+        self.aux_constraint_head = nn.Sequential(
+            nn.LayerNorm(pooled_dim),
+            nn.Linear(pooled_dim, n_classes),
+        )
+
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        constraints: torch.Tensor,
+        return_aux: bool = False,
+    ) -> torch.Tensor | Dict[str, torch.Tensor]:
+        if constraints.shape[-1] != CONSTRAINT_DIM:
+            raise ValueError(f"expected constraints [B, N, {CONSTRAINT_DIM}], got {tuple(constraints.shape)}")
+
+        streams = self.constraint_init(xyz, constraints)
+        final_streams, _ = self.encoder(xyz, streams)
+
+        constraint_global = self.poolers["xyz"](final_streams["xyz"])
+        component_global = torch.cat(
+            [self.poolers[name](final_streams[name]) for name in COMPONENT_STREAM_NAMES],
+            dim=-1,
+        )
+        component_summary = self.component_summary_proj(component_global)
+
+        gate = self.gate_mlp(torch.cat([constraint_global, component_summary], dim=-1))
+        fused = constraint_global + gate * component_summary
+
+        latent = self.proj(fused)
+        main_logits = self.head(latent)
+        log_probs = F.log_softmax(main_logits, dim=-1)
+
+        if not return_aux:
+            return log_probs
+
+        return {
+            "log_probs": log_probs,
+            "main_logits": main_logits,
+            "aux_component_logits": self.aux_component_head(component_summary),
+            "aux_constraint_logits": self.aux_constraint_head(constraint_global),
+        }
+
+
+class CstNetStage2ClassifierTokenFusion(nn.Module):
+    """
+    Token-level Transformer classifier using all stream-level features from
+    every hierarchy level returned by the multi-stream encoder.
+    """
+
+    def __init__(
+        self,
+        n_classes: int,
+        feature_dim: int = 96,
+        latent_dim: int = 512,
+        norm_type: str = "ln",
+        token_dim: int = 256,
+        transformer_layers: int = 3,
+        transformer_heads: int = 8,
+        dropout: float = 0.1,
+        stream_dropout: float = 0.1,
+        use_stats_token: bool = False,
+    ):
+        super().__init__()
+        if token_dim % transformer_heads != 0:
+            raise ValueError("token_dim must be divisible by transformer_heads")
+
+        self.constraint_init = ConstraintStreamInitializer(feature_dim, norm_type=norm_type)
+        self.encoder = MultiStreamConstraintEncoder(feature_dim, latent_dim)
+        self.stream_dropout = stream_dropout
+        self.use_stats_token = use_stats_token
+        self.level_channels = (feature_dim, 160, 320)
+
+        self.token_poolers = nn.ModuleDict()
+        for level_id, channel_dim in enumerate(self.level_channels):
+            for stream_name in STREAM_NAMES:
+                self.token_poolers[f"l{level_id}_{stream_name}"] = StreamLevelTokenPooler(
+                    channel_dim,
+                    token_dim,
+                    dropout=dropout,
+                )
+
+        self.stream_embedding = nn.Parameter(torch.randn(len(STREAM_NAMES), token_dim) * 0.02)
+        self.level_embedding = nn.Parameter(torch.randn(len(self.level_channels), token_dim) * 0.02)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, token_dim))
+        self.stream_mask_token = nn.Parameter(torch.zeros(1, 1, token_dim))
+
+        if use_stats_token:
+            self.stats_projection = nn.Sequential(
+                nn.Linear(4 * CONSTRAINT_DIM, token_dim),
+                nn.LayerNorm(token_dim),
+                nn.SiLU(inplace=True),
+                nn.Dropout(dropout),
+            )
+        else:
+            self.stats_projection = None
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=token_dim,
+            nhead=transformer_heads,
+            dim_feedforward=token_dim * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.token_transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=transformer_layers,
+        )
+
+        self.head = nn.Sequential(
+            nn.LayerNorm(token_dim),
+            nn.Linear(token_dim, latent_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(latent_dim, n_classes),
+        )
+
+        self.final_constraint_pool = GlobalMultiPooling(320)
+        self.aux_final_constraint_head = nn.Sequential(
+            nn.LayerNorm(3 * 320),
+            nn.Linear(3 * 320, n_classes),
+        )
+        self.aux_component_token_head = nn.Sequential(
+            nn.LayerNorm(token_dim),
+            nn.Linear(token_dim, n_classes),
+        )
+
+    def _stream_token_mask(self, device: torch.device) -> torch.Tensor:
+        stream_ids = []
+        for _ in self.level_channels:
+            stream_ids.extend(range(len(STREAM_NAMES)))
+        stream_ids_tensor = torch.tensor(stream_ids, device=device)
+        return stream_ids_tensor != STREAM_NAMES.index("xyz")
+
+    def _make_stream_tokens(self, history: Dict) -> torch.Tensor:
+        if len(history["streams"]) < len(self.level_channels):
+            raise RuntimeError("encoder history does not contain all required hierarchy levels")
+
+        tokens = []
+        for level_id, streams_at_level in enumerate(history["streams"][: len(self.level_channels)]):
+            for stream_id, stream_name in enumerate(STREAM_NAMES):
+                token = self.token_poolers[f"l{level_id}_{stream_name}"](streams_at_level[stream_name])
+                token = token + self.stream_embedding[stream_id].view(1, -1)
+                token = token + self.level_embedding[level_id].view(1, -1)
+                tokens.append(token)
+        return torch.stack(tokens, dim=1)
+
+    def _apply_stream_dropout(self, tokens: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.stream_dropout <= 0.0:
+            return tokens
+
+        component_mask = self._stream_token_mask(tokens.device).view(1, -1, 1)
+        drop_mask = torch.rand(tokens.shape[0], tokens.shape[1], 1, device=tokens.device) < self.stream_dropout
+        drop_mask = drop_mask & component_mask
+        mask_token = self.stream_mask_token.to(dtype=tokens.dtype).expand(tokens.shape[0], tokens.shape[1], -1)
+        return torch.where(drop_mask, mask_token, tokens)
+
+    def _make_stats_token(self, constraints: torch.Tensor) -> torch.Tensor:
+        constraint_stats = torch.cat(
+            [
+                constraints.mean(dim=1),
+                constraints.std(dim=1, unbiased=False),
+                constraints.max(dim=1)[0],
+                constraints.min(dim=1)[0],
+            ],
+            dim=-1,
+        )
+        return self.stats_projection(constraint_stats).unsqueeze(1)
+
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        constraints: torch.Tensor,
+        return_aux: bool = False,
+    ) -> torch.Tensor | Dict[str, torch.Tensor]:
+        if constraints.shape[-1] != CONSTRAINT_DIM:
+            raise ValueError(f"expected constraints [B, N, {CONSTRAINT_DIM}], got {tuple(constraints.shape)}")
+
+        streams = self.constraint_init(xyz, constraints)
+        final_streams, history = self.encoder(xyz, streams)
+
+        stream_tokens = self._make_stream_tokens(history)
+        component_mask = self._stream_token_mask(stream_tokens.device)
+        component_token_summary = stream_tokens[:, component_mask].mean(dim=1)
+
+        transformer_tokens = self._apply_stream_dropout(stream_tokens)
+        if self.use_stats_token:
+            transformer_tokens = torch.cat([transformer_tokens, self._make_stats_token(constraints)], dim=1)
+
+        B = transformer_tokens.shape[0]
+        cls = self.cls_token.expand(B, -1, -1)
+        transformer_tokens = torch.cat([cls, transformer_tokens], dim=1)
+
+        encoded = self.token_transformer(transformer_tokens)
+        cls_out = encoded[:, 0]
+        main_logits = self.head(cls_out)
+        log_probs = F.log_softmax(main_logits, dim=-1)
+
+        if not return_aux:
+            return log_probs
+
+        final_constraint_global = self.final_constraint_pool(final_streams["xyz"])
+        return {
+            "log_probs": log_probs,
+            "main_logits": main_logits,
+            "aux_final_constraint_logits": self.aux_final_constraint_head(final_constraint_global),
+            "aux_component_token_logits": self.aux_component_token_head(component_token_summary),
+        }
+
+
 class SinusoidalTimestepEmbedding(nn.Module):
     """Sinusoidal embeddings for diffusion timesteps."""
 
@@ -644,7 +1035,7 @@ class SinusoidalTimestepEmbedding(nn.Module):
 class CstNetStage2Diffusion(nn.Module):
     def __init__(self, feature_dim: int = 96, latent_dim: int = 512, time_dim: int = 128):
         super().__init__()
-        self.constraint_init = ConstraintStreamInitializer(feature_dim)
+        self.constraint_init = ConstraintStreamInitializer(feature_dim, norm_type="bn")
         self.encoder = MultiStreamConstraintEncoder(feature_dim, latent_dim)
         
         # 传入完整的通道金字塔，确保内部投影层能正确构建

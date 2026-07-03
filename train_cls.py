@@ -20,7 +20,11 @@ from colorama import init, Fore, Back
 from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
 from networks.stage1_extractor import FrozenStage1ConstraintExtractor
-from networks.stage2 import CstNetStage2Classifier
+from networks.stage2 import (
+    CstNetStage2Classifier,
+    CstNetStage2ClassifierDiscriminative,
+    CstNetStage2ClassifierTokenFusion,
+)
 from networks.utils import all_metric_cls
 
 try:
@@ -57,6 +61,22 @@ def parse_args():
     parser.add_argument("--stage1_cluster_bandwidth", type=float, default=0.35)
     parser.add_argument("--stage1_use_gt_normals", default="False", choices=["True", "False"])
 
+    parser.add_argument(
+        "--stage2_variant",
+        choices=["baseline", "discriminative", "token_fusion"],
+        default="baseline",
+        help="baseline keeps the existing classifier; the other two use the new Stage2 classification heads.",
+    )
+    parser.add_argument("--stage2_norm", choices=["ln", "bn"], default="ln")
+    parser.add_argument("--label_smoothing", type=float, default=0.05)
+    parser.add_argument("--aux_loss_weight", type=float, default=0.1)
+    parser.add_argument("--token_dim", type=int, default=256)
+    parser.add_argument("--transformer_layers", type=int, default=3)
+    parser.add_argument("--transformer_heads", type=int, default=8)
+    parser.add_argument("--token_dropout", type=float, default=0.1)
+    parser.add_argument("--stream_dropout", type=float, default=0.1)
+    parser.add_argument("--use_stats_token", default="False", choices=["True", "False"])
+
     parser.add_argument("--save_name", type=str, default="stage2_cls")
     parser.add_argument("--resume", default="True", choices=["True", "False"])
     return parser.parse_args()
@@ -83,6 +103,60 @@ def build_constraints(
         raise RuntimeError("Stage 1 extractor is required when constraint_source='stage1'")
     normals = data[5].float().to(device, non_blocking=True) if use_gt_normals_for_stage1 else None
     return stage1(xyz, normals=normals)
+
+
+def build_stage2_classifier(args, n_classes: int) -> torch.nn.Module:
+    if args.stage2_variant == "baseline":
+        return CstNetStage2Classifier(n_classes=n_classes)
+    if args.stage2_variant == "discriminative":
+        return CstNetStage2ClassifierDiscriminative(
+            n_classes=n_classes,
+            norm_type=args.stage2_norm,
+        )
+    if args.stage2_variant == "token_fusion":
+        return CstNetStage2ClassifierTokenFusion(
+            n_classes=n_classes,
+            norm_type=args.stage2_norm,
+            token_dim=args.token_dim,
+            transformer_layers=args.transformer_layers,
+            transformer_heads=args.transformer_heads,
+            dropout=args.token_dropout,
+            stream_dropout=args.stream_dropout,
+            use_stats_token=str2bool(args.use_stats_token),
+        )
+    raise ValueError(f"unknown stage2_variant={args.stage2_variant!r}")
+
+
+def classification_loss(model, xyz, constraints, target, args):
+    use_aux = args.stage2_variant != "baseline" and args.aux_loss_weight > 0.0
+    if not use_aux:
+        log_probs = model(xyz, constraints)
+        if args.label_smoothing > 0.0:
+            loss = F.cross_entropy(log_probs, target, label_smoothing=args.label_smoothing)
+        else:
+            loss = F.nll_loss(log_probs, target)
+        return log_probs, loss
+
+    output = model(xyz, constraints, return_aux=True)
+    loss = F.cross_entropy(
+        output["main_logits"],
+        target,
+        label_smoothing=args.label_smoothing,
+    )
+
+    if args.stage2_variant == "discriminative":
+        aux_keys = ("aux_component_logits", "aux_constraint_logits")
+    else:
+        aux_keys = ("aux_final_constraint_logits", "aux_component_token_logits")
+
+    for key in aux_keys:
+        loss = loss + args.aux_loss_weight * F.cross_entropy(
+            output[key],
+            target,
+            label_smoothing=args.label_smoothing,
+        )
+
+    return output["log_probs"], loss
 
 
 def evaluate(model, loader, device, args, stage1):
@@ -132,8 +206,11 @@ def main(args):
         ).to(device)
         stage1.freeze()
 
-    model = CstNetStage2Classifier(n_classes=n_classes).to(device)
-    save_path = os.path.join("model_trained", f"{args.save_name}.pth")
+    model = build_stage2_classifier(args, n_classes=n_classes).to(device)
+    save_stem = args.save_name
+    if args.save_name == "stage2_cls" and args.stage2_variant != "baseline":
+        save_stem = f"{args.save_name}_{args.stage2_variant}"
+    save_path = os.path.join("model_trained", f"{save_stem}.pth")
     if str2bool(args.resume) and os.path.exists(save_path):
         model.load_state_dict(torch.load(save_path, map_location=device))
         print(f"resume Stage 2 classifier from {save_path}")
@@ -166,8 +243,7 @@ def main(args):
             )
 
             optimizer.zero_grad(set_to_none=True)
-            pred = model(xyz, constraints)
-            loss = F.nll_loss(pred, target)
+            pred, loss = classification_loss(model, xyz, constraints, target, args)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -194,7 +270,7 @@ def main(args):
         torch.save(model.state_dict(), save_path)
         if test_metrics[0] >= best_acc:
             best_acc = test_metrics[0]
-            torch.save(model.state_dict(), os.path.join("model_trained", f"{args.save_name}_best.pth"))
+            torch.save(model.state_dict(), os.path.join("model_trained", f"{save_stem}_best.pth"))
 
         print(
             f"epoch {epoch + 1}/{args.epoch} "
