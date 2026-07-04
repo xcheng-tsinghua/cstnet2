@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import torch.nn.functional as F
 import torch
 import numpy as np
@@ -779,16 +781,152 @@ def geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt):
         return 0.0
 
 
-def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx):
+def _zero_loss(reference: torch.Tensor) -> torch.Tensor:
+    return reference.sum() * 0.0
+
+
+def _primitive_mask(pmt_gt: torch.Tensor, valid_pmt: tuple[int, ...]) -> torch.Tensor:
+    mask = torch.zeros_like(pmt_gt, dtype=torch.bool)
+    for prim_idx in valid_pmt:
+        mask = mask | (pmt_gt == prim_idx)
+    return mask
+
+
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    if mask.any():
+        return values[mask].mean()
+    return _zero_loss(reference)
+
+
+def _masked_vector_mse(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    sign_invariant: bool = False,
+    canonicalize: bool = False,
+) -> torch.Tensor:
+    if not mask.any():
+        return _zero_loss(pred)
+    pred_m = F.normalize(pred[mask], dim=-1, eps=1e-6)
+    target_m = F.normalize(target[mask], dim=-1, eps=1e-6)
+    if canonicalize:
+        pred_m = canonicalize_vectors_hard(pred_m)
+        target_m = canonicalize_vectors_hard(target_m)
+    if sign_invariant:
+        direct = (pred_m - target_m).pow(2).sum(dim=-1)
+        flipped = (pred_m + target_m).pow(2).sum(dim=-1)
+        return torch.minimum(direct, flipped).mean()
+    return F.mse_loss(pred_m, target_m)
+
+
+def _masked_scalar_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if not mask.any():
+        return _zero_loss(pred)
+    return F.mse_loss(pred[mask], target[mask])
+
+
+def _masked_parallel_loss(vec1: torch.Tensor, vec2: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if not mask.any():
+        return _zero_loss(vec1)
+    a = F.normalize(vec1[mask], dim=-1, eps=1e-6)
+    b = F.normalize(vec2[mask], dim=-1, eps=1e-6)
+    cos = (a * b).sum(dim=-1).abs()
+    return (1.0 - cos).pow(2).mean()
+
+
+def _masked_perpendicular_loss(vec1: torch.Tensor, vec2: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if not mask.any():
+        return _zero_loss(vec1)
+    a = F.normalize(vec1[mask], dim=-1, eps=1e-6)
+    b = F.normalize(vec2[mask], dim=-1, eps=1e-6)
+    return (a * b).sum(dim=-1).pow(2).mean()
+
+
+def _stage1_geometry_losses(
+    xyz: torch.Tensor,
+    mad_pred: torch.Tensor,
+    dim_pred: torch.Tensor,
+    nor_pred: torch.Tensor,
+    loc_pred: torch.Tensor,
+    pmt_gt: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    mad_pred = F.normalize(mad_pred, dim=-1, eps=1e-6)
+    nor_pred = F.normalize(nor_pred, dim=-1, eps=1e-6)
+    dim_pred = dim_pred.clamp_min(0.0)
+
+    plane_mask = pmt_gt == 0
+    if plane_mask.any():
+        n = mad_pred
+        plane_dist = ((xyz - loc_pred) * n).sum(dim=-1).pow(2)
+        on_plane = _masked_mean(plane_dist, plane_mask, xyz)
+        loc_nonzero = plane_mask & (loc_pred.norm(dim=-1) > 1e-4)
+        loc_parallel = _masked_parallel_loss(loc_pred, mad_pred, loc_nonzero)
+        mad_nor_parallel = _masked_parallel_loss(mad_pred, nor_pred, plane_mask)
+        loss_plane = on_plane + 0.2 * loc_parallel + 0.2 * mad_nor_parallel
+    else:
+        loss_plane = _zero_loss(xyz)
+
+    cylinder_mask = pmt_gt == 1
+    if cylinder_mask.any():
+        v = xyz - loc_pred
+        axis = mad_pred
+        axial = (v * axis).sum(dim=-1, keepdim=True) * axis
+        radial = (v - axial).norm(dim=-1)
+        radius_residual = (radial - dim_pred).pow(2)
+        on_cylinder = _masked_mean(radius_residual, cylinder_mask, xyz)
+        loc_perp_axis = _masked_perpendicular_loss(loc_pred, mad_pred, cylinder_mask)
+        nor_perp_axis = _masked_perpendicular_loss(nor_pred, mad_pred, cylinder_mask)
+        loss_cylinder = on_cylinder + 0.2 * loc_perp_axis + 0.2 * nor_perp_axis
+    else:
+        loss_cylinder = _zero_loss(xyz)
+
+    cone_mask = pmt_gt == 2
+    if cone_mask.any():
+        v = xyz - loc_pred
+        axis = mad_pred
+        signed_axial = (v * axis).sum(dim=-1)
+        axial = signed_axial.abs().clamp_min(1e-4)
+        radial_vec = v - signed_axial.unsqueeze(-1) * axis
+        radial = radial_vec.norm(dim=-1)
+        semi_angle = dim_pred.clamp(min=1e-4, max=1.55)
+        cone_residual = (radial - axial * torch.tan(semi_angle)).pow(2)
+        loss_cone = _masked_mean(cone_residual, cone_mask, xyz)
+    else:
+        loss_cone = _zero_loss(xyz)
+
+    sphere_mask = pmt_gt == 3
+    if sphere_mask.any():
+        center_to_xyz = xyz - loc_pred
+        radius_residual = (center_to_xyz.norm(dim=-1) - dim_pred).pow(2)
+        on_sphere = _masked_mean(radius_residual, sphere_mask, xyz)
+        normal_parallel = _masked_parallel_loss(center_to_xyz, nor_pred, sphere_mask)
+        loss_sphere = on_sphere + 0.2 * normal_parallel
+    else:
+        loss_sphere = _zero_loss(xyz)
+
+    geom_loss = loss_plane + loss_cylinder + loss_cone + loss_sphere
+    return {
+        "geom_loss": geom_loss,
+        "loss_plane": loss_plane,
+        "loss_cylinder": loss_cylinder,
+        "loss_cone": loss_cone,
+        "loss_sphere": loss_sphere,
+    }
+
+
+def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt=None):
     """
     log_pmt_pred: [B, P, 5] log-softmax后的基元类型预测
     mad_pred: [B, P, 3] 主方向预测
     dim_pred: [B, P] 尺寸预测
     loc_pred: [B, P, 3] 主位置预测
     affil_idx: [B, P] 每个点所属实例的索引 (int)
+    pmt_gt: [B, P] optional primitive type labels used for valid property masks
     """
     bs = log_pmt_pred.size(0)
-    loss_total = 0.0
+    terms = []
+    mad_pred = canonicalize_vectors_hard(F.normalize(mad_pred, dim=-1, eps=1e-6))
+    probs = log_pmt_pred.exp()
 
     for b in range(bs):
         # 找到无重复的实例id
@@ -799,34 +937,44 @@ def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_
             if mask.sum() <= 1:
                 continue  # 只有1个点不计算一致性
 
+            if pmt_gt is None:
+                inst_prim = None
+            else:
+                inst_labels = pmt_gt[b][mask].long()
+                inst_prim = int(torch.bincount(inst_labels, minlength=5).argmax().item())
+
             # ---- 基元类型一致性（对logits取均值，再和每个点对齐）----
-            logits = log_pmt_pred[b][mask]   # [N, 5]
-            mean_logits = logits.mean(0, keepdim=True)  # [1, 5]
-            loss_pmt = F.mse_loss(logits, mean_logits.expand_as(logits))
+            pmt_prob = probs[b][mask]   # [N, 5]
+            mean_prob = pmt_prob.mean(0, keepdim=True)  # [1, 5]
+            terms.append(F.mse_loss(pmt_prob, mean_prob.expand_as(pmt_prob)))
 
             # ---- 主方向一致性 ----
-            mad = mad_pred[b][mask]  # [N, 3]
-            mean_mad = mad.mean(0, keepdim=True)
-            loss_mad = F.mse_loss(mad, mean_mad.expand_as(mad))
+            if inst_prim is None or inst_prim in (0, 1, 2):
+                mad = mad_pred[b][mask]  # [N, 3]
+                mean_mad = F.normalize(mad.mean(0, keepdim=True), dim=-1, eps=1e-6)
+                terms.append(F.mse_loss(mad, mean_mad.expand_as(mad)))
 
             # ---- 尺寸一致性 ----
-            dim = dim_pred[b][mask]  # [N]
-            mean_dim = dim.mean()
-            loss_dim = F.mse_loss(dim, mean_dim.expand_as(dim))
+            if inst_prim is None or inst_prim in (1, 2, 3):
+                dim = dim_pred[b][mask]  # [N]
+                mean_dim = dim.mean()
+                terms.append(F.mse_loss(dim, mean_dim.expand_as(dim)))
 
             # ---- 主位置一致性 ----
-            loc = loc_pred[b][mask]  # [N, 3]
-            mean_loc = loc.mean(0, keepdim=True)
-            loss_loc = F.mse_loss(loc, mean_loc.expand_as(loc))
+            if inst_prim is None or inst_prim in (0, 1, 2, 3):
+                loc = loc_pred[b][mask]  # [N, 3]
+                mean_loc = loc.mean(0, keepdim=True)
+                terms.append(F.mse_loss(loc, mean_loc.expand_as(loc)))
 
-            loss_total += (loss_pmt + loss_mad + loss_dim + loss_loc)
-
-    # 归一化
-    return 0.2 * (loss_total / bs)
+    if len(terms) == 0:
+        return _zero_loss(log_pmt_pred)
+    return torch.stack(terms).mean()
 
 
 def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx, eps=1e-6):
+                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx,
+                    point_emb=None, weights=None, current_epoch=0,
+                    geom_warmup_epoch=20, eps=1e-6):
     """
     计算损失，包含一般损失和几何损失
 
@@ -851,74 +999,78 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     :param eps: 防止除 0 的调整实数
     """
 
-    # 基元类型
-    pmt_nll = F.nll_loss(log_pmt_pred.view(-1, 5), pmt_gt.view(-1))
+    weights = {} if weights is None else weights
+    w_pmt = float(weights.get("w_pmt", 1.0))
+    w_cluster = float(weights.get("w_cluster", 1.0))
+    w_mad = float(weights.get("w_mad", 0.2))
+    w_dim = float(weights.get("w_dim", 0.2))
+    w_nor = float(weights.get("w_nor", 0.2))
+    w_loc = float(weights.get("w_loc", 0.1))
+    w_geom = float(weights.get("w_geom", 0.2))
+    w_inst = float(weights.get("w_inst", 0.05))
 
-    # # 主方向的长度不应接近 0
-    # mad_pred, loss_mad_min_len = safe_normalize(mad_pred)
-    #
-    # # 法线长度不应接近 0
-    # nor_pred, loss_nor_min_len = safe_normalize(nor_pred)
+    pmt_loss = F.nll_loss(log_pmt_pred.reshape(-1, 5), pmt_gt.reshape(-1))
+    cluster_loss = discriminative_loss(point_emb, affil_idx) if point_emb is not None else _zero_loss(log_pmt_pred)
 
-    # 主方向和法线的长度应接近1，注意法线所有基元类型都有，但是主方向只有平面(0)、圆柱(1)、圆锥(2)有
-    # unit_len_mad = unit_len_loss_with_pmt_considered(mad_pred, pmt_gt, (0, 1, 2))
-    # unit_len_nor = unit_len_loss(nor_pred)
+    mad_pred = F.normalize(mad_pred, dim=-1, eps=eps)
+    nor_pred = F.normalize(nor_pred, dim=-1, eps=eps)
+    mad_gt = F.normalize(mad_gt, dim=-1, eps=eps)
+    nor_gt = F.normalize(nor_gt, dim=-1, eps=eps)
 
-    # 长度归一化
-    mad_pred = mad_pred / (mad_pred.norm(dim=-1, keepdim=True) + eps)
-    nor_pred = nor_pred / (nor_pred.norm(dim=-1, keepdim=True) + eps)
+    mad_mask = _primitive_mask(pmt_gt, (0, 1, 2))
+    dim_mask = _primitive_mask(pmt_gt, (1, 2, 3))
+    nor_mask = _primitive_mask(pmt_gt, (0, 1, 2, 3, 4))
+    loc_mask = _primitive_mask(pmt_gt, (0, 1, 2, 3))
 
-    # 主方向先进行方向的归一化
-    # mad_pred = canonicalize_vectors_hard(mad_pred)
+    mad_loss = _masked_vector_mse(mad_pred, mad_gt, mad_mask, sign_invariant=False, canonicalize=True)
+    dim_loss = _masked_scalar_mse(dim_pred, dim_gt, dim_mask)
+    nor_loss = _masked_vector_mse(nor_pred, nor_gt, nor_mask, sign_invariant=False, canonicalize=False)
+    loc_loss = _masked_scalar_mse(loc_pred, loc_gt, loc_mask)
 
-    # 主方向损失
-    mad_mse = mse_loss_with_pmt_considered(mad_pred, mad_gt, pmt_gt, (2, ))
+    geom_losses = _stage1_geometry_losses(xyz, mad_pred, dim_pred, nor_pred, loc_pred, pmt_gt)
+    inst_loss = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt)
 
-    # 主尺寸损失
-    dim_mse = mse_loss_with_pmt_considered(dim_pred, dim_gt, pmt_gt, (1, 2, 3))
+    if geom_warmup_epoch <= 0:
+        aux_factor = 1.0
+    elif current_epoch < geom_warmup_epoch:
+        aux_factor = 0.0
+    else:
+        aux_factor = min(1.0, float(current_epoch + 1 - geom_warmup_epoch) / float(max(1, geom_warmup_epoch)))
 
-    # 法线损失
-    nor_mse = mse_loss_with_pmt_considered(nor_pred, nor_gt, pmt_gt, (0, 1, 2, 3, 4))
-
-    # 主位置损失
-    loc_mse = mse_loss_with_pmt_considered(loc_pred, loc_gt, pmt_gt, (2, ))  # 测试这个损失很大，可能造成训练不稳定，故注释
-
-    # 平面几何损失
-    loss_plane = geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt)
-
-    # 圆柱几何损失
-    loss_cylinder = geom_loss_cylinder(xyz, mad_pred, nor_pred, dim_pred, loc_pred, pmt_gt)
-
-    # 圆锥几何损失
-    loss_cone = geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
-
-    # 球几何损失
-    loss_sphere = geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt)
-
-    # 实例一致性损失
-    # loss_consistent = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx)
-
-    # 总损失
-    loss_all = pmt_nll + mad_mse + dim_mse + nor_mse + loc_mse + loss_plane + loss_cylinder + loss_cone + loss_sphere
+    loss_all = (
+        w_pmt * pmt_loss
+        + w_cluster * cluster_loss
+        + w_nor * nor_loss
+        + aux_factor * (
+            w_mad * mad_loss
+            + w_dim * dim_loss
+            + w_loc * loc_loss
+            + w_geom * geom_losses["geom_loss"]
+            + w_inst * inst_loss
+        )
+    )
 
     loss_dict = {
-        'all': value_item(loss_all),
-        'pmt_nll': value_item(pmt_nll),
-        'mad_mse': value_item(mad_mse),
-        'dim_mse': value_item(dim_mse),
-        'nor_mse': value_item(nor_mse),
-        'loc_mse': value_item(loc_mse),
-        'loss_plane': value_item(loss_plane),
-        'loss_cylinder': value_item(loss_cylinder),
-        'loss_cone': value_item(loss_cone),
-        'loss_sphere': value_item(loss_sphere),
-        # 'loss_mad_unit_len': value_item(unit_len_mad),
-        # 'loss_nor_unit_len': value_item(unit_len_nor),
-        # 'loss_consistent': value_item(loss_consistent),
+        "loss_all": loss_all,
+        "pmt_loss": pmt_loss,
+        "cluster_loss": cluster_loss,
+        "mad_loss": mad_loss,
+        "dim_loss": dim_loss,
+        "nor_loss": nor_loss,
+        "loc_loss": loc_loss,
+        "geom_loss": geom_losses["geom_loss"],
+        "inst_loss": inst_loss,
+        "loss_plane": geom_losses["loss_plane"],
+        "loss_cylinder": geom_losses["loss_cylinder"],
+        "loss_cone": geom_losses["loss_cone"],
+        "loss_sphere": geom_losses["loss_sphere"],
+        "aux_factor": torch.tensor(aux_factor, device=xyz.device, dtype=xyz.dtype),
     }
 
-    if loss_all.isnan().item() or loss_all.item() >= 20:
-        print(loss_dict)
+    non_finite = [name for name, val in loss_dict.items() if torch.is_tensor(val) and not torch.isfinite(val).all()]
+    if non_finite:
+        printable = {name: value_item(val.detach()) for name, val in loss_dict.items() if torch.is_tensor(val) and val.dim() == 0}
+        print(f"non-finite Stage 1 losses: {non_finite}; values={printable}")
 
     return loss_all, loss_dict
 

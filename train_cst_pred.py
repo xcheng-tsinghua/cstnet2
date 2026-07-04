@@ -8,6 +8,7 @@ import torch
 
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
+from functional.point_features import stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 from colorama import init, Fore, Back
 
@@ -36,13 +37,28 @@ def parse_args():
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
+    parser.add_argument('--stage1_mode', default='multitask', choices=['baseline', 'multitask'], type=str)
+    parser.add_argument('--use_extra_features', default='False', choices=['True', 'False'], type=str)
+    parser.add_argument('--normal_source', default='gt', choices=['gt', 'pca', 'none'], type=str)
+    parser.add_argument('--feature_k', default=16, type=int)
+    parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
+    parser.add_argument('--overfit_one_batch', default='False', choices=['True', 'False'], type=str)
+    parser.add_argument('--w_pmt', default=1.0, type=float)
+    parser.add_argument('--w_cluster', default=1.0, type=float)
+    parser.add_argument('--w_mad', default=0.2, type=float)
+    parser.add_argument('--w_dim', default=0.2, type=float)
+    parser.add_argument('--w_nor', default=0.2, type=float)
+    parser.add_argument('--w_loc', default=0.1, type=float)
+    parser.add_argument('--w_geom', default=0.2, type=float)
+    parser.add_argument('--w_inst', default=0.05, type=float)
+    parser.add_argument('--geom_warmup_epoch', default=20, type=int)
 
     args = parser.parse_args()
     return args
 
 
 def main(args):
-    save_str = f'{args.model}_pmt_prim_cluster'
+    save_str = f'{args.model}_pmt_prim_cluster' if args.stage1_mode == 'baseline' else f'{args.model}_multitask_pmt_prim_cluster'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
     os.makedirs('log', exist_ok=True)
@@ -73,17 +89,42 @@ def main(args):
 
     # trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    use_extra_features = eval(args.use_extra_features)
+    channel_fea = stage1_feature_dim(use_extra_features, args.normal_source)
+    loss_weights = {
+        'w_pmt': args.w_pmt,
+        'w_cluster': args.w_cluster,
+        'w_mad': args.w_mad,
+        'w_dim': args.w_dim,
+        'w_nor': args.w_nor,
+        'w_loc': args.w_loc,
+        'w_geom': args.w_geom,
+        'w_inst': args.w_inst,
+    }
     trainer = CstPredTrainer(
-        model = CstPredWrapper(args.model).to(device),
+        model = CstPredWrapper(
+            args.model,
+            channel_fea=channel_fea,
+            stage1_mode=args.stage1_mode,
+        ).to(device),
         train_loader = train_loader,
         test_loader = test_loader,
         model_savepth = 'model_trained/' + save_str + '.pth',
         log_savepth = os.path.join('log', save_str + f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json'),
         max_epoch = args.epoch,
         lr = args.lr,
+        decay_rate=args.decay_rate,
         is_load_weight = eval(args.is_load_weight),
         save_str=save_str,
-        wandb_run=run
+        wandb_run=run,
+        stage1_mode=args.stage1_mode,
+        loss_weights=loss_weights,
+        geom_warmup_epoch=args.geom_warmup_epoch,
+        use_extra_features=use_extra_features,
+        normal_source=args.normal_source,
+        feature_k=args.feature_k,
+        cluster_bandwidth=args.cluster_bandwidth,
+        overfit_one_batch=eval(args.overfit_one_batch),
     )
     try:
         trainer.start()

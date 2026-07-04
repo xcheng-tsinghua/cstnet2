@@ -48,7 +48,7 @@ class FrozenStage1ConstraintExtractor(nn.Module):
         state = torch.load(checkpoint, map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
-        self.model.load_state_dict(state)
+        self.model.load_state_dict(state, strict=False)
 
     def freeze(self) -> None:
         self.model.eval()

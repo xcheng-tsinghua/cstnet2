@@ -35,3 +35,7 @@ nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=discriminative --
 nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=token_fusion --save_name=stage2_cls_gt_v3 > out_gt_v3.log 2>&1 &
 
 nohup python train_cls.py --bs=20 --epoch=500 > out.log 2>&1 &
+
+
+
+python train_cst_pred.py --epoch 1 --bs 2 --n_points 512 --stage1_mode multitask --use_extra_features True --normal_source gt --is_load_weight False

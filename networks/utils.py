@@ -45,7 +45,7 @@ class MLP(nn.Module):
         elif dimension == 1:
             fc = partial(nn.Conv1d, kernel_size=1)
             bn = nn.BatchNorm1d
-            dp = nn.Dropout1d
+            dp = getattr(nn, 'Dropout1d', nn.Dropout)
 
         elif dimension == 2:
             fc = partial(nn.Conv2d, kernel_size=1)
