@@ -37,5 +37,7 @@ nohup python train_cls.py --bs=20 --epoch=500 --stage2_variant=token_fusion --sa
 nohup python train_cls.py --bs=20 --epoch=500 > out.log 2>&1 &
 
 
+nohup python train_cst_pred.py --bs=40 > out_s1.log 2>&1 &
+tail -f out_s1.log
 
 python train_cst_pred.py --epoch 1 --bs 2 --n_points 512 --stage1_mode multitask --use_extra_features True --normal_source gt --is_load_weight False
