@@ -64,10 +64,14 @@ class CstPredWrapper(nn.Module):
         self.dim_head = None
         self.nor_head = None
         self.loc_head = None
+        self.geometry_decoder = None
 
         if self.stage1_mode == "multitask":
             attr_mid = math.ceil((3 * channel_mid) ** 0.5)
             dim_mid = math.ceil(channel_mid ** 0.5)
+            self.geometry_decoder = utils.MLP(
+                1, (channel_mid, channel_mid, channel_mid), dropout=0.0
+            )
             self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
             self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
             self.nor_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
@@ -102,10 +106,11 @@ class CstPredWrapper(nn.Module):
         if self.stage1_mode == "baseline":
             return pnt_fea_l2norm, pmt_log_softmax
 
-        mad_pred = F.normalize(self.mad_head(embedding), dim=1, eps=1e-6).permute(0, 2, 1)
-        dim_pred = F.softplus(self.dim_head(embedding)).squeeze(1)
-        nor_pred = F.normalize(self.nor_head(embedding), dim=1, eps=1e-6).permute(0, 2, 1)
-        loc_pred = self.loc_head(embedding).permute(0, 2, 1)
+        geometry_fea = self.geometry_decoder(embedding)
+        mad_pred = F.normalize(self.mad_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
+        dim_pred = F.softplus(self.dim_head(geometry_fea)).squeeze(1)
+        nor_pred = F.normalize(self.nor_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
+        loc_pred = self.loc_head(geometry_fea).permute(0, 2, 1)
 
         return {
             "embedding": pnt_fea_l2norm,
@@ -115,6 +120,64 @@ class CstPredWrapper(nn.Module):
             "nor": nor_pred,
             "loc": loc_pred,
         }
+
+    def set_train_phase(self, phase: str):
+        """Configure the exact trainable parameter set for Stage 1 phases."""
+        if phase not in ("semantic", "geometry", "joint"):
+            raise ValueError(f"unsupported Stage 1 train phase: {phase}")
+        if self.stage1_mode == "baseline" and phase != "semantic":
+            raise ValueError("baseline Stage 1 only supports train_phase=semantic")
+
+        for param in self.parameters():
+            param.requires_grad_(False)
+
+        if phase == "semantic":
+            trainable_prefixes = ["embedding", "emb_head", "cls_head"]
+            if self.stage1_mode == "multitask":
+                trainable_prefixes.extend(["geometry_decoder", "nor_head"])
+        elif phase == "geometry":
+            trainable_prefixes = [
+                "geometry_decoder", "mad_head", "dim_head", "nor_head", "loc_head"
+            ]
+        else:
+            trainable_prefixes = [
+                "emb_head", "cls_head", "geometry_decoder",
+                "mad_head", "dim_head", "nor_head", "loc_head",
+            ]
+            trainable_prefixes.extend(self._joint_backbone_prefixes())
+
+        for name, param in self.named_parameters():
+            if any(name == prefix or name.startswith(prefix + ".") for prefix in trainable_prefixes):
+                param.requires_grad_(True)
+
+        return trainable_prefixes
+
+    def _joint_backbone_prefixes(self):
+        """Return stable high-level blocks for each supported backbone."""
+        backbone_name = self.embedding.__class__.__name__
+        prefixes_by_backbone = {
+            "Attn3DGcnPointEmbedding": [
+                "embedding.conv2", "embedding.conv3", "embedding.attention"
+            ],
+            "PointNetPointEmbedding": [
+                "embedding.conv4", "embedding.conv5", "embedding.bn4", "embedding.bn5",
+                "embedding.convs1", "embedding.convs2", "embedding.convs3",
+                "embedding.bns1", "embedding.bns2", "embedding.bns3",
+            ],
+            "PointNet2PointEmbedding": [
+                "embedding.sa3", "embedding.fp3", "embedding.fp2", "embedding.fp1"
+            ],
+        }
+        if backbone_name not in prefixes_by_backbone:
+            raise ValueError(f"no joint high-level backbone policy for {backbone_name}")
+        return prefixes_by_backbone[backbone_name]
+
+    def apply_train_phase_mode(self):
+        """Keep fully frozen submodules, especially BatchNorm, in eval mode."""
+        for module in self.modules():
+            parameters = list(module.parameters(recurse=True))
+            if parameters and not any(param.requires_grad for param in parameters):
+                module.eval()
 
 
 

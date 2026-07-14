@@ -971,10 +971,19 @@ def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_
     return torch.stack(terms).mean()
 
 
+def linear_ramp(global_epoch, start_epoch, ramp_epochs):
+    """Linear schedule used by all delayed Stage 1 auxiliary losses."""
+    if ramp_epochs <= 0:
+        return 1.0 if global_epoch >= start_epoch else 0.0
+    progress = (float(global_epoch) - float(start_epoch)) / float(ramp_epochs)
+    return max(0.0, min(1.0, progress))
+
+
 def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
                     pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx,
-                    point_emb=None, weights=None, current_epoch=0,
-                    geom_warmup_epoch=20, eps=1e-6):
+                    point_emb=None, weights=None, global_epoch=None,
+                    geom_start_epoch=20, geom_ramp_epochs=20,
+                    enabled_losses=None, eps=1e-6):
     """
     计算损失，包含一般损失和几何损失
 
@@ -999,15 +1008,19 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     :param eps: 防止除 0 的调整实数
     """
 
+    if global_epoch is None:
+        raise ValueError("constraint_loss requires global_epoch")
+
     weights = {} if weights is None else weights
+    enabled_losses = {} if enabled_losses is None else enabled_losses
     w_pmt = float(weights.get("w_pmt", 1.0))
-    w_cluster = float(weights.get("w_cluster", 1.0))
-    w_mad = float(weights.get("w_mad", 0.2))
-    w_dim = float(weights.get("w_dim", 0.2))
-    w_nor = float(weights.get("w_nor", 0.2))
-    w_loc = float(weights.get("w_loc", 0.1))
-    w_geom = float(weights.get("w_geom", 0.2))
-    w_inst = float(weights.get("w_inst", 0.05))
+    w_cluster = float(weights.get("w_cluster", 0.5))
+    w_mad = float(weights.get("w_mad", 0.02))
+    w_dim = float(weights.get("w_dim", 0.05))
+    w_nor = float(weights.get("w_nor", 0.1))
+    w_loc = float(weights.get("w_loc", 0.02))
+    w_geom = float(weights.get("w_geom", 0.02))
+    w_inst = float(weights.get("w_inst", 0.005))
 
     pmt_loss = F.nll_loss(log_pmt_pred.reshape(-1, 5), pmt_gt.reshape(-1))
     cluster_loss = discriminative_loss(point_emb, affil_idx) if point_emb is not None else _zero_loss(log_pmt_pred)
@@ -1030,25 +1043,38 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     geom_losses = _stage1_geometry_losses(xyz, mad_pred, dim_pred, nor_pred, loc_pred, pmt_gt)
     inst_loss = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt)
 
-    if geom_warmup_epoch <= 0:
-        aux_factor = 1.0
-    elif current_epoch < geom_warmup_epoch:
-        aux_factor = 0.0
-    else:
-        aux_factor = min(1.0, float(current_epoch + 1 - geom_warmup_epoch) / float(max(1, geom_warmup_epoch)))
+    aux_factor = linear_ramp(global_epoch, geom_start_epoch, geom_ramp_epochs)
+    raw_losses = {
+        "pmt": pmt_loss,
+        "cluster": cluster_loss,
+        "mad": mad_loss,
+        "dim": dim_loss,
+        "nor": nor_loss,
+        "loc": loc_loss,
+        "geom": geom_losses["geom_loss"],
+        "inst": inst_loss,
+    }
+    target_weights = {
+        "pmt": w_pmt,
+        "cluster": w_cluster,
+        "mad": w_mad,
+        "dim": w_dim,
+        "nor": w_nor,
+        "loc": w_loc,
+        "geom": w_geom,
+        "inst": w_inst,
+    }
+    ramped_names = {"mad", "dim", "loc", "geom", "inst"}
+    weighted_losses = {}
+    effective_weights = {}
+    for name, raw_loss in raw_losses.items():
+        enabled = bool(enabled_losses.get(name, True))
+        ramp = aux_factor if name in ramped_names else 1.0
+        effective_weight = target_weights[name] * ramp if enabled else 0.0
+        effective_weights[name] = effective_weight
+        weighted_losses[name] = raw_loss * effective_weight
 
-    loss_all = (
-        w_pmt * pmt_loss
-        + w_cluster * cluster_loss
-        + w_nor * nor_loss
-        + aux_factor * (
-            w_mad * mad_loss
-            + w_dim * dim_loss
-            + w_loc * loc_loss
-            + w_geom * geom_losses["geom_loss"]
-            + w_inst * inst_loss
-        )
-    )
+    loss_all = sum(weighted_losses.values())
 
     loss_dict = {
         "loss_all": loss_all,
@@ -1065,7 +1091,15 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         "loss_cone": geom_losses["loss_cone"],
         "loss_sphere": geom_losses["loss_sphere"],
         "aux_factor": torch.tensor(aux_factor, device=xyz.device, dtype=xyz.dtype),
+        "schedule/aux_progress": torch.tensor(aux_factor, device=xyz.device, dtype=xyz.dtype),
+        "schedule/global_epoch": torch.tensor(float(global_epoch), device=xyz.device, dtype=xyz.dtype),
     }
+    for name in raw_losses:
+        loss_dict[f"raw/{name}"] = raw_losses[name]
+        loss_dict[f"weighted/{name}"] = weighted_losses[name]
+        loss_dict[f"effective_weight/{name}"] = torch.tensor(
+            effective_weights[name], device=xyz.device, dtype=xyz.dtype
+        )
 
     non_finite = [name for name, val in loss_dict.items() if torch.is_tensor(val) and not torch.isfinite(val).all()]
     if non_finite:

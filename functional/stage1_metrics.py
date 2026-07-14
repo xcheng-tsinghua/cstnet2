@@ -109,50 +109,58 @@ def evaluate_primitive_metrics(
     pred = log_pmt.detach().argmax(dim=-1).long().reshape(-1)
     target = pmt_gt.detach().long().reshape(-1)
     device = log_pmt.device
+    if target.numel() == 0:
+        confusion = torch.zeros((n_classes, n_classes), device=device, dtype=torch.float32)
+    else:
+        flat_indices = target * n_classes + pred
+        confusion = torch.bincount(
+            flat_indices, minlength=n_classes * n_classes
+        ).reshape(n_classes, n_classes).float()
+    return primitive_metrics_from_confusion(confusion)
 
-    point_acc = (pred == target).float().mean() if target.numel() > 0 else torch.zeros((), device=device)
-    per_class_acc = []
-    per_class_f1 = []
-    per_class_iou = []
 
-    for cls_idx in range(n_classes):
-        pred_c = pred == cls_idx
-        target_c = target == cls_idx
-        tp = (pred_c & target_c).sum().float()
-        fp = (pred_c & ~target_c).sum().float()
-        fn = (~pred_c & target_c).sum().float()
-        support = target_c.sum().float()
+def primitive_metrics_from_confusion(confusion: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """Derive exact epoch metrics from a target-row/prediction-column matrix."""
+    confusion = confusion.float()
+    tp = confusion.diag()
+    gt_hist = confusion.sum(dim=1)
+    pred_hist = confusion.sum(dim=0)
+    fp = pred_hist - tp
+    fn = gt_hist - tp
 
-        acc = tp / support.clamp_min(1.0)
-        precision = tp / (tp + fp).clamp_min(1.0)
-        recall = tp / (tp + fn).clamp_min(1.0)
-        f1 = 2.0 * precision * recall / (precision + recall + 1e-12)
-        iou = tp / (tp + fp + fn).clamp_min(1.0)
+    recall = tp / gt_hist.clamp_min(1.0)
+    precision = tp / (tp + fp).clamp_min(1.0)
+    per_class_f1 = 2.0 * precision * recall / (precision + recall).clamp_min(1e-12)
+    per_class_iou = tp / (tp + fp + fn).clamp_min(1.0)
+    valid = gt_hist > 0
+    valid_float = valid.float()
+    valid_count = valid_float.sum().clamp_min(1.0)
 
-        # Missing classes should not make macro metrics look artificially bad.
-        if support <= 0:
-            acc = torch.zeros((), device=device)
-            f1 = torch.zeros((), device=device)
-            iou = torch.zeros((), device=device)
-
-        per_class_acc.append(acc)
-        per_class_f1.append(f1)
-        per_class_iou.append(iou)
-
-    per_class_acc_t = torch.stack(per_class_acc)
-    per_class_f1_t = torch.stack(per_class_f1)
-    per_class_iou_t = torch.stack(per_class_iou)
-    valid_classes = torch.stack([(target == i).any() for i in range(n_classes)]).to(device=device)
-    valid_float = valid_classes.float()
-    valid_denom = valid_float.sum().clamp_min(1.0)
-
-    macro_f1 = (per_class_f1_t * valid_float).sum() / valid_denom
-    mean_iou = (per_class_iou_t * valid_float).sum() / valid_denom
+    recall = torch.where(valid, recall, torch.zeros_like(recall))
+    per_class_f1 = torch.where(valid, per_class_f1, torch.zeros_like(per_class_f1))
+    per_class_iou = torch.where(valid, per_class_iou, torch.zeros_like(per_class_iou))
+    point_acc = tp.sum() / confusion.sum().clamp_min(1.0)
 
     return {
         "pmt_acc": point_acc,
-        "pmt_per_class_acc": per_class_acc_t,
-        "pmt_macro_f1": macro_f1,
-        "pmt_per_class_iou": per_class_iou_t,
-        "pmt_miou": mean_iou,
+        "pmt_gt_histogram": gt_hist,
+        "pmt_pred_histogram": pred_hist,
+        "pmt_confusion_matrix": confusion,
+        "pmt_per_class_acc": recall,
+        "pmt_per_class_recall": recall,
+        "pmt_per_class_precision": precision,
+        "pmt_per_class_f1": per_class_f1,
+        "pmt_macro_f1": (per_class_f1 * valid_float).sum() / valid_count,
+        "pmt_per_class_iou": per_class_iou,
+        "pmt_miou": (per_class_iou * valid_float).sum() / valid_count,
     }
+
+
+def primitive_prediction_collapsed(
+    predicted_histogram: torch.Tensor,
+    threshold: float = 0.95,
+) -> bool:
+    """Return True when one primitive receives more than threshold of predictions."""
+    histogram = torch.as_tensor(predicted_histogram).float()
+    total = histogram.sum()
+    return bool(total > 0 and histogram.max() / total > threshold)

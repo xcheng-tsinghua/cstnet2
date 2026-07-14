@@ -46,9 +46,35 @@ class FrozenStage1ConstraintExtractor(nn.Module):
         if not os.path.exists(checkpoint):
             raise FileNotFoundError(f"Stage 1 checkpoint not found: {checkpoint}")
         state = torch.load(checkpoint, map_location="cpu")
-        if isinstance(state, dict) and "state_dict" in state:
+        if isinstance(state, dict) and "model" in state:
+            state = state["model"]
+        elif isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
-        self.model.load_state_dict(state, strict=False)
+        if not isinstance(state, dict):
+            raise ValueError(f"invalid Stage 1 model state: {checkpoint}")
+
+        current = self.model.state_dict()
+        missing = sorted(key for key in current if key not in state)
+        unexpected = sorted(key for key in state if key not in current)
+        shape_mismatch = {}
+        for key in set(state).intersection(current):
+            incoming = state[key]
+            if not torch.is_tensor(incoming):
+                shape_mismatch[key] = ("not-a-tensor", tuple(current[key].shape))
+            elif tuple(incoming.shape) != tuple(current[key].shape):
+                shape_mismatch[key] = (
+                    tuple(incoming.shape), tuple(current[key].shape)
+                )
+        compatible = {
+            key: value
+            for key, value in state.items()
+            if key in current and key not in shape_mismatch
+        }
+        print(f"Stage 1 missing_keys: {missing}")
+        print(f"Stage 1 unexpected_keys: {unexpected}")
+        print(f"Stage 1 shape_mismatch: {shape_mismatch}")
+        print(f"Stage 1 common weights loaded completely: {not missing and not shape_mismatch}")
+        self.model.load_state_dict(compatible, strict=False)
 
     def freeze(self) -> None:
         self.model.eval()
