@@ -41,3 +41,29 @@ nohup python train_cst_pred.py --bs=40 > out_s1.log 2>&1 &
 tail -f out_s1.log
 
 python train_cst_pred.py --epoch 1 --bs 2 --n_points 512 --stage1_mode baseline --use_extra_features True --normal_source gt --is_load_weight False
+
+
+------ 新 stage1 训练
+1. Semantic 阶段
+python train_cst_pred.py --epoch 100 --bs 20 --model attn_3dgcn --stage1_mode multitask --train_phase semantic --use_extra_features True --normal_source gt
+
+2. Geometry 阶段
+从 semantic 最佳权重初始化，使用新 optimizer：
+python train_cst_pred.py --epoch 50 --bs 20 --model attn_3dgcn --stage1_mode multitask --train_phase geometry --use_extra_features True --normal_source gt --geom_start_epoch 0 --geom_ramp_epochs 10 --init_from_checkpoint model_trained/attn_3dgcn_multitask_semantic_pmt_prim_cluster/best_pmt_miou.pth
+
+3. Joint 阶段
+python train_cst_pred.py --epoch 100 --bs 20 --model attn_3dgcn --stage1_mode multitask --train_phase joint --use_extra_features True --normal_source gt --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 --init_from_checkpoint model_trained/attn_3dgcn_multitask_geometry_pmt_prim_cluster/best_constraint_score.pth
+
+
+中断后完整续训
+必须保持 phase、点数、特征设置、loss 权重和 ramp 配置一致：
+python train_cst_pred.py --epoch 200 --bs 20 --model attn_3dgcn --stage1_mode multitask --train_phase joint --use_extra_features True --normal_source gt --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 --resume_checkpoint model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/last.pth
+其中 resume 的 --epoch 200 表示训练到 global epoch 200，不是额外训练 200 轮。
+
+Baseline smoke
+python train_cst_pred.py --epoch 1 --bs 20 --stage1_mode baseline --train_phase semantic
+
+One-batch overfit
+python train_cst_pred.py --epoch 20 --bs 20 --stage1_mode multitask --train_phase joint --overfit_one_batch True --geom_start_epoch 0 --geom_ramp_epochs 5
+
+
