@@ -2,27 +2,25 @@
 
 ## 1. Project Overview
 
-This project is a point cloud learning project for mechanical parts. Its core idea is to use explicit geometric constraints extracted from CAD-derived point clouds to improve point cloud classification and point cloud generation.
+This project is a point cloud learning project for mechanical parts. Its core idea is to use explicit geometric constraints extracted from CAD-derived point clouds to improve point cloud classification and point cloud segmentation.
 
 The project follows a strict two-stage architecture:
 
 1. **Stage 1: Constraint Extraction**
 
-   * Input: raw or noisy 3D point cloud.
+   * Input: raw 3D point cloud.
    * Output: per-point constraint representation.
    * Stage 1 learns to predict per-point primitive types and per-point clustering features.
    * Points belonging to the same geometric primitive are grouped through clustering.
    * Geometric primitive fitting is then performed for each cluster.
    * The fitted primitives are used to compute the final per-point constraint representation.
 
-2. **Stage 2: Constraint-Aware Classification and Generation**
+2. **Stage 2: Constraint-Aware Classification and Segmentation**
 
    * Input: point cloud coordinates and per-point constraint representation extracted by Stage 1.
-   * Stage 2 uses the original point cloud and the extracted constraints for downstream tasks.
-   * For classification, Stage 2 encodes the point cloud and constraints to predict the mechanical part category.
-   * For generation, Stage 2 uses a diffusion-based structure to predict noise from noisy point clouds, constraints, and diffusion timesteps.
+   * Stage 2 uses the original point cloud and the extracted constraints for classification and segmentation.
 
-Stage 1 and Stage 2 must be trained separately. Stage 1 is trained first as a reusable constraint extraction model. After Stage 1 training is completed, all Stage 1 parameters must be frozen. For both classification and generation, only Stage 2 should be trained.
+Stage 1 and Stage 2 must be trained separately. Stage 1 is trained first as a reusable constraint extraction model. After Stage 1 training is completed, all Stage 1 parameters must be frozen. For both classification and segmentation, only Stage 2 should be trained.
 
 ---
 
@@ -183,12 +181,8 @@ Input point cloud
     ↓
 Stage 1: extract per-point constraints
     ↓
-Stage 2: use point cloud + constraints for classification or generation
+Stage 2: use point cloud + constraints for classification or segmentation
 ```
-
-Stage 1 is a pretrained and frozen constraint extractor during Stage 2 training.
-
-Stage 2 is the task-specific model. It is trained for classification or generation while Stage 1 remains frozen.
 
 ---
 
@@ -302,16 +296,16 @@ The final output of Stage 1 is the per-point constraint representation for the e
 
 ---
 
-## 5. Stage 2: Constraint-Aware Classification and Generation
+## 5. Stage 2: Constraint-Aware Classification and Segmentation
 
 ### 5.1 Purpose of Stage 2
 
 Stage 2 is responsible for downstream constraint-aware learning tasks, including:
 
 1. Mechanical part point cloud classification.
-2. Mechanical part point cloud generation.
+2. Mechanical part point cloud segmentation.
 
-For both classification and generation, only Stage 2 should be trained. Stage 1 must remain frozen.
+For both classification and segmentation, only Stage 2 should be trained. Stage 1 must remain frozen.
 
 During Stage 2 training, the input point cloud should first be passed through the frozen Stage 1 model to obtain the per-point constraint representation. Then, the point cloud and its constraint representation are used as input to Stage 2.
 
@@ -371,15 +365,7 @@ Task-specific output
 
 For classification, Stage 2 uses an encoder and classification head.
 
-For generation, Stage 2 uses a diffusion-based network that receives:
-
-```text
-noisy point cloud at timestep t
-per-point constraint representation extracted by frozen Stage 1
-diffusion timestep t
-```
-
-and predicts the noise.
+For segmentation, Stage 2 uses an encoder, decoder, and segmentation head:
 
 ---
 
@@ -425,70 +411,6 @@ During Stage 2 training, Stage 1 must be used as a frozen pretrained constraint 
 
 Stage 2 should be trained after Stage 1 has been trained and frozen.
 
-For classification and generation, only Stage 2 should be trained.
+For classification and segmentation, only Stage 2 should be trained.
 
 ---
-
-## 7. Correct Workflow for Classification
-
-For point cloud classification, the workflow is:
-
-```text
-input point cloud: [batch_size, num_points, 3]
-    ↓
-frozen Stage 1 constraint extractor
-    ↓
-per-point constraint representation
-    ↓
-Stage 2 encoder
-    ↓
-constraint-aware global feature
-    ↓
-classification head
-    ↓
-class prediction
-```
-
----
-
-## 8. Correct Workflow for Generation
-
-For point cloud generation, use a diffusion-based training strategy.
-
-At diffusion timestep `t`, the model receives a noisy point cloud:
-
-```python
-noisy_point_cloud_t.shape == [batch_size, num_points, 3]
-```
-
-The noisy point cloud at timestep `t` should first be passed through the frozen Stage 1 model to obtain the per-point constraint representation.
-
-Then, Stage 2 receives:
-
-```text
-noisy point cloud at timestep t
-per-point constraint representation extracted by frozen Stage 1
-diffusion timestep t
-```
-
-Stage 2 predicts the noise added to the point cloud.
-
-The generation training workflow is:
-
-```text
-clean point cloud
-    ↓
-add noise according to diffusion timestep t
-    ↓
-noisy point cloud at timestep t: [batch_size, num_points, 3]
-    ↓
-frozen Stage 1 constraint extractor
-    ↓
-per-point constraint representation
-    ↓
-Stage 2 encoder-decoder / diffusion network
-    ↓
-predicted noise
-    ↓
-diffusion loss
-```
