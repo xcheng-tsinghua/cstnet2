@@ -1,0 +1,31 @@
+{
+  "dataset": "MFCAD++",
+  "source": "https://gitlab.com/qub_femg/machine-learning/mfcad2-dataset/-/raw/main/dataset_description.txt",
+  "labels": [
+    {"id": 0, "name": "chamfer", "display_name": "Chamfer", "color": "#1f77b4"},
+    {"id": 1, "name": "through_hole", "display_name": "Through hole", "color": "#ff7f0e"},
+    {"id": 2, "name": "triangular_passage", "display_name": "Triangular passage", "color": "#2ca02c"},
+    {"id": 3, "name": "rectangular_passage", "display_name": "Rectangular passage", "color": "#d62728"},
+    {"id": 4, "name": "six_sided_passage", "display_name": "6-sides passage", "color": "#9467bd"},
+    {"id": 5, "name": "triangular_through_slot", "display_name": "Triangular through slot", "color": "#8c564b"},
+    {"id": 6, "name": "rectangular_through_slot", "display_name": "Rectangular through slot", "color": "#e377c2"},
+    {"id": 7, "name": "circular_through_slot", "display_name": "Circular through slot", "color": "#7f7f7f"},
+    {"id": 8, "name": "rectangular_through_step", "display_name": "Rectangular through step", "color": "#bcbd22"},
+    {"id": 9, "name": "two_sided_through_step", "display_name": "2-sides through step", "color": "#17becf"},
+    {"id": 10, "name": "slanted_through_step", "display_name": "Slanted through step", "color": "#393b79"},
+    {"id": 11, "name": "o_ring", "display_name": "O-ring", "color": "#637939"},
+    {"id": 12, "name": "blind_hole", "display_name": "Blind hole", "color": "#8c6d31"},
+    {"id": 13, "name": "triangular_pocket", "display_name": "Triangular pocket", "color": "#843c39"},
+    {"id": 14, "name": "rectangular_pocket", "display_name": "Rectangular pocket", "color": "#7b4173"},
+    {"id": 15, "name": "six_sided_pocket", "display_name": "6-sides pocket", "color": "#3182bd"},
+    {"id": 16, "name": "circular_end_pocket", "display_name": "Circular end pocket", "color": "#31a354"},
+    {"id": 17, "name": "rectangular_blind_slot", "display_name": "Rectangular blind slot", "color": "#756bb1"},
+    {"id": 18, "name": "vertical_circular_end_blind_slot", "display_name": "Vertical circular end blind slot", "color": "#636363"},
+    {"id": 19, "name": "horizontal_circular_end_blind_slot", "display_name": "Horizontal circular end blind slot", "color": "#e6550d"},
+    {"id": 20, "name": "triangular_blind_step", "display_name": "Triangular blind step", "color": "#969696"},
+    {"id": 21, "name": "circular_blind_step", "display_name": "Circular blind step", "color": "#6baed6"},
+    {"id": 22, "name": "rectangular_blind_step", "display_name": "Rectangular blind step", "color": "#74c476"},
+    {"id": 23, "name": "round", "display_name": "Round", "color": "#9e9ac8"},
+    {"id": 24, "name": "stock", "display_name": "Stock", "color": "#bdbdbd"}
+  ]
+}

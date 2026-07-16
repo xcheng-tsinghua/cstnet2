@@ -336,6 +336,34 @@ For a small debug run:
 python train_gen.py --constraint_source gt --is_sample True --epoch 1 --bs 2 --n_points 128
 ```
 
+### Train Stage 2 MFCAD++ Segmentation
+
+The MFCAD++ point files must use the 17-column format documented in
+`data_utils/mfcad_seg_dataset.py`. Constraints are assumed to have already been
+predicted by the frozen Stage 1 extractor. The class count and stable colors are
+read from `data_utils/mfcad_label_map.json`; they are not hard-coded in the
+network.
+
+```bash
+python train_stage2_seg.py --data_root D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd
+```
+
+Training accepts either `val/` or `validation/` and can start before a `test/`
+directory is present. It writes `class_statistics.json` using the training split
+only, plus `last.pth` and `best_point_miou.pth` under the output directory.
+
+Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
+
+```bash
+python train_stage2_seg.py --resume model_trained/stage2_mfcad_seg/last.pth
+```
+
+Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views:
+
+```bash
+python eval_stage2_seg.py model_trained/stage2_mfcad_seg/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
+```
+
 ### Visualization
 
 Visualization is optional and requires `open3d`.

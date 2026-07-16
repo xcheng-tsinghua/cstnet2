@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Tuple
+from typing import Dict, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -80,7 +80,12 @@ class ConstraintStreamInitializer(nn.Module):
             }
         )
 
-    def forward(self, xyz: torch.Tensor, constraints: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        constraints: torch.Tensor,
+        component_masks: torch.Tensor | None = None,
+    ) -> Dict[str, torch.Tensor]:
         # xyz: [B, N, 3]
         # constraints: [B, N, CONSTRAINT_DIM]
         # Output: dict with keys ["primitive_type", "direction", "dimension", "continuity", "location", "xyz"]
@@ -89,11 +94,21 @@ class ConstraintStreamInitializer(nn.Module):
         parts = split_constraint_tensor(constraints)
         streams = {}
 
-        for name in ["primitive_type", "direction", "dimension", "continuity", "location"]:
+        if component_masks is not None:
+            if component_masks.shape != (*xyz.shape[:2], len(COMPONENT_STREAM_NAMES)):
+                raise ValueError(
+                    "expected component masks [B, N, 5], got "
+                    f"{tuple(component_masks.shape)}"
+                )
+
+        for component_id, name in enumerate(COMPONENT_STREAM_NAMES):
             component = parts[name]
             # [B, N, D_component] -> [B, N, 3 + D_component]
             concatenated = torch.cat([xyz, component], dim=-1)
             streams[name] = self.encoders[name](concatenated)
+            if component_masks is not None:
+                valid = component_masks[..., component_id:component_id + 1]
+                streams[name] = streams[name] * valid.to(dtype=streams[name].dtype)
 
         # xyz-only stream (main constraint stream)
         streams["xyz"] = self.encoders["xyz"](xyz)
@@ -262,7 +277,14 @@ class MultiStreamSetAbstractionLayer(nn.Module):
             }
         )
 
-    def forward(self, xyz: torch.Tensor, streams: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        streams: Dict[str, torch.Tensor],
+        return_indices: bool = False,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]] | Tuple[
+        torch.Tensor, Dict[str, torch.Tensor], torch.Tensor
+    ]:
         # xyz: [B, N, 3]
         # streams: dict with 6 features [B, N, C_in]
         # Output: (center_xyz [B, S, 3], updated_streams dict [B, S, C_out])
@@ -281,6 +303,8 @@ class MultiStreamSetAbstractionLayer(nn.Module):
             aggregated = self.aggregators[stream_name](center_features, neighbor_features, relative_xyz)
             updated_streams[stream_name] = aggregated  # [B, S, C_out]
 
+        if return_indices:
+            return center_xyz, updated_streams, center_idx
         return center_xyz, updated_streams
 
 
@@ -323,6 +347,7 @@ class ComponentToConstraintCrossAttention(nn.Module):
         dimension_feature: torch.Tensor,
         continuity_feature: torch.Tensor,
         location_feature: torch.Tensor,
+        component_validity: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # constraint_feature: [B, S, C]
         # component_features: [B, S, C] each
@@ -343,8 +368,27 @@ class ComponentToConstraintCrossAttention(nn.Module):
         query = constraint_feature.unsqueeze(2).reshape(B * S, 1, C)
         context = component_context.reshape(B * S, 5, C)
 
-        # Apply multi-head attention
-        updated, _ = self.attention(query, context, context)  # [B*S, 1, C]
+        key_padding_mask = None
+        if component_validity is not None:
+            if component_validity.shape != (B, S, len(COMPONENT_STREAM_NAMES)):
+                raise ValueError(
+                    "expected component validity [B, S, 5], got "
+                    f"{tuple(component_validity.shape)}"
+                )
+            valid = component_validity.to(dtype=torch.bool)
+            if not bool(valid.any(dim=-1).all()):
+                raise ValueError("each point must have at least one valid constraint component")
+            key_padding_mask = ~valid.reshape(B * S, len(COMPONENT_STREAM_NAMES))
+
+        # Apply multi-head attention. Invalid geometric attributes are excluded
+        # explicitly instead of being inferred from sentinel numeric values.
+        updated, _ = self.attention(
+            query,
+            context,
+            context,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )  # [B*S, 1, C]
         updated = updated.reshape(B, S, C)
 
         # Residual and normalization
@@ -358,67 +402,199 @@ class ComponentToConstraintCrossAttention(nn.Module):
 
 class MultiStreamConstraintEncoder(nn.Module):
     """
-    Hierarchical encoder applying multiple levels of set abstraction and cross-attention.
+    Hierarchical encoder applying shared sampling and one-way cross-attention.
 
-    Tracks all streams and xyz coordinates at each level for decoder skip connections.
+    The two-level default is the original Stage 2 classification encoder. Dense
+    tasks may request a third level without duplicating the six-stream design.
     """
 
-    def __init__(self, feature_dim: int = 96, latent_dim: int = 512):
+    def __init__(
+        self,
+        feature_dim: int = 96,
+        latent_dim: int = 512,
+        stage_channels: Sequence[int] = (160, 320),
+        n_centers: Sequence[int] = (512, 128),
+        n_neighbors: Sequence[int] = (32, 32),
+    ):
         super().__init__()
-        self.feature_dim = feature_dim
+        del latent_dim  # Kept in the public signature for compatibility.
+        if len(stage_channels) not in (2, 3):
+            raise ValueError("the multi-stream encoder supports two or three hierarchy levels")
+        if not (len(stage_channels) == len(n_centers) == len(n_neighbors)):
+            raise ValueError("stage_channels, n_centers and n_neighbors must have equal lengths")
 
-        # Hierarchy levels
-        self.sa1 = MultiStreamSetAbstractionLayer(512, 32, feature_dim, 160)
-        self.ca1 = ComponentToConstraintCrossAttention(160)
+        self.feature_dim = int(feature_dim)
+        self.stage_channels = tuple(int(channel) for channel in stage_channels)
 
-        self.sa2 = MultiStreamSetAbstractionLayer(128, 32, 160, 320)
-        self.ca2 = ComponentToConstraintCrossAttention(320)
+        # Attribute names and default tensor shapes remain unchanged so old
+        # classification state dictionaries load without remapping.
+        self.sa1 = MultiStreamSetAbstractionLayer(
+            n_centers[0], n_neighbors[0], self.feature_dim, self.stage_channels[0]
+        )
+        self.ca1 = ComponentToConstraintCrossAttention(self.stage_channels[0])
+        self.sa2 = MultiStreamSetAbstractionLayer(
+            n_centers[1], n_neighbors[1], self.stage_channels[0], self.stage_channels[1]
+        )
+        self.ca2 = ComponentToConstraintCrossAttention(self.stage_channels[1])
+
+        if len(self.stage_channels) == 3:
+            self.sa3 = MultiStreamSetAbstractionLayer(
+                n_centers[2], n_neighbors[2], self.stage_channels[1], self.stage_channels[2]
+            )
+            self.ca3 = ComponentToConstraintCrossAttention(self.stage_channels[2])
+        else:
+            self.sa3 = None
+            self.ca3 = None
+
+    @staticmethod
+    def _sample_masks(
+        component_masks: torch.Tensor | None,
+        center_idx: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if component_masks is None:
+            return None
+        return utils.index_points(component_masks, center_idx)
+
+    @staticmethod
+    def _mask_component_streams(
+        streams: Dict[str, torch.Tensor],
+        component_masks: torch.Tensor | None,
+    ) -> Dict[str, torch.Tensor]:
+        if component_masks is None:
+            return streams
+        for component_id, name in enumerate(COMPONENT_STREAM_NAMES):
+            valid = component_masks[..., component_id:component_id + 1]
+            streams[name] = streams[name] * valid.to(dtype=streams[name].dtype)
+        return streams
+
+    @staticmethod
+    def _cross_attention(
+        layer: ComponentToConstraintCrossAttention,
+        streams: Dict[str, torch.Tensor],
+        component_masks: torch.Tensor | None,
+    ) -> Dict[str, torch.Tensor]:
+        streams["xyz"] = layer(
+            streams["xyz"],
+            streams["primitive_type"],
+            streams["direction"],
+            streams["dimension"],
+            streams["continuity"],
+            streams["location"],
+            component_validity=component_masks,
+        )
+        return streams
+
+    def _encode_level(
+        self,
+        abstraction: MultiStreamSetAbstractionLayer,
+        cross_attention: ComponentToConstraintCrossAttention,
+        xyz: torch.Tensor,
+        streams: Dict[str, torch.Tensor],
+        component_masks: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor | None]:
+        center_xyz, updated_streams, center_idx = abstraction(
+            xyz,
+            streams,
+            return_indices=True,
+        )
+        updated_masks = self._sample_masks(component_masks, center_idx)
+        updated_streams = self._mask_component_streams(updated_streams, updated_masks)
+        updated_streams = self._cross_attention(
+            cross_attention,
+            updated_streams,
+            updated_masks,
+        )
+        return center_xyz, updated_streams, updated_masks
 
     def forward(
-        self, xyz: torch.Tensor, streams: Dict[str, torch.Tensor]
+        self,
+        xyz: torch.Tensor,
+        streams: Dict[str, torch.Tensor],
+        component_masks: torch.Tensor | None = None,
     ) -> Tuple[Dict[str, torch.Tensor], Dict]:
-        # xyz: [B, N, 3]
-        # streams: dict of [B, N, feature_dim]
-        # Output: (final_streams dict, history dict with xyz and streams at each level)
-
         history = {
             "xyz": [xyz],
             "streams": [streams],
+            "component_masks": [component_masks],
         }
 
-        # Level 1: Set abstraction
-        xyz1, streams1 = self.sa1(xyz, streams)
+        xyz1, streams1, masks1 = self._encode_level(
+            self.sa1, self.ca1, xyz, streams, component_masks
+        )
         history["xyz"].append(xyz1)
         history["streams"].append(streams1)
+        history["component_masks"].append(masks1)
 
-        # Level 1: Cross-attention (update constraint stream only)
-        streams1["xyz"] = self.ca1(
-            streams1["xyz"],
-            streams1["primitive_type"],
-            streams1["direction"],
-            streams1["dimension"],
-            streams1["continuity"],
-            streams1["location"],
+        xyz2, streams2, masks2 = self._encode_level(
+            self.sa2, self.ca2, xyz1, streams1, masks1
         )
-        history["streams"][-1] = streams1
-
-        # Level 2: Set abstraction
-        xyz2, streams2 = self.sa2(xyz1, streams1)
         history["xyz"].append(xyz2)
         history["streams"].append(streams2)
+        history["component_masks"].append(masks2)
 
-        # Level 2: Cross-attention (update constraint stream only)
-        streams2["xyz"] = self.ca2(
-            streams2["xyz"],
-            streams2["primitive_type"],
-            streams2["direction"],
-            streams2["dimension"],
-            streams2["continuity"],
-            streams2["location"],
+        if self.sa3 is None or self.ca3 is None:
+            return streams2, history
+
+        xyz3, streams3, masks3 = self._encode_level(
+            self.sa3, self.ca3, xyz2, streams2, masks2
         )
-        history["streams"][-1] = streams2
+        history["xyz"].append(xyz3)
+        history["streams"].append(streams3)
+        history["component_masks"].append(masks3)
+        return streams3, history
 
-        return streams2, history
+
+class Stage2ConstraintBackbone(nn.Module):
+    """Reusable six-stream Stage 2 backbone for global and dense tasks."""
+
+    def __init__(
+        self,
+        feature_dim: int = 64,
+        stage_channels: Sequence[int] = (128, 256, 512),
+        n_centers: Sequence[int] = (512, 128, 32),
+        n_neighbors: Sequence[int] = (32, 32, 32),
+        norm_type: str = "ln",
+    ):
+        super().__init__()
+        self.feature_dim = int(feature_dim)
+        self.stage_channels = tuple(int(channel) for channel in stage_channels)
+        self.constraint_init = ConstraintStreamInitializer(self.feature_dim, norm_type=norm_type)
+        self.encoder = MultiStreamConstraintEncoder(
+            feature_dim=self.feature_dim,
+            stage_channels=self.stage_channels,
+            n_centers=n_centers,
+            n_neighbors=n_neighbors,
+        )
+
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        constraints: torch.Tensor,
+        component_masks: torch.Tensor | None = None,
+        return_pyramid: bool = False,
+    ) -> torch.Tensor | Dict[str, object]:
+        if xyz.ndim != 3 or xyz.shape[-1] != 3:
+            raise ValueError(f"expected xyz [B, N, 3], got {tuple(xyz.shape)}")
+        if constraints.shape != (*xyz.shape[:2], CONSTRAINT_DIM):
+            raise ValueError(
+                f"expected constraints [B, N, {CONSTRAINT_DIM}], got {tuple(constraints.shape)}"
+            )
+
+        streams = self.constraint_init(xyz, constraints, component_masks=component_masks)
+        final_streams, history = self.encoder(
+            xyz,
+            streams,
+            component_masks=component_masks,
+        )
+        if not return_pyramid:
+            return final_streams["xyz"].max(dim=1).values
+
+        return {
+            "xyz": history["xyz"],
+            "main": [level_streams["xyz"] for level_streams in history["streams"]],
+            "streams": history["streams"],
+            "component_masks": history["component_masks"],
+        }
 
 
 class GlobalMultiPooling(nn.Module):
