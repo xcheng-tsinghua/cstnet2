@@ -20,11 +20,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser("Stage 2 MFCAD++ point segmentation")
     parser.add_argument(
         "--data_root",
-        default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd",
+        default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd",
     )
     parser.add_argument("--label_map", default=str(DEFAULT_LABEL_MAP))
     parser.add_argument("--output_dir", default="model_trained/stage2_mfcad_seg")
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=50)
     parser.add_argument("--n_points", type=int, default=2048)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
