@@ -69,3 +69,9 @@ python train_cst_pred.py --epoch 20 --bs 20 --stage1_mode multitask --train_phas
 -- stage2 seg
 nohup python train_stage2_seg.py > out_s2seg.log 2>&1 &
 tail -f out_s2seg.log
+
+
+
+nohup python train_stage2_seg.py --model pointnet2 --resume false --batch_size=100 > out_s2seg_pn2.log 2>&1 &
+tail -f out_s2seg_pn2.log
+

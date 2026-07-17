@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +24,54 @@ from networks.segmentation_models import (
 
 
 MODEL_OUTPUT_ROOT = Path("model_trained/seg")
+
+
+def preload_cuda_nvrtc(cuda_version: str | None = None) -> str | None:
+    """Load pip-packaged NVRTC globally for cuDNN attention on Linux.
+
+    NVIDIA's pip wheels keep NVRTC below ``site-packages/nvidia``.  That
+    directory is not necessarily present in the dynamic loader search path of
+    non-interactive processes such as ``nohup`` jobs, while cuDNN Frontend
+    loads NVRTC by its soname at runtime.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    cuda_version = cuda_version or torch.version.cuda
+    if not cuda_version:
+        return None
+
+    cuda_major = cuda_version.split(".", maxsplit=1)[0]
+    soname = f"libnvrtc.so.{cuda_major}"
+    load_mode = getattr(ctypes, "RTLD_GLOBAL", 0)
+    try:
+        ctypes.CDLL(soname, mode=load_mode)
+        return soname
+    except OSError as soname_error:
+        candidates = []
+        for entry in sys.path:
+            if not entry:
+                continue
+            candidate = (
+                Path(entry) / "nvidia" / "cuda_nvrtc" / "lib" / soname
+            )
+            if candidate.is_file():
+                candidates.append(candidate)
+
+        load_errors = []
+        for candidate in candidates:
+            try:
+                ctypes.CDLL(str(candidate), mode=load_mode)
+                return str(candidate)
+            except OSError as error:
+                load_errors.append(f"{candidate}: {error}")
+
+        details = "; ".join(load_errors) if load_errors else str(soname_error)
+        raise RuntimeError(
+            f"Could not load {soname}, which is required by CUDA attention "
+            "kernels. Add the matching nvidia/cuda_nvrtc/lib directory to "
+            "LD_LIBRARY_PATH or reinstall the PyTorch CUDA runtime. "
+            f"Details: {details}"
+        ) from soname_error
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -197,9 +247,17 @@ def main(args: argparse.Namespace) -> None:
     rank = dist.get_rank() if distributed else 0
     set_seed(args.seed + rank)
     model_config = segmentation_model_config(args)
+    nvrtc_library = None
+    if (
+        device.type == "cuda"
+        and model_config["model"] == DEFAULT_SEGMENTATION_MODEL
+    ):
+        nvrtc_library = preload_cuda_nvrtc()
     output_dir, resume_checkpoint = resolve_training_paths(model_config, args.resume)
     if rank == 0:
         log_training_configuration(args, device, output_dir)
+        if nvrtc_library is not None:
+            print(f"CUDA NVRTC: preloaded {nvrtc_library}")
 
     train_loader, val_loader, _ = MFCADSegmentationDataset.create_dataloaders(
         root=args.data_root,

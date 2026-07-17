@@ -10,6 +10,39 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_nvrtc_preloader_finds_pip_packaged_library(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import train_stage2_seg
+
+        with tempfile.TemporaryDirectory() as directory:
+            library = (
+                Path(directory)
+                / "nvidia"
+                / "cuda_nvrtc"
+                / "lib"
+                / "libnvrtc.so.12"
+            )
+            library.parent.mkdir(parents=True)
+            library.touch()
+            with (
+                patch.object(train_stage2_seg.sys, "platform", "linux"),
+                patch.object(train_stage2_seg.sys, "path", [directory]),
+                patch.object(
+                    train_stage2_seg.ctypes,
+                    "CDLL",
+                    side_effect=(OSError("not in loader path"), object()),
+                ) as loader,
+            ):
+                loaded = train_stage2_seg.preload_cuda_nvrtc("12.1")
+
+        self.assertEqual(loaded, str(library))
+        self.assertEqual(loader.call_count, 2)
+        self.assertEqual(loader.call_args_list[0].args[0], "libnvrtc.so.12")
+        self.assertEqual(loader.call_args_list[1].args[0], str(library))
+
     def test_pointnet2_fp16_interpolation_handles_duplicate_points(self):
         from networks.point_net2 import three_nn_interpolate
 
