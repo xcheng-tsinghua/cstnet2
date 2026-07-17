@@ -157,11 +157,34 @@ class Stage2SegmentationTrainer:
             for key in ("xyz", "constraints", "constraint_masks", "labels", "face_ids")
         }
 
+    def _backward_and_step(self, loss: torch.Tensor) -> tuple[torch.Tensor, bool]:
+        """Backpropagate once and report whether AMP skipped the optimizer step."""
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self.optimizer)
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), self.gradient_clip_norm
+        )
+        if not self.use_amp and not bool(
+            torch.isfinite(torch.as_tensor(gradient_norm)).item()
+        ):
+            raise FloatingPointError("Stage 2 segmentation gradient norm is NaN or Inf")
+
+        scale_before_step = float(self.scaler.get_scale())
+        # With AMP enabled, GradScaler skips optimizer.step() when unscale_ found
+        # Inf/NaN gradients and lowers the scale so a later batch can recover.
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        optimizer_step_skipped = (
+            self.use_amp and float(self.scaler.get_scale()) < scale_before_step
+        )
+        return torch.as_tensor(gradient_norm), optimizer_step_skipped
+
     def _run_epoch(self, loader: Any, training: bool, epoch: int) -> tuple[float, dict[str, Any]]:
         self.model.train(training)
         metrics = SegmentationMetrics(self.num_classes)
         total_loss = 0.0
         batch_count = 0
+        amp_skipped_steps = 0
         description = f"train {epoch + 1}/{self.epochs}" if training else f"val {epoch + 1}/{self.epochs}"
         iterator = tqdm(loader, desc=description, disable=not self.is_main)
 
@@ -180,23 +203,21 @@ class Stage2SegmentationTrainer:
                     loss = self.criterion(logits, batch["labels"])
 
                 if training:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    gradient_norm = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.gradient_clip_norm
-                    )
-                    if not torch.isfinite(torch.as_tensor(gradient_norm)):
-                        raise FloatingPointError("Stage 2 segmentation gradient norm is NaN or Inf")
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.scheduler.step()
-                    self.global_step += 1
+                    _, optimizer_step_skipped = self._backward_and_step(loss)
+                    if optimizer_step_skipped:
+                        amp_skipped_steps += 1
+                    else:
+                        self.scheduler.step()
+                        self.global_step += 1
 
                 total_loss += float(loss.detach().item())
                 batch_count += 1
                 metrics.update(logits.detach(), batch["labels"], batch["face_ids"])
                 if self.is_main and hasattr(iterator, "set_postfix"):
-                    iterator.set_postfix(loss=f"{loss.item():.4f}")
+                    postfix = {"loss": f"{loss.item():.4f}"}
+                    if amp_skipped_steps:
+                        postfix["amp_skips"] = amp_skipped_steps
+                    iterator.set_postfix(**postfix)
 
         total_loss = _distributed_sum(total_loss, self.device)
         batch_count = int(_distributed_sum(float(batch_count), self.device))

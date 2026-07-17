@@ -10,6 +10,61 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_nonfinite_gradient_handling_respects_amp(self):
+        from functional.stage2_seg_trainer import Stage2SegmentationTrainer
+
+        class FiniteForwardInfiniteBackward(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value):
+                return value.new_ones(())
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return torch.full_like(grad_output, float("inf"))
+
+        class OverflowScaler:
+            def __init__(self):
+                self.scale_value = 65536.0
+                self.step_called = False
+
+            def scale(self, loss):
+                return loss
+
+            def unscale_(self, optimizer):
+                return None
+
+            def get_scale(self):
+                return self.scale_value
+
+            def step(self, optimizer):
+                self.step_called = True
+
+            def update(self):
+                self.scale_value *= 0.5
+
+        parameter = torch.nn.Parameter(torch.tensor(1.0))
+        trainer = Stage2SegmentationTrainer.__new__(Stage2SegmentationTrainer)
+        trainer.model = torch.nn.ParameterList([parameter])
+        trainer.optimizer = torch.optim.SGD([parameter], lr=0.1)
+        trainer.gradient_clip_norm = 1.0
+        trainer.use_amp = True
+        trainer.scaler = OverflowScaler()
+
+        loss = FiniteForwardInfiniteBackward.apply(parameter)
+        gradient_norm, step_skipped = trainer._backward_and_step(loss)
+
+        self.assertFalse(torch.isfinite(gradient_norm))
+        self.assertTrue(step_skipped)
+        self.assertTrue(trainer.scaler.step_called)
+        self.assertEqual(trainer.scaler.get_scale(), 32768.0)
+
+        parameter.grad = None
+        trainer.use_amp = False
+        trainer.scaler = OverflowScaler()
+        loss = FiniteForwardInfiniteBackward.apply(parameter)
+        with self.assertRaises(FloatingPointError):
+            trainer._backward_and_step(loss)
+
     def test_feature_propagation_single_coarse_point(self):
         from networks.feature_propagation import FeaturePropagation
 
@@ -59,4 +114,3 @@ class Stage2SegmentationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
