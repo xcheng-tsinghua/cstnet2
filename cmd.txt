@@ -66,4 +66,6 @@ python train_cst_pred.py --epoch 1 --bs 20 --stage1_mode baseline --train_phase 
 One-batch overfit
 python train_cst_pred.py --epoch 20 --bs 20 --stage1_mode multitask --train_phase joint --overfit_one_batch True --geom_start_epoch 0 --geom_ramp_epochs 5
 
-
+-- stage2 seg
+nohup python train_stage2_seg.py > out_s2seg.log 2>&1 &
+tail -f out_s2seg.log
