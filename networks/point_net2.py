@@ -1,6 +1,18 @@
+from contextlib import nullcontext
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+
+
+def _autocast_disabled(device_type):
+    """Return an autocast-disabled context across supported PyTorch versions."""
+    try:
+        return torch.amp.autocast(device_type, enabled=False)
+    except (AttributeError, TypeError):  # PyTorch < 2.0
+        if device_type == "cuda":
+            return torch.cuda.amp.autocast(enabled=False)
+        return nullcontext()
 
 
 def square_distance(src, dst):
@@ -25,6 +37,51 @@ def square_distance(src, dst):
     dist += torch.sum(src ** 2, -1).view(B, N, 1)
     dist += torch.sum(dst ** 2, -1).view(B, 1, M)
     return dist
+
+
+def three_nn_interpolate(xyz1, xyz2, points2):
+    """Interpolate ``points2`` onto ``xyz1`` with stable inverse distances.
+
+    PointNet++ feature propagation commonly contains exact zero distances because
+    set-abstraction centroids are also present in the denser point set.  Under
+    float16 autocast, the traditional ``distance + 1e-8`` expression rounds the
+    epsilon to zero and can therefore produce ``Inf / Inf == NaN``.  Distance and
+    weight calculations are deliberately kept in float32 here.
+    """
+    _, n_points, _ = xyz1.shape
+    _, n_samples, _ = xyz2.shape
+    if n_samples == 0:
+        raise ValueError(
+            "PointNet++ feature propagation requires at least one sampled point"
+        )
+    if n_samples == 1:
+        return points2.repeat(1, n_points, 1)
+
+    output_dtype = points2.dtype
+    neighbor_count = min(3, n_samples)
+    with _autocast_disabled(xyz1.device.type):
+        xyz1_fp32 = xyz1.float()
+        xyz2_fp32 = xyz2.float()
+        points2_fp32 = points2.float()
+
+        distances = square_distance(xyz1_fp32, xyz2_fp32).clamp_min_(0.0)
+        distances, indices = torch.topk(
+            distances,
+            k=neighbor_count,
+            dim=-1,
+            largest=False,
+            sorted=False,
+        )
+        epsilon = torch.finfo(torch.float32).eps
+        inverse_distances = torch.reciprocal(distances.clamp_min(epsilon))
+        weights = inverse_distances / inverse_distances.sum(
+            dim=2, keepdim=True
+        ).clamp_min(epsilon)
+        interpolated = torch.sum(
+            index_points(points2_fp32, indices) * weights.unsqueeze(-1), dim=2
+        )
+
+    return interpolated.to(dtype=output_dtype)
 
 
 def query_ball_point(radius, nsample, xyz, new_xyz):
@@ -284,28 +341,7 @@ class PointNetFeaturePropagation(nn.Module):
         xyz2 = xyz2.permute(0, 2, 1)
         points2 = points2.permute(0, 2, 1)
 
-        B, N, C = xyz1.shape
-        _, S, _ = xyz2.shape
-
-        if S == 1:
-            interpolated_points = points2.repeat(1, N, 1)
-        else:
-            # 计算xyz1中的每个点到xyz2中每个点的距离 xyz1:[bs, N, 3], xyz2:[bs, S, 3], return: [bs, N, S]
-            dists = square_distance(xyz1, xyz2)
-
-            # 计算每个初始点到采样点距离最近的3个点，sort 默认升序排列
-            dists, idx = dists.sort(dim=-1)
-            dists, idx = dists[:, :, :3], idx[:, :, :3]  # [B, N, 3]
-
-            # 最近距离的每行求倒数
-            dist_recip = 1.0 / (dists + 1e-8)
-            norm = torch.sum(dist_recip, dim=2, keepdim=True)
-
-            # 求倒数后每行中每个数除以该行之和
-            weight = dist_recip / norm  # ->[B, N, 3]
-
-            # index_points(points2, idx): 为原始点集中的每个点找到采样点集中与之最近的3个三个点的特征 -> [B, N, 3, D]
-            interpolated_points = torch.sum(index_points(points2, idx) * weight.view(B, N, 3, 1), dim=2)
+        interpolated_points = three_nn_interpolate(xyz1, xyz2, points2)
 
         if points1 is not None:
             # skip link concatenation

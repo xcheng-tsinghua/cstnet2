@@ -10,6 +10,20 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_pointnet2_fp16_interpolation_handles_duplicate_points(self):
+        from networks.point_net2 import three_nn_interpolate
+
+        xyz1 = torch.zeros(1, 4, 3, dtype=torch.float16)
+        xyz2 = torch.zeros(1, 2, 3, dtype=torch.float16)
+        points2 = torch.tensor([[[2.0], [4.0]]], dtype=torch.float16)
+
+        interpolated = three_nn_interpolate(xyz1, xyz2, points2)
+
+        self.assertEqual(tuple(interpolated.shape), (1, 4, 1))
+        self.assertEqual(interpolated.dtype, torch.float16)
+        self.assertTrue(torch.isfinite(interpolated).all())
+        self.assertTrue(torch.equal(interpolated, torch.full_like(interpolated, 3.0)))
+
     def test_training_paths_and_boolean_resume(self):
         import tempfile
         from pathlib import Path
