@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--label_map", default=str(DEFAULT_LABEL_MAP))
     parser.add_argument("--output_dir", default="model_trained/stage2_mfcad_seg")
-    parser.add_argument("--batch_size", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=30)
     parser.add_argument("--n_points", type=int, default=2048)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
