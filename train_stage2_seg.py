@@ -64,7 +64,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Read and write parsed point-cloud NPY caches",
     )
     parser.add_argument(
-        "--resume", type=str, default="",
+        "--resume", type=str, default="model_trained/stage2_mfcad_seg/last.pth",
         help="Full training checkpoint to resume; empty starts a new run",
     )
     parser.add_argument(
