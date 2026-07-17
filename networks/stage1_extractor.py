@@ -16,7 +16,7 @@ class FrozenStage1ConstraintExtractor(nn.Module):
 
     It loads the primitive/cluster predictor, disables gradients, and converts
     model outputs into the per-point constraint representation required by
-    classification and diffusion models.
+    classification and segmentation models.
     """
 
     def __init__(

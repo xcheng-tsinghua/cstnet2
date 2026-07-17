@@ -3,13 +3,13 @@
 CstNet2 is a two-stage point cloud learning project for mechanical parts. The
 project extracts explicit geometric constraints from CAD-derived point clouds
 and uses those constraints for downstream point cloud classification and
-diffusion-based generation.
+segmentation.
 
 The project is designed around a strict training rule:
 
 1. Train Stage 1 as a reusable constraint extractor.
 2. Freeze all Stage 1 parameters.
-3. Train Stage 2 for classification or generation.
+3. Train Stage 2 for classification or segmentation.
 4. Do not jointly train Stage 1 and Stage 2 unless you intentionally change the
    research setting.
 
@@ -82,7 +82,7 @@ functional/constraints.py
 
 ### Stage 2: Constraint-Aware Learning
 
-Stage 2 receives the original or noisy point cloud plus the constraint tensor.
+Stage 2 receives the original point cloud plus the constraint tensor.
 It extracts separate features for each constraint component:
 
 ```text
@@ -101,17 +101,12 @@ Implemented Stage 2 models:
 ```text
 networks/stage2.py
     CstNetStage2Classifier
-    CstNetStage2Diffusion
+networks/stage2_segmentation.py
+    ConstraintAwareSegmentationNet
 ```
 
-Classification uses an encoder and classification head. Generation uses a
-diffusion denoiser that predicts added Gaussian noise from:
-
-```text
-noisy point cloud at timestep t
-frozen Stage 1 constraints
-diffusion timestep t
-```
+Classification uses an encoder and classification head. Segmentation uses an
+encoder-decoder with feature propagation and a per-point segmentation head.
 
 ## Directory Structure
 
@@ -121,13 +116,16 @@ cstnet2/
 |-- README.md                      This file
 |-- train_cst_pred.py              Stage 1 training entry point
 |-- train_cls.py                   Stage 2 classification training
-|-- train_gen.py                   Stage 2 diffusion generation training
+|-- train_stage2_seg.py            Stage 2 MFCAD++ segmentation training
+|-- eval_stage2_seg.py             Stage 2 MFCAD++ segmentation evaluation
 |-- vis_cstpred.py                 Optional point cloud visualization
 |-- func_test.py                   Small local test script
 |-- eval_model.py                  EvalScope helper script
 |-- cmd.txt                        Historical command notes
 |-- data_utils/
 |   |-- datasets.py                Dataset loaders and constraint utilities
+|   |-- mfcad_seg_dataset.py       MFCAD++ segmentation dataset loader
+|   |-- mfcad_label_map.json       MFCAD++ label names and colors
 |   |-- convert_txt_to_npy.py       TXT-to-NPY cache helper
 |   |-- cone_gen.py                Synthetic cone data helper
 |   |-- vis.py                     Visualization helpers
@@ -138,7 +136,9 @@ cstnet2/
 |-- networks/
 |   |-- cst_pred_wrapper.py        Stage 1 model wrapper
 |   |-- stage1_extractor.py        Frozen Stage 1 constraint extractor
-|   |-- stage2.py                  Stage 2 classifier and diffusion model
+|   |-- stage2.py                  Stage 2 classifier
+|   |-- stage2_segmentation.py     Stage 2 segmentation model
+|   |-- feature_propagation.py     Segmentation decoder propagation
 |   |-- point_net.py               PointNet modules
 |   |-- point_net2.py              PointNet++ modules
 |   |-- attn_3dgcn.py              Attention 3DGCN modules
@@ -316,26 +316,6 @@ For ablation or debugging with ground-truth constraints:
 python train_cls.py --constraint_source gt --is_sample True
 ```
 
-### Train Stage 2 Diffusion Generation
-
-After Stage 1 is trained, run diffusion denoising training:
-
-```bash
-python train_gen.py ^
-  --constraint_source stage1 ^
-  --stage1_model pointnet2 ^
-  --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth ^
-  --bs 16 ^
-  --n_points 2000 ^
-  --timesteps 1000
-```
-
-For a small debug run:
-
-```bash
-python train_gen.py --constraint_source gt --is_sample True --epoch 1 --bs 2 --n_points 128
-```
-
 ### Train Stage 2 MFCAD++ Segmentation
 
 The MFCAD++ point files must use the 17-column format documented in
@@ -379,29 +359,28 @@ python vis_cstpred.py --root_dataset path/to/pointclouds --num_point 2500
 Run compile checks:
 
 ```bash
-python -B -m compileall functional networks cst_pred cst_fea data_utils train_cls.py train_cst_pred.py train_gen.py vis_cstpred.py
+python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py train_stage2_seg.py eval_stage2_seg.py vis_cstpred.py
 ```
 
 Run import checks:
 
 ```bash
-python -B -c "import train_cst_pred; import train_cls; import train_gen; import vis_cstpred; print('imports ok')"
+python -B -c "import train_cst_pred; import train_cls; import train_stage2_seg; import eval_stage2_seg; import vis_cstpred; print('imports ok')"
 ```
 
 ### 2. Tiny Forward Smoke Test
 
-This verifies Stage 1 extraction, Stage 2 classification, and Stage 2 diffusion
-without needing the full dataset:
+This verifies Stage 1 extraction and Stage 2 classification without needing the
+full dataset:
 
 ```bash
-python -B -c "import torch; from functional.constraints import ground_truth_constraints_to_tensor; from networks.stage1_extractor import FrozenStage1ConstraintExtractor; from networks.stage2 import CstNetStage2Classifier, CstNetStage2Diffusion; B,N=2,64; xyz=torch.rand(B,N,3); pmt=torch.randint(0,5,(B,N)); cst=ground_truth_constraints_to_tensor(pmt, torch.randn(B,N,3), torch.rand(B,N), torch.randn(B,N,3), torch.randn(B,N,3)); print(CstNetStage2Classifier(6).eval()(xyz,cst).shape); print(CstNetStage2Diffusion().eval()(xyz,cst,torch.randint(0,1000,(B,))).shape); print(FrozenStage1ConstraintExtractor(model_name='pointnet2', checkpoint=None).eval()(xyz[:1]).shape)"
+python -B -c "import torch; from functional.constraints import ground_truth_constraints_to_tensor; from networks.stage1_extractor import FrozenStage1ConstraintExtractor; from networks.stage2 import CstNetStage2Classifier; B,N=2,64; xyz=torch.rand(B,N,3); pmt=torch.randint(0,5,(B,N)); cst=ground_truth_constraints_to_tensor(pmt, torch.randn(B,N,3), torch.rand(B,N), torch.randn(B,N,3), torch.randn(B,N,3)); print(CstNetStage2Classifier(6).eval()(xyz,cst).shape); print(FrozenStage1ConstraintExtractor(model_name='pointnet2', checkpoint=None).eval()(xyz[:1]).shape)"
 ```
 
 Expected output shapes:
 
 ```text
 classification: [2, 6]
-diffusion:      [2, 64, 3]
 stage1 cst:     [1, 64, 15]
 ```
 
@@ -412,7 +391,6 @@ Use sampled dataloaders before long training:
 ```bash
 python train_cst_pred.py --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0 --use_wandb False
 python train_cls.py --constraint_source gt --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
-python train_gen.py --constraint_source gt --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
 ```
 
 After these pass, switch `--constraint_source stage1` for Stage 2 and use the
