@@ -10,6 +10,45 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_training_paths_and_boolean_resume(self):
+        import tempfile
+        from pathlib import Path
+
+        import train_stage2_seg
+
+        default_args = train_stage2_seg.parse_args([])
+        self.assertFalse(default_args.resume)
+        self.assertFalse(hasattr(default_args, "output_dir"))
+        self.assertTrue(train_stage2_seg.parse_args(["--resume"]).resume)
+        self.assertTrue(train_stage2_seg.parse_args(["--resume", "true"]).resume)
+        self.assertFalse(train_stage2_seg.parse_args(["--resume", "false"]).resume)
+
+        original_root = train_stage2_seg.MODEL_OUTPUT_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                train_stage2_seg.MODEL_OUTPUT_ROOT = Path(directory)
+                config = {
+                    "model": "pointnet2",
+                    "baseline_use_constraints": True,
+                }
+                output_dir, checkpoint = train_stage2_seg.resolve_training_paths(
+                    config, resume=False
+                )
+                self.assertEqual(output_dir.name, "pointnet2_constraints")
+                self.assertIsNone(checkpoint)
+
+                with self.assertRaises(FileNotFoundError):
+                    train_stage2_seg.resolve_training_paths(config, resume=True)
+                output_dir.mkdir(parents=True)
+                expected_checkpoint = output_dir / "last.pth"
+                expected_checkpoint.touch()
+                _, checkpoint = train_stage2_seg.resolve_training_paths(
+                    config, resume=True
+                )
+                self.assertEqual(checkpoint, expected_checkpoint)
+        finally:
+            train_stage2_seg.MODEL_OUTPUT_ROOT = original_root
+
     def test_registered_baseline_models_use_common_output_layout(self):
         from networks.segmentation_models import build_segmentation_model
 

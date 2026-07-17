@@ -21,7 +21,42 @@ from networks.segmentation_models import (
 )
 
 
-DEFAULT_OUTPUT_DIR = Path("model_trained/stage2_mfcad_seg")
+MODEL_OUTPUT_ROOT = Path("model_trained/seg")
+
+
+def parse_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "y", "on"):
+        return True
+    if normalized in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
+
+
+def segmentation_run_name(model_config: dict[str, object]) -> str:
+    model_name = str(model_config["model"])
+    if model_name != DEFAULT_SEGMENTATION_MODEL and bool(
+        model_config["baseline_use_constraints"]
+    ):
+        model_name += "_constraints"
+    return model_name
+
+
+def resolve_training_paths(
+    model_config: dict[str, object],
+    resume: bool,
+) -> tuple[Path, Path | None]:
+    output_dir = MODEL_OUTPUT_ROOT / segmentation_run_name(model_config)
+    if not resume:
+        return output_dir, None
+    checkpoint_path = output_dir / "last.pth"
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(
+            f"resume=true but no checkpoint was found: {checkpoint_path.resolve()}"
+        )
+    return output_dir, checkpoint_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -40,17 +75,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="JSON label metadata used by the dataset and checkpoints",
     )
     parser.add_argument(
-        "--output_dir", type=str, default="",
-        help=(
-            "Directory for statistics and checkpoints; empty uses "
-            "model_trained/stage2_mfcad_seg for constraint_aware and a model-named "
-            "subdirectory for baselines"
-        ),
-    )
-    parser.add_argument(
         "--class_statistics_path",
         type=str,
-        default=str(DEFAULT_OUTPUT_DIR / "class_statistics.json"),
+        default=str(MODEL_OUTPUT_ROOT / "class_statistics.json"),
         help="Shared training-only class-statistics cache used by all model variants",
     )
     parser.add_argument(
@@ -106,11 +133,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Read and write parsed point-cloud NPY caches",
     )
     parser.add_argument(
-        "--resume", type=str, default="auto",
-        help=(
-            "Checkpoint path; auto resumes output_dir/last.pth only when it exists, "
-            "and none forces a new run"
-        ),
+        "--resume",
+        type=parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Resume from model_trained/seg/<model_name>/last.pth",
     )
     parser.add_argument(
         "--recompute_class_statistics", action="store_true", default=False,
@@ -129,11 +157,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def log_training_configuration(args: argparse.Namespace, device: torch.device) -> None:
+def log_training_configuration(
+    args: argparse.Namespace,
+    device: torch.device,
+    output_dir: Path,
+) -> None:
     print("Stage 2 segmentation configuration:")
     for name, value in sorted(vars(args).items()):
         print(f"  {name}={value!r}")
     print(f"  device={device}")
+    print(f"  output_dir={output_dir}")
 
 
 def set_seed(seed: int) -> None:
@@ -164,21 +197,9 @@ def main(args: argparse.Namespace) -> None:
     rank = dist.get_rank() if distributed else 0
     set_seed(args.seed + rank)
     model_config = segmentation_model_config(args)
-    if not args.output_dir:
-        output_dir = DEFAULT_OUTPUT_DIR
-        if args.model != DEFAULT_SEGMENTATION_MODEL:
-            variant_name = args.model
-            if model_config["baseline_use_constraints"]:
-                variant_name += "_constraints"
-            output_dir = output_dir / variant_name
-        args.output_dir = str(output_dir)
-    if args.resume.lower() == "auto":
-        automatic_checkpoint = Path(args.output_dir) / "last.pth"
-        args.resume = str(automatic_checkpoint) if automatic_checkpoint.is_file() else ""
-    elif args.resume.lower() in ("none", "new"):
-        args.resume = ""
+    output_dir, resume_checkpoint = resolve_training_paths(model_config, args.resume)
     if rank == 0:
-        log_training_configuration(args, device)
+        log_training_configuration(args, device, output_dir)
 
     train_loader, val_loader, _ = MFCADSegmentationDataset.create_dataloaders(
         root=args.data_root,
@@ -189,7 +210,6 @@ def main(args: argparse.Namespace) -> None:
         use_npy_cache=args.use_npy_cache,
         distributed=distributed,
     )
-    output_dir = Path(args.output_dir)
     statistics_path = Path(args.class_statistics_path)
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,7 +273,7 @@ def main(args: argparse.Namespace) -> None:
         checkpoint_args=vars(args),
         wandb_run=wandb_run,
     )
-    trainer.fit(resume_checkpoint=args.resume or None)
+    trainer.fit(resume_checkpoint=resume_checkpoint)
     if wandb_run is not None:
         wandb_run.finish()
     if distributed:

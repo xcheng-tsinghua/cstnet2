@@ -347,16 +347,15 @@ python train_stage2_seg.py --model pointnet2 --baseline_use_constraints
 python train_stage2_seg.py --model dgcnn --baseline_use_constraints --dgcnn_k 20
 ```
 
-All variants share the same dataset, loss, and metrics. Their default
-checkpoints are written to model-named subdirectories under
-`model_trained/stage2_mfcad_seg/`; constraint-enabled baselines use names such
+All variants share the same dataset, loss, and metrics. Checkpoints are written
+to model-named subdirectories under `model_trained/seg/`; constraint-enabled baselines use names such
 as `pointnet2_constraints/` so they cannot overwrite XYZ-only results. All
 experiments reuse the training-only `class_statistics.json` cache. Evaluation
 reconstructs both the architecture and its input mode from the checkpoint.
 
-By default, `--resume auto` resumes `last.pth` from the selected model's output
-directory only when that file exists. Use `--resume none` to force a fresh run,
-or pass an explicit checkpoint path.
+Training starts fresh by default. Set `--resume true` to load `last.pth` from
+the selected model's fixed output directory. A missing checkpoint is reported
+as an error instead of silently starting over.
 
 Training accepts either `val/` or `validation/` and can start before a `test/`
 directory is present. It writes the shared `class_statistics.json` using the
@@ -366,13 +365,13 @@ output directory.
 Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
 
 ```bash
-python train_stage2_seg.py --resume model_trained/stage2_mfcad_seg/last.pth
+python train_stage2_seg.py --model constraint_aware --resume true
 ```
 
 Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views:
 
 ```bash
-python eval_stage2_seg.py model_trained/stage2_mfcad_seg/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
+python eval_stage2_seg.py model_trained/seg/constraint_aware/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
 ```
 
 ### Visualization
