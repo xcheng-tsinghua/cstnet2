@@ -16,33 +16,79 @@ from functional.stage2_seg_trainer import Stage2SegmentationTrainer
 from networks.stage2_segmentation import Stage2SegmentationModel
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser("Stage 2 MFCAD++ point segmentation")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Stage 2 MFCAD++ point segmentation",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--data_root",
+        type=str,
         default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd",
+        help="MFCAD++ root containing the train/val/test split directories",
     )
-    parser.add_argument("--label_map", default=str(DEFAULT_LABEL_MAP))
-    parser.add_argument("--output_dir", default="model_trained/stage2_mfcad_seg")
-    parser.add_argument("--batch_size", type=int, default=40)
-    parser.add_argument("--n_points", type=int, default=2048)
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--warmup_epochs", type=int, default=5)
-    parser.add_argument("--learning_rate", type=float, default=3e-4)
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--gradient_clip_norm", type=float, default=1.0)
-    parser.add_argument("--feature_dim", type=int, default=64)
-    parser.add_argument("--norm_type", choices=("ln", "bn"), default="ln")
-    parser.add_argument("--seed", type=int, default=2026)
-    parser.add_argument("--no_amp", action="store_true")
-    parser.add_argument("--use_npy_cache", action="store_true")
-    parser.add_argument("--resume", default="")
-    parser.add_argument("--recompute_class_statistics", action="store_true")
-    parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--wandb_project", default="cstnet2")
-    parser.add_argument("--wandb_run_name", default="stage2_mfcad_seg")
-    return parser.parse_args()
+    parser.add_argument(
+        "--label_map", type=str, default=str(DEFAULT_LABEL_MAP),
+        help="JSON label metadata used by the dataset and checkpoints",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default="model_trained/stage2_mfcad_seg",
+        help="Directory for statistics, checkpoints, and training outputs",
+    )
+    parser.add_argument("--batch_size", type=int, default=40, help="Samples per batch")
+    parser.add_argument("--n_points", type=int, default=2048, help="Points sampled per part")
+    parser.add_argument("--workers", type=int, default=4, help="DataLoader worker processes")
+    parser.add_argument("--epochs", type=int, default=200, help="Total training epochs")
+    parser.add_argument("--warmup_epochs", type=int, default=5, help="Linear LR warmup epochs")
+    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Peak learning rate")
+    parser.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
+    parser.add_argument(
+        "--gradient_clip_norm", type=float, default=1.0,
+        help="Maximum global gradient norm",
+    )
+    parser.add_argument(
+        "--feature_dim", type=int, default=64,
+        help="Initial per-stream feature width",
+    )
+    parser.add_argument(
+        "--norm_type", choices=("ln", "bn"), default="ln",
+        help="Constraint-stream normalization",
+    )
+    parser.add_argument("--seed", type=int, default=2026, help="Base random seed")
+    parser.add_argument(
+        "--no_amp", action="store_true", default=False,
+        help="Disable CUDA automatic mixed precision",
+    )
+    parser.add_argument(
+        "--use_npy_cache", action="store_true", default=False,
+        help="Read and write parsed point-cloud NPY caches",
+    )
+    parser.add_argument(
+        "--resume", type=str, default="",
+        help="Full training checkpoint to resume; empty starts a new run",
+    )
+    parser.add_argument(
+        "--recompute_class_statistics", action="store_true", default=False,
+        help="Ignore cached class statistics and scan the training split again",
+    )
+    parser.add_argument(
+        "--use_wandb", action="store_true", default=False,
+        help="Enable Weights & Biases logging",
+    )
+    parser.add_argument(
+        "--wandb_project", type=str, default="cstnet2", help="WandB project name",
+    )
+    parser.add_argument(
+        "--wandb_run_name", type=str, default="stage2_mfcad_seg", help="WandB run name",
+    )
+    return parser.parse_args(argv)
+
+
+def log_training_configuration(args: argparse.Namespace, device: torch.device) -> None:
+    print("Stage 2 segmentation configuration:")
+    for name, value in sorted(vars(args).items()):
+        print(f"  {name}={value!r}")
+    print(f"  device={device}")
 
 
 def set_seed(seed: int) -> None:
@@ -72,6 +118,8 @@ def main(args: argparse.Namespace) -> None:
     distributed, local_rank, device = distributed_context()
     rank = dist.get_rank() if distributed else 0
     set_seed(args.seed + rank)
+    if rank == 0:
+        log_training_configuration(args, device)
 
     train_loader, val_loader, _ = MFCADSegmentationDataset.create_dataloaders(
         root=args.data_root,

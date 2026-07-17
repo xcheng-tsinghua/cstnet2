@@ -276,7 +276,18 @@ class Stage2SegmentationTrainer:
 
     def fit(self, resume_checkpoint: str | os.PathLike[str] | None = None) -> dict[str, Any]:
         if resume_checkpoint:
-            self.load_checkpoint(resume_checkpoint)
+            checkpoint_path = Path(resume_checkpoint).expanduser().resolve()
+            if self.is_main:
+                print(f"checkpoint: loading {checkpoint_path}")
+            self.load_checkpoint(checkpoint_path)
+            if self.is_main:
+                print(
+                    f"checkpoint: loaded successfully; resuming at epoch "
+                    f"{self.start_epoch + 1}/{self.epochs}, global_step={self.global_step}, "
+                    f"best_point_mIoU={self.best_metric:.4f}"
+                )
+        elif self.is_main:
+            print("checkpoint: none provided; starting a new training run at epoch 1")
         latest_metrics: dict[str, Any] = {}
 
         for epoch in range(self.start_epoch, self.epochs):
