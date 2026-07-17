@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
 from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
-from networks.stage2_segmentation import Stage2SegmentationModel
+from networks.segmentation_models import build_segmentation_model, segmentation_model_config
 from tools.visualize_mfcad_seg import export_segmentation_sample
 
 
@@ -72,13 +72,15 @@ def main(args: argparse.Namespace) -> None:
     )
 
     saved_args = checkpoint.get("args", {})
-    model = Stage2SegmentationModel(
+    model_config = checkpoint.get("model_config") or segmentation_model_config(saved_args)
+    model_config = segmentation_model_config(model_config)
+    model = build_segmentation_model(
         num_classes=dataset.num_classes,
-        feature_dim=int(saved_args.get("feature_dim", 64)),
-        norm_type=str(saved_args.get("norm_type", "ln")),
+        config=model_config,
     ).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval()
+    print(f"evaluation model: {model_config}")
     criterion = WeightedSegmentationLoss(checkpoint["class_weights"]).to(device)
     metrics = SegmentationMetrics(dataset.num_classes)
     total_loss = 0.0

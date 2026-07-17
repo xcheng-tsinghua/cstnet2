@@ -397,18 +397,18 @@ class PointNet2Cls(nn.Module):
 
 
 class PointNet2PointFeaEncoder(nn.Module):
-    def __init__(self, with_normal=False):
+    def __init__(self, with_normal=False, input_channels=None):
         """
         输出维度固定为 128
         channel_out: 输出的逐点特征长度
         with_normal: 是否使用法线
         """
         super().__init__()
-        if with_normal:
-            additional_channel = 3
-        else:
-            additional_channel = 0
-        self.with_normal = with_normal
+        input_channels = int(input_channels) if input_channels is not None else (6 if with_normal else 3)
+        if input_channels < 3:
+            raise ValueError("PointNet2 input_channels must be at least 3")
+        additional_channel = input_channels - 3
+        self.input_channels = input_channels
 
         self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=6+additional_channel, mlp=[64, 64, 128], group_all=False)
         self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=128 + 3, mlp=[128, 128, 256], group_all=False)
@@ -428,12 +428,12 @@ class PointNet2PointFeaEncoder(nn.Module):
         """
         # Set Abstraction layers
         B, C, N = xyz.shape
-        if self.with_normal:
-            l0_points = xyz
-            l0_xyz = xyz[:,:3,:]
-        else:
-            l0_points = xyz
-            l0_xyz = xyz
+        if C != self.input_channels:
+            raise ValueError(
+                f"PointNet2 expected {self.input_channels} input channels, got {C}"
+            )
+        l0_points = xyz
+        l0_xyz = xyz[:, :3, :]
 
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
@@ -455,9 +455,9 @@ class PointNet2PointFeaEncoder(nn.Module):
 
 
 class PointNet2Seg(nn.Module):
-    def __init__(self, num_classes, normal_channel=False):
+    def __init__(self, num_classes, normal_channel=False, input_channels=None):
         super().__init__()
-        self.encoder = PointNet2PointFeaEncoder(normal_channel)
+        self.encoder = PointNet2PointFeaEncoder(normal_channel, input_channels=input_channels)
 
         self.conv1 = nn.Conv1d(128, 128, 1)
         self.bn1 = nn.BatchNorm1d(128)

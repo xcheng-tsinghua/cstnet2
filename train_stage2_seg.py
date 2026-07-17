@@ -13,7 +13,15 @@ from torch.nn.parallel import DistributedDataParallel
 from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
 from functional.segmentation_loss import compute_training_class_statistics
 from functional.stage2_seg_trainer import Stage2SegmentationTrainer
-from networks.stage2_segmentation import Stage2SegmentationModel
+from networks.segmentation_models import (
+    DEFAULT_SEGMENTATION_MODEL,
+    SEGMENTATION_MODEL_NAMES,
+    build_segmentation_model,
+    segmentation_model_config,
+)
+
+
+DEFAULT_OUTPUT_DIR = Path("model_trained/stage2_mfcad_seg")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -32,8 +40,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="JSON label metadata used by the dataset and checkpoints",
     )
     parser.add_argument(
-        "--output_dir", type=str, default="model_trained/stage2_mfcad_seg",
-        help="Directory for statistics, checkpoints, and training outputs",
+        "--output_dir", type=str, default="",
+        help=(
+            "Directory for statistics and checkpoints; empty uses "
+            "model_trained/stage2_mfcad_seg for constraint_aware and a model-named "
+            "subdirectory for baselines"
+        ),
+    )
+    parser.add_argument(
+        "--class_statistics_path",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR / "class_statistics.json"),
+        help="Shared training-only class-statistics cache used by all model variants",
+    )
+    parser.add_argument(
+        "--model",
+        choices=SEGMENTATION_MODEL_NAMES,
+        default=DEFAULT_SEGMENTATION_MODEL,
+        help="Segmentation architecture used for training",
+    )
+    parser.add_argument(
+        "--baseline_use_constraints",
+        action="store_true",
+        default=False,
+        help="Concatenate the full 15D constraint vector with XYZ for baseline models",
     )
     parser.add_argument("--batch_size", type=int, default=40, help="Samples per batch")
     parser.add_argument("--n_points", type=int, default=2048, help="Points sampled per part")
@@ -48,11 +78,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--feature_dim", type=int, default=64,
-        help="Initial per-stream feature width",
+        help="Initial per-stream width for the constraint_aware model",
     )
     parser.add_argument(
         "--norm_type", choices=("ln", "bn"), default="ln",
         help="Constraint-stream normalization",
+    )
+    parser.add_argument(
+        "--dgcnn_k", type=int, default=20,
+        help="DGCNN nearest-neighbor count",
+    )
+    parser.add_argument(
+        "--attn_neighbors", type=int, default=20,
+        help="Attention 3DGCN graph-neighbor count",
+    )
+    parser.add_argument(
+        "--attn_k", type=int, default=16,
+        help="Attention 3DGCN transformer-neighbor count",
     )
     parser.add_argument("--seed", type=int, default=2026, help="Base random seed")
     parser.add_argument(
@@ -64,8 +106,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Read and write parsed point-cloud NPY caches",
     )
     parser.add_argument(
-        "--resume", type=str, default="model_trained/stage2_mfcad_seg/last.pth",
-        help="Full training checkpoint to resume; empty starts a new run",
+        "--resume", type=str, default="auto",
+        help=(
+            "Checkpoint path; auto resumes output_dir/last.pth only when it exists, "
+            "and none forces a new run"
+        ),
     )
     parser.add_argument(
         "--recompute_class_statistics", action="store_true", default=False,
@@ -118,6 +163,20 @@ def main(args: argparse.Namespace) -> None:
     distributed, local_rank, device = distributed_context()
     rank = dist.get_rank() if distributed else 0
     set_seed(args.seed + rank)
+    model_config = segmentation_model_config(args)
+    if not args.output_dir:
+        output_dir = DEFAULT_OUTPUT_DIR
+        if args.model != DEFAULT_SEGMENTATION_MODEL:
+            variant_name = args.model
+            if model_config["baseline_use_constraints"]:
+                variant_name += "_constraints"
+            output_dir = output_dir / variant_name
+        args.output_dir = str(output_dir)
+    if args.resume.lower() == "auto":
+        automatic_checkpoint = Path(args.output_dir) / "last.pth"
+        args.resume = str(automatic_checkpoint) if automatic_checkpoint.is_file() else ""
+    elif args.resume.lower() in ("none", "new"):
+        args.resume = ""
     if rank == 0:
         log_training_configuration(args, device)
 
@@ -131,7 +190,7 @@ def main(args: argparse.Namespace) -> None:
         distributed=distributed,
     )
     output_dir = Path(args.output_dir)
-    statistics_path = output_dir / "class_statistics.json"
+    statistics_path = Path(args.class_statistics_path)
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
         compute_training_class_statistics(
@@ -147,11 +206,13 @@ def main(args: argparse.Namespace) -> None:
         force=False,
     )
 
-    model = Stage2SegmentationModel(
+    model = build_segmentation_model(
         num_classes=train_loader.dataset.num_classes,
-        feature_dim=args.feature_dim,
-        norm_type=args.norm_type,
+        config=model_config,
     ).to(device)
+    if rank == 0:
+        parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        print(f"segmentation model: {model_config}; parameters={parameter_count:,}")
     if distributed:
         model = DistributedDataParallel(
             model,

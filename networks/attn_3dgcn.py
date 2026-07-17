@@ -121,7 +121,7 @@ def indexing_neighbor(tensor: "(bs, vertice_num, dim)", index: "(bs, vertice_num
     Return: (bs, vertice_num, n_neighbor, dim)
     """
     bs, v, n = index.size()
-    id_0 = torch.arange(bs).view(-1, 1, 1)
+    id_0 = torch.arange(bs, device=tensor.device).view(-1, 1, 1)
     tensor_indexed = tensor[id_0, index]
     return tensor_indexed
 

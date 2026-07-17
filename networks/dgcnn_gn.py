@@ -68,7 +68,7 @@ def get_graph_feature_with_normals(x, k1=20, k2=20, idx=None, normal_metric_W=1.
     if idx is None:
         idx = knn_points_normals(x, k1=k1, k2=k2, normal_metric_W=normal_metric_W, normal=Norm_sample).contiguous()
 
-    device = torch.device('cuda')
+    device = x.device
 
     idx_base = torch.arange(0, batch_size, device=device).contiguous().view(-1, 1, 1) * num_points
 
@@ -122,7 +122,7 @@ def get_graph_feature(x, k1=20, k2=20, idx=None):
     if idx is None:
         idx = knn(x, k1=k1, k2=k2)
 
-    device = torch.device('cuda')
+    device = x.device
 
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
     # print("idx_base shape: ", idx_base.shape)
@@ -286,6 +286,8 @@ class DGCNGn(nn.Module):
         x = F.dropout(F.relu(self.bn1(self.conv1(x))), self.drop)
         x_all = F.dropout(F.relu(self.bn2(self.conv2(x))), self.drop)
 
+        embedding = None
+        primitives_log_prob = None
         if self.embedding:
             x = F.dropout(F.relu(self.bn_seg_prob1(self.mlp_seg_prob1(x_all))), self.drop)
             embedding = self.mlp_seg_prob2(x)

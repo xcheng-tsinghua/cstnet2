@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
 
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
+from networks.segmentation_models import segmentation_model_config
 
 
 class ContinuousWarmupCosineLR(torch.optim.lr_scheduler._LRScheduler):
@@ -233,6 +234,7 @@ class Stage2SegmentationTrainer:
             "scaler": self.scaler.state_dict() if self.use_amp else None,
             "best_metric": float(self.best_metric),
             "args": self.checkpoint_args,
+            "model_config": segmentation_model_config(self.checkpoint_args),
             "label_map": self.label_map,
             "class_weights": self.class_weights,
             "rng_state": capture_rng_state(),
@@ -256,6 +258,16 @@ class Stage2SegmentationTrainer:
             raise ValueError(f"incomplete Stage 2 segmentation checkpoint; missing: {missing}")
         if checkpoint["label_map"] != self.label_map:
             raise ValueError("checkpoint label map does not match the current dataset metadata")
+        saved_model_config = checkpoint.get("model_config") or segmentation_model_config(
+            checkpoint["args"]
+        )
+        saved_model_config = segmentation_model_config(saved_model_config)
+        current_model_config = segmentation_model_config(self.checkpoint_args)
+        if saved_model_config != current_model_config:
+            raise ValueError(
+                "checkpoint model configuration does not match the requested model: "
+                f"saved={saved_model_config}, requested={current_model_config}"
+            )
         saved_weights = torch.as_tensor(checkpoint["class_weights"], dtype=torch.float32).cpu()
         if saved_weights.shape != self.class_weights.shape or not torch.allclose(
             saved_weights, self.class_weights, rtol=1e-5, atol=1e-7

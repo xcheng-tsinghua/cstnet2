@@ -328,9 +328,40 @@ network.
 python train_stage2_seg.py --data_root D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd
 ```
 
+Select the segmentation architecture with `--model`:
+
+```bash
+python train_stage2_seg.py --model constraint_aware
+python train_stage2_seg.py --model pointnet
+python train_stage2_seg.py --model pointnet2
+python train_stage2_seg.py --model dgcnn --dgcnn_k 20
+python train_stage2_seg.py --model attn3dgcn --attn_neighbors 20 --attn_k 16
+```
+
+Each baseline uses XYZ only by default. Add `--baseline_use_constraints` to
+concatenate the full 15D constraint vector as point attributes, producing an
+18-channel `XYZ + constraints` input:
+
+```bash
+python train_stage2_seg.py --model pointnet2 --baseline_use_constraints
+python train_stage2_seg.py --model dgcnn --baseline_use_constraints --dgcnn_k 20
+```
+
+All variants share the same dataset, loss, and metrics. Their default
+checkpoints are written to model-named subdirectories under
+`model_trained/stage2_mfcad_seg/`; constraint-enabled baselines use names such
+as `pointnet2_constraints/` so they cannot overwrite XYZ-only results. All
+experiments reuse the training-only `class_statistics.json` cache. Evaluation
+reconstructs both the architecture and its input mode from the checkpoint.
+
+By default, `--resume auto` resumes `last.pth` from the selected model's output
+directory only when that file exists. Use `--resume none` to force a fresh run,
+or pass an explicit checkpoint path.
+
 Training accepts either `val/` or `validation/` and can start before a `test/`
-directory is present. It writes `class_statistics.json` using the training split
-only, plus `last.pth` and `best_point_miou.pth` under the output directory.
+directory is present. It writes the shared `class_statistics.json` using the
+training split only, plus `last.pth` and `best_point_miou.pth` under each model's
+output directory.
 
 Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
 

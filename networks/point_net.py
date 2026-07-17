@@ -37,9 +37,7 @@ class STN3d(nn.Module):
         x = F.relu(self.bn5(self.fc2(x)))
         x = self.fc3(x)
 
-        iden = Variable(torch.from_numpy(np.array([1,0,0,0,1,0,0,0,1]).astype(np.float32))).view(1,9).repeat(batchsize,1)
-        if x.is_cuda:
-            iden = iden.cuda()
+        iden = x.new_tensor([1, 0, 0, 0, 1, 0, 0, 0, 1]).view(1, 9).repeat(batchsize, 1)
         x = x + iden
         x = x.view(-1, 3, 3)
         return x
@@ -76,9 +74,9 @@ class STNkd(nn.Module):
         x = F.relu(self.bn5(self.fc2(x)))
         x = self.fc3(x)
 
-        iden = Variable(torch.from_numpy(np.eye(self.k).flatten().astype(np.float32))).view(1,self.k*self.k).repeat(batchsize,1)
-        if x.is_cuda:
-            iden = iden.cuda()
+        iden = torch.eye(self.k, device=x.device, dtype=x.dtype).flatten().view(
+            1, self.k * self.k
+        ).repeat(batchsize, 1)
         x = x + iden
         x = x.view(-1, self.k, self.k)
         return x
@@ -159,12 +157,11 @@ class PointNet(nn.Module):
 
 
 class PointNetSeg(nn.Module):
-    def __init__(self, part_num=50, normal_channel=True):
+    def __init__(self, part_num=50, normal_channel=True, input_channels=None):
         super().__init__()
-        if normal_channel:
-            channel = 6
-        else:
-            channel = 3
+        channel = int(input_channels) if input_channels is not None else (6 if normal_channel else 3)
+        if channel < 3:
+            raise ValueError("PointNetSeg input_channels must be at least 3")
         self.part_num = part_num
         self.stn = STN3d(channel)
         self.conv1 = torch.nn.Conv1d(channel, 64, 1)
@@ -191,7 +188,7 @@ class PointNetSeg(nn.Module):
         trans = self.stn(point_cloud)
         point_cloud = point_cloud.transpose(2, 1)
         if D > 3:
-            point_cloud, feature = point_cloud.split(3, dim=2)
+            point_cloud, feature = point_cloud[:, :, :3], point_cloud[:, :, 3:]
         point_cloud = torch.bmm(point_cloud, trans)
         if D > 3:
             point_cloud = torch.cat([point_cloud, feature], dim=2)

@@ -10,6 +10,127 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_registered_baseline_models_use_common_output_layout(self):
+        from networks.segmentation_models import build_segmentation_model
+
+        cases = (
+            ({"model": "pointnet"}, 32),
+            ({"model": "pointnet2"}, 64),
+            ({"model": "dgcnn", "dgcnn_k": 8}, 24),
+            (
+                {"model": "attn3dgcn", "attn_neighbors": 8, "attn_k": 4},
+                24,
+            ),
+        )
+        for base_config, n_points in cases:
+            for use_constraints in (False, True):
+                config = {
+                    **base_config,
+                    "baseline_use_constraints": use_constraints,
+                }
+                with self.subTest(
+                    model=config["model"], use_constraints=use_constraints
+                ):
+                    model = build_segmentation_model(num_classes=5, config=config).eval()
+                    xyz = torch.randn(1, n_points, 3)
+                    constraints = torch.randn(1, n_points, 15)
+                    masks = torch.ones(1, n_points, 5, dtype=torch.bool)
+                    with torch.no_grad():
+                        logits = model(xyz, constraints, masks)
+                    self.assertEqual(tuple(logits.shape), (1, n_points, 5))
+                    self.assertTrue(torch.isfinite(logits).all())
+                    restored = build_segmentation_model(num_classes=5, config=config)
+                    restored.load_state_dict(model.state_dict(), strict=True)
+
+    def test_constraint_enabled_baseline_requires_constraint_tensor(self):
+        from networks.segmentation_models import build_segmentation_model
+
+        model = build_segmentation_model(
+            num_classes=5,
+            config={"model": "pointnet", "baseline_use_constraints": True},
+        ).eval()
+        xyz = torch.randn(1, 24, 3)
+        with self.assertRaisesRegex(ValueError, "expects constraints"):
+            with torch.no_grad():
+                model(xyz, None, None)
+
+    def test_model_config_contains_only_architecture_parameters(self):
+        from networks.segmentation_models import segmentation_model_config
+
+        self.assertEqual(
+            segmentation_model_config(
+                {
+                    "model": "constraint_aware",
+                    "feature_dim": 48,
+                    "norm_type": "bn",
+                    "dgcnn_k": 99,
+                }
+            ),
+            {"model": "constraint_aware", "feature_dim": 48, "norm_type": "bn"},
+        )
+        self.assertEqual(
+            segmentation_model_config({"model": "dgcnn", "dgcnn_k": 12}),
+            {
+                "model": "dgcnn",
+                "baseline_use_constraints": False,
+                "dgcnn_k": 12,
+            },
+        )
+        self.assertEqual(
+            segmentation_model_config(
+                {
+                    "model": "pointnet2",
+                    "baseline_use_constraints": True,
+                }
+            ),
+            {"model": "pointnet2", "baseline_use_constraints": True},
+        )
+        self.assertEqual(
+            segmentation_model_config({"feature_dim": 32, "norm_type": "ln"}),
+            {"model": "constraint_aware", "feature_dim": 32, "norm_type": "ln"},
+        )
+        with self.assertRaises(ValueError):
+            segmentation_model_config({"model": "missing"})
+        with self.assertRaises(ValueError):
+            segmentation_model_config(
+                {"model": "constraint_aware", "baseline_use_constraints": True}
+            )
+
+    def test_resume_rejects_a_different_segmentation_model(self):
+        import tempfile
+        from pathlib import Path
+
+        from functional.stage2_seg_trainer import Stage2SegmentationTrainer
+
+        label_map = {"labels": [{"id": 0}, {"id": 1}]}
+        checkpoint = {
+            "epoch": 0,
+            "global_step": 1,
+            "model": {},
+            "optimizer": {},
+            "scheduler": {},
+            "scaler": None,
+            "best_metric": 0.0,
+            "args": {"model": "pointnet"},
+            "model_config": {"model": "pointnet"},
+            "label_map": label_map,
+            "class_weights": torch.ones(2),
+            "rng_state": {},
+        }
+        trainer = Stage2SegmentationTrainer.__new__(Stage2SegmentationTrainer)
+        trainer.label_map = label_map
+        trainer.checkpoint_args = {
+            "model": "pointnet",
+            "baseline_use_constraints": True,
+        }
+        trainer.class_weights = torch.ones(2)
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint_path = Path(directory) / "last.pth"
+            torch.save(checkpoint, checkpoint_path)
+            with self.assertRaisesRegex(ValueError, "model configuration"):
+                trainer.load_checkpoint(checkpoint_path)
+
     def test_nonfinite_gradient_handling_respects_amp(self):
         from functional.stage2_seg_trainer import Stage2SegmentationTrainer
 
