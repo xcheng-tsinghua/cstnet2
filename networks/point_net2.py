@@ -359,16 +359,21 @@ class PointNetFeaturePropagation(nn.Module):
 
 
 class PointNet2GlobalFeaEncoder(nn.Module):
-    def __init__(self, with_normal=False):
+    def __init__(self, with_normal=False, input_channels=None):
         """
         输出全局特征维度固定为 1024
         """
         super().__init__()
 
-        if with_normal:
-            additional_channel = 3
-        else:
-            additional_channel = 0
+        input_channels = (
+            int(input_channels)
+            if input_channels is not None
+            else (6 if with_normal else 3)
+        )
+        if input_channels < 3:
+            raise ValueError("PointNet2 input_channels must be at least 3")
+        additional_channel = input_channels - 3
+        self.input_channels = input_channels
         self.with_normal = with_normal
 
         # 三个 set abstraction 层，in_channel = 3,
@@ -387,12 +392,13 @@ class PointNet2GlobalFeaEncoder(nn.Module):
         """
         bs = xyz.size(0)
 
-        if self.with_normal:
-            l0_points = xyz
-            l0_xyz = xyz[:, :3, :]
-        else:
-            l0_points = xyz
-            l0_xyz = xyz
+        if xyz.shape[1] != self.input_channels:
+            raise ValueError(
+                f"PointNet2 expected {self.input_channels} input channels, "
+                f"got {xyz.shape[1]}"
+            )
+        l0_xyz = xyz[:, :3, :]
+        l0_points = xyz[:, 3:, :] if self.input_channels > 3 else None
 
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
@@ -404,9 +410,12 @@ class PointNet2GlobalFeaEncoder(nn.Module):
 
 class PointNet2Cls(nn.Module):
     # num_class = 40，normal_channel = false
-    def __init__(self, num_class: int, with_normal=False):
+    def __init__(self, num_class: int, with_normal=False, input_channels=None):
         super().__init__()
-        self.encoder = PointNet2GlobalFeaEncoder(with_normal)
+        self.encoder = PointNet2GlobalFeaEncoder(
+            with_normal,
+            input_channels=input_channels,
+        )
 
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)

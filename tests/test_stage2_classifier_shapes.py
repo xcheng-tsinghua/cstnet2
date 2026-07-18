@@ -34,6 +34,103 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
             out = model(self.xyz, self.constraints)
         self.assertEqual(tuple(out.shape), (2, self.n_classes))
 
+    def test_training_cli_selects_models_and_constraints(self):
+        import train_cls
+
+        defaults = train_cls.parse_args([])
+        self.assertEqual(defaults.model, "constraint_aware")
+        self.assertFalse(defaults.baseline_use_constraints)
+        self.assertFalse(defaults.resume)
+
+        args = train_cls.parse_args(
+            ["--model", "pointnet2", "--baseline_use_constraints", "--resume"]
+        )
+        self.assertEqual(args.model, "pointnet2")
+        self.assertTrue(args.baseline_use_constraints)
+        self.assertTrue(args.resume)
+
+    def test_classification_model_config_and_run_names(self):
+        from networks.classification_models import (
+            classification_model_config,
+            classification_model_uses_constraints,
+            classification_run_name,
+        )
+
+        config = classification_model_config(
+            {
+                "model": "dgcnn",
+                "baseline_use_constraints": True,
+                "dgcnn_k": 12,
+                "lr": 999,
+            }
+        )
+        self.assertEqual(
+            config,
+            {
+                "model": "dgcnn",
+                "baseline_use_constraints": True,
+                "dgcnn_k": 12,
+            },
+        )
+        self.assertTrue(classification_model_uses_constraints(config))
+        self.assertEqual(classification_run_name(config), "dgcnn_constraints")
+
+        xyz_only = classification_model_config({"model": "pointnet"})
+        self.assertFalse(classification_model_uses_constraints(xyz_only))
+        self.assertEqual(classification_run_name(xyz_only), "pointnet")
+
+        with self.assertRaisesRegex(ValueError, "only valid for baseline"):
+            classification_model_config(
+                {
+                    "model": "constraint_aware",
+                    "baseline_use_constraints": True,
+                }
+            )
+
+    def test_registered_baseline_classifier_shapes(self):
+        from networks.classification_models import build_classification_model
+
+        cases = (
+            ({"model": "pointnet"}, 32),
+            ({"model": "pointnet2"}, 64),
+            ({"model": "dgcnn", "dgcnn_k": 8}, 24),
+            (
+                {"model": "attn3dgcn", "attn_neighbors": 8, "attn_k": 4},
+                24,
+            ),
+        )
+        for base_config, n_points in cases:
+            for use_constraints in (False, True):
+                config = {
+                    **base_config,
+                    "baseline_use_constraints": use_constraints,
+                }
+                with self.subTest(
+                    model=config["model"], use_constraints=use_constraints
+                ):
+                    model = build_classification_model(
+                        self.n_classes, config
+                    ).to(self.device).eval()
+                    xyz = torch.randn(2, n_points, 3, device=self.device)
+                    constraints = torch.randn(
+                        2, n_points, 15, device=self.device
+                    )
+                    with torch.no_grad():
+                        output = model(xyz, constraints)
+                    self.assertEqual(tuple(output.shape), (2, self.n_classes))
+                    self.assertTrue(torch.isfinite(output).all())
+
+    def test_constraint_enabled_baseline_requires_constraints(self):
+        from networks.classification_models import build_classification_model
+
+        model = build_classification_model(
+            self.n_classes,
+            {"model": "pointnet", "baseline_use_constraints": True},
+        ).to(self.device).eval()
+        with self.assertRaisesRegex(ValueError, "expects constraints"):
+            with torch.no_grad():
+                model(self.xyz, None)
+
     def test_baseline_classifier_shape(self):
         from networks.stage2 import CstNetStage2Classifier
 

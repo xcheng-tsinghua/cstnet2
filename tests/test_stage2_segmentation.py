@@ -15,7 +15,7 @@ class Stage2SegmentationTest(unittest.TestCase):
         from pathlib import Path
         from unittest.mock import patch
 
-        import train_stage2_seg
+        from functional import cuda_runtime
 
         with tempfile.TemporaryDirectory() as directory:
             library = (
@@ -28,15 +28,15 @@ class Stage2SegmentationTest(unittest.TestCase):
             library.parent.mkdir(parents=True)
             library.touch()
             with (
-                patch.object(train_stage2_seg.sys, "platform", "linux"),
-                patch.object(train_stage2_seg.sys, "path", [directory]),
+                patch.object(cuda_runtime.sys, "platform", "linux"),
+                patch.object(cuda_runtime.sys, "path", [directory]),
                 patch.object(
-                    train_stage2_seg.ctypes,
+                    cuda_runtime.ctypes,
                     "CDLL",
                     side_effect=(OSError("not in loader path"), object()),
                 ) as loader,
             ):
-                loaded = train_stage2_seg.preload_cuda_nvrtc("12.1")
+                loaded = cuda_runtime.preload_cuda_nvrtc("12.1")
 
         self.assertEqual(loaded, str(library))
         self.assertEqual(loader.call_count, 2)

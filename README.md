@@ -316,6 +316,34 @@ For ablation or debugging with ground-truth constraints:
 python train_cls.py --constraint_source gt --is_sample True
 ```
 
+Classification supports the same baseline families as segmentation:
+
+```bash
+python train_cls.py --model constraint_aware
+python train_cls.py --model pointnet
+python train_cls.py --model pointnet2
+python train_cls.py --model dgcnn --dgcnn_k 20
+python train_cls.py --model attn3dgcn --attn_neighbors 20 --attn_k 16
+```
+
+Baselines use XYZ only by default. Add `--baseline_use_constraints` to feed
+the 15D per-point constraint as an additional point feature. The constraint can
+come from frozen Stage 1 or from ground truth for an oracle ablation:
+
+```bash
+python train_cls.py --model pointnet2 --baseline_use_constraints \
+  --constraint_source stage1 \
+  --stage1_model pointnet2 \
+  --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth
+
+python train_cls.py --model dgcnn --baseline_use_constraints \
+  --constraint_source gt --dgcnn_k 20
+```
+
+With the default `--save_name stage2_cls`, weights are isolated automatically
+as `model_trained/stage2_cls_<model_name>.pth`; constraint-enabled baselines use
+the `_constraints` suffix. Training starts fresh unless `--resume true` is set.
+
 ### Train Stage 2 MFCAD++ Segmentation
 
 The MFCAD++ point files must use the 17-column format documented in

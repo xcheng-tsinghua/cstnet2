@@ -1,9 +1,4 @@
-"""
-Train Stage 2 constraint-aware classification.
-
-Stage 1 is loaded as a frozen constraint extractor by default. Ground-truth
-constraints are still available as an oracle/debug option.
-"""
+"""Train constraint-aware or baseline Stage 2 point-cloud classifiers."""
 
 from __future__ import annotations
 
@@ -15,15 +10,19 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from colorama import init, Fore, Back
+from colorama import init
 
 from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
+from functional.cuda_runtime import preload_cuda_nvrtc
 from networks.stage1_extractor import FrozenStage1ConstraintExtractor
-from networks.stage2 import (
-    CstNetStage2Classifier,
-    CstNetStage2ClassifierDiscriminative,
-    CstNetStage2ClassifierTokenFusion,
+from networks.classification_models import (
+    CLASSIFICATION_MODEL_NAMES,
+    DEFAULT_CLASSIFICATION_MODEL,
+    build_classification_model,
+    classification_model_config,
+    classification_model_uses_constraints,
+    classification_run_name,
 )
 from networks.utils import all_metric_cls
 
@@ -39,10 +38,15 @@ except ImportError:  # pragma: no cover - optional dependency
 def str2bool(value: str | bool) -> bool:
     if isinstance(value, bool):
         return value
-    return value.lower() in {"true", "1", "yes", "y"}
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "y", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
 
 
-def parse_args():
+def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser("Stage 2 classification training")
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=200)
@@ -62,6 +66,37 @@ def parse_args():
     parser.add_argument("--stage1_use_gt_normals", default="False", choices=["True", "False"])
 
     parser.add_argument(
+        "--model",
+        choices=CLASSIFICATION_MODEL_NAMES,
+        default=DEFAULT_CLASSIFICATION_MODEL,
+        help="Stage 2 classification architecture",
+    )
+    parser.add_argument(
+        "--baseline_use_constraints",
+        action="store_true",
+        default=False,
+        help="Use the 15D per-point constraint as baseline point features",
+    )
+    parser.add_argument(
+        "--dgcnn_k",
+        type=int,
+        default=20,
+        help="DGCNN nearest-neighbor count",
+    )
+    parser.add_argument(
+        "--attn_neighbors",
+        type=int,
+        default=20,
+        help="Attention 3DGCN graph-neighbor count",
+    )
+    parser.add_argument(
+        "--attn_k",
+        type=int,
+        default=16,
+        help="Attention 3DGCN transformer-neighbor count",
+    )
+
+    parser.add_argument(
         "--stage2_variant",
         choices=["baseline", "discriminative", "token_fusion"],
         default="baseline",
@@ -78,8 +113,15 @@ def parse_args():
     parser.add_argument("--use_stats_token", default="False", choices=["True", "False"])
 
     parser.add_argument("--save_name", type=str, default="stage2_cls")
-    parser.add_argument("--resume", default="True", choices=["True", "False"])
-    return parser.parse_args()
+    parser.add_argument(
+        "--resume",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Load the selected model's existing weight file before training",
+    )
+    return parser.parse_args(argv)
 
 
 def build_constraints(
@@ -106,29 +148,16 @@ def build_constraints(
 
 
 def build_stage2_classifier(args, n_classes: int) -> torch.nn.Module:
-    if args.stage2_variant == "baseline":
-        return CstNetStage2Classifier(n_classes=n_classes)
-    if args.stage2_variant == "discriminative":
-        return CstNetStage2ClassifierDiscriminative(
-            n_classes=n_classes,
-            norm_type=args.stage2_norm,
-        )
-    if args.stage2_variant == "token_fusion":
-        return CstNetStage2ClassifierTokenFusion(
-            n_classes=n_classes,
-            norm_type=args.stage2_norm,
-            token_dim=args.token_dim,
-            transformer_layers=args.transformer_layers,
-            transformer_heads=args.transformer_heads,
-            dropout=args.token_dropout,
-            stream_dropout=args.stream_dropout,
-            use_stats_token=str2bool(args.use_stats_token),
-        )
-    raise ValueError(f"unknown stage2_variant={args.stage2_variant!r}")
+    return build_classification_model(n_classes, classification_model_config(args))
 
 
-def classification_loss(model, xyz, constraints, target, args):
-    use_aux = args.stage2_variant != "baseline" and args.aux_loss_weight > 0.0
+def classification_loss(model, xyz, constraints, target, args, model_config):
+    variant = model_config.get("stage2_variant", "baseline")
+    use_aux = (
+        model_config["model"] == DEFAULT_CLASSIFICATION_MODEL
+        and variant != "baseline"
+        and args.aux_loss_weight > 0.0
+    )
     if not use_aux:
         log_probs = model(xyz, constraints)
         if args.label_smoothing > 0.0:
@@ -144,7 +173,7 @@ def classification_loss(model, xyz, constraints, target, args):
         label_smoothing=args.label_smoothing,
     )
 
-    if args.stage2_variant == "discriminative":
+    if variant == "discriminative":
         aux_keys = ("aux_component_logits", "aux_constraint_logits")
     else:
         aux_keys = ("aux_final_constraint_logits", "aux_component_token_logits")
@@ -159,7 +188,7 @@ def classification_loss(model, xyz, constraints, target, args):
     return output["log_probs"], loss
 
 
-def evaluate(model, loader, device, args, stage1):
+def evaluate(model, loader, device, args, stage1, use_constraints):
     model.eval()
     all_preds, all_labels = [], []
     total_loss = 0.0
@@ -167,13 +196,15 @@ def evaluate(model, loader, device, args, stage1):
         for data in tqdm(loader, total=len(loader), desc="eval"):
             xyz = data[0].float().to(device, non_blocking=True)
             target = data[1].long().to(device, non_blocking=True)
-            constraints = build_constraints(
-                data,
-                device,
-                args.constraint_source,
-                stage1,
-                str2bool(args.stage1_use_gt_normals),
-            )
+            constraints = None
+            if use_constraints:
+                constraints = build_constraints(
+                    data,
+                    device,
+                    args.constraint_source,
+                    stage1,
+                    str2bool(args.stage1_use_gt_normals),
+                )
             pred = model(xyz, constraints)
             total_loss += F.nll_loss(pred, target).item()
             all_preds.append(pred.cpu().numpy())
@@ -196,9 +227,18 @@ def main(args):
     )
     n_classes = train_loader.dataset.n_classes()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_config = classification_model_config(args)
+    use_constraints = classification_model_uses_constraints(model_config)
+
+    nvrtc_library = None
+    if (
+        device.type == "cuda"
+        and model_config["model"] == DEFAULT_CLASSIFICATION_MODEL
+    ):
+        nvrtc_library = preload_cuda_nvrtc()
 
     stage1 = None
-    if args.constraint_source == "stage1":
+    if use_constraints and args.constraint_source == "stage1":
         stage1 = FrozenStage1ConstraintExtractor(
             model_name=args.stage1_model,
             checkpoint=args.stage1_ckpt,
@@ -206,14 +246,25 @@ def main(args):
         ).to(device)
         stage1.freeze()
 
-    model = build_stage2_classifier(args, n_classes=n_classes).to(device)
+    model = build_classification_model(n_classes, model_config).to(device)
     save_stem = args.save_name
-    if args.save_name == "stage2_cls" and args.stage2_variant != "baseline":
-        save_stem = f"{args.save_name}_{args.stage2_variant}"
+    if args.save_name == "stage2_cls":
+        save_stem = f"{args.save_name}_{classification_run_name(model_config)}"
     save_path = os.path.join("model_trained", f"{save_stem}.pth")
-    if str2bool(args.resume) and os.path.exists(save_path):
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    print(f"classification model: {model_config}; parameters={parameter_count:,}")
+    print(f"constraints required by model: {use_constraints}")
+    if nvrtc_library is not None:
+        print(f"CUDA NVRTC: preloaded {nvrtc_library}")
+    if args.resume and os.path.exists(save_path):
         model.load_state_dict(torch.load(save_path, map_location=device))
-        print(f"resume Stage 2 classifier from {save_path}")
+        print(f"checkpoint: loaded model weights from {save_path}")
+    elif args.resume:
+        raise FileNotFoundError(
+            f"resume=true but no classification weights were found: {save_path}"
+        )
+    else:
+        print(f"checkpoint: none provided; starting a new training run ({save_path})")
 
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -224,26 +275,48 @@ def main(args):
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
 
-    writer = SummaryWriter(log_dir=os.path.join("log", args.save_name + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"))) if SummaryWriter else None
+    writer = (
+        SummaryWriter(
+            log_dir=os.path.join(
+                "log",
+                save_stem + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
+            )
+        )
+        if SummaryWriter
+        else None
+    )
     best_acc = 0.0
 
     for epoch in range(args.epoch):
         model.train()
         all_preds, all_labels = [], []
         running_loss = 0.0
-        for data in tqdm(train_loader, total=len(train_loader), desc=f"train {epoch + 1}/{args.epoch}"):
+        for data in tqdm(
+            train_loader,
+            total=len(train_loader),
+            desc=f"train {epoch + 1}/{args.epoch}",
+        ):
             xyz = data[0].float().to(device, non_blocking=True)
             target = data[1].long().to(device, non_blocking=True)
-            constraints = build_constraints(
-                data,
-                device,
-                args.constraint_source,
-                stage1,
-                str2bool(args.stage1_use_gt_normals),
-            )
+            constraints = None
+            if use_constraints:
+                constraints = build_constraints(
+                    data,
+                    device,
+                    args.constraint_source,
+                    stage1,
+                    str2bool(args.stage1_use_gt_normals),
+                )
 
             optimizer.zero_grad(set_to_none=True)
-            pred, loss = classification_loss(model, xyz, constraints, target, args)
+            pred, loss = classification_loss(
+                model,
+                xyz,
+                constraints,
+                target,
+                args,
+                model_config,
+            )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -254,7 +327,14 @@ def main(args):
 
         scheduler.step()
         train_metrics = all_metric_cls(all_preds, all_labels)
-        test_loss, test_metrics = evaluate(model, test_loader, device, args, stage1)
+        test_loss, test_metrics = evaluate(
+            model,
+            test_loader,
+            device,
+            args,
+            stage1,
+            use_constraints,
+        )
         train_loss = running_loss / max(len(train_loader), 1)
 
         if writer is not None:
