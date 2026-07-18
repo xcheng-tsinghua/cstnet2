@@ -68,6 +68,8 @@ class Stage2SegmentationTest(unittest.TestCase):
         self.assertFalse(hasattr(default_args, "output_dir"))
         self.assertFalse(hasattr(default_args, "dgcnn_k"))
         self.assertFalse(hasattr(default_args, "pointmamba_tokens"))
+        self.assertFalse(hasattr(default_args, "use_wandb"))
+        self.assertEqual(default_args.wandb_project, "cstnet2")
         self.assertTrue(train_seg.parse_args(["--resume"]).resume)
         self.assertTrue(train_seg.parse_args(["--resume", "true"]).resume)
         self.assertFalse(train_seg.parse_args(["--resume", "false"]).resume)

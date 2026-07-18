@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
-from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -15,7 +14,7 @@ from colorama import init
 from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
 from functional.cuda_runtime import preload_cuda_nvrtc
-from networks.stage1_extractor import FrozenStage1ConstraintExtractor
+from functional.wandb_utils import flatten_wandb_metrics, initialize_wandb_run
 from networks.classification_models import (
     CLASSIFICATION_MODEL_NAMES,
     DEFAULT_CLASSIFICATION_MODEL,
@@ -25,14 +24,6 @@ from networks.classification_models import (
     classification_run_name,
 )
 from networks.utils import all_metric_cls
-
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:  # pragma: no cover - optional dependency
-    try:
-        from tensorboardX import SummaryWriter
-    except ImportError:  # pragma: no cover - optional dependency
-        SummaryWriter = None
 
 
 def str2bool(value: str | bool) -> bool:
@@ -58,12 +49,6 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--local", default="False", choices=["True", "False"])
     parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
-
-    parser.add_argument("--constraint_source", choices=["stage1", "gt"], default="gt")
-    parser.add_argument("--stage1_model", choices=["pointnet2", "pointnet", "attn_3dgcn"], default="attn_3dgcn")
-    parser.add_argument("--stage1_ckpt", type=str, default=r"model_trained/attn_3dgcn_pmt_prim_cluster.pth")
-    parser.add_argument("--stage1_cluster_bandwidth", type=float, default=0.35)
-    parser.add_argument("--stage1_use_gt_normals", default="False", choices=["True", "False"])
 
     parser.add_argument(
         "--model",
@@ -94,6 +79,9 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--use_stats_token", default="False", choices=["True", "False"])
 
     parser.add_argument("--save_name", type=str, default="stage2_cls")
+    parser.add_argument("--wandb_project", type=str, default="cstnet2")
+    parser.add_argument("--wandb_entity", type=str, default="")
+    parser.add_argument("--wandb_run_name", type=str, default="")
     parser.add_argument(
         "--resume",
         type=str2bool,
@@ -105,27 +93,15 @@ def parse_args(argv: list[str] | None = None):
     return parser.parse_args(argv)
 
 
-def build_constraints(
-    data,
-    device: torch.device,
-    source: str,
-    stage1: Optional[FrozenStage1ConstraintExtractor],
-    use_gt_normals_for_stage1: bool,
-) -> torch.Tensor:
-    xyz = data[0].float().to(device, non_blocking=True)
-    if source == "gt":
-        return ground_truth_constraints_to_tensor(
-            pmt=data[2].to(device, non_blocking=True),
-            direction=data[3].float().to(device, non_blocking=True),
-            dimension=data[4].float().to(device, non_blocking=True),
-            continuity=data[5].float().to(device, non_blocking=True),
-            location=data[6].float().to(device, non_blocking=True),
-        )
-
-    if stage1 is None:
-        raise RuntimeError("Stage 1 extractor is required when constraint_source='stage1'")
-    normals = data[5].float().to(device, non_blocking=True) if use_gt_normals_for_stage1 else None
-    return stage1(xyz, normals=normals)
+def constraints_from_dataset_batch(data, device: torch.device) -> torch.Tensor:
+    """Assemble constraints already stored in the selected point-cloud files."""
+    return ground_truth_constraints_to_tensor(
+        pmt=data[2].to(device, non_blocking=True),
+        direction=data[3].float().to(device, non_blocking=True),
+        dimension=data[4].float().to(device, non_blocking=True),
+        continuity=data[5].float().to(device, non_blocking=True),
+        location=data[6].float().to(device, non_blocking=True),
+    )
 
 
 def build_stage2_classifier(args, n_classes: int) -> torch.nn.Module:
@@ -169,7 +145,7 @@ def classification_loss(model, xyz, constraints, target, args, model_config):
     return output["log_probs"], loss
 
 
-def evaluate(model, loader, device, args, stage1, use_constraints):
+def evaluate(model, loader, device, use_constraints):
     model.eval()
     all_preds, all_labels = [], []
     total_loss = 0.0
@@ -179,13 +155,7 @@ def evaluate(model, loader, device, args, stage1, use_constraints):
             target = data[1].long().to(device, non_blocking=True)
             constraints = None
             if use_constraints:
-                constraints = build_constraints(
-                    data,
-                    device,
-                    args.constraint_source,
-                    stage1,
-                    str2bool(args.stage1_use_gt_normals),
-                )
+                constraints = constraints_from_dataset_batch(data, device)
             pred = model(xyz, constraints)
             total_loss += F.nll_loss(pred, target).item()
             all_preds.append(pred.cpu().numpy())
@@ -195,7 +165,6 @@ def evaluate(model, loader, device, args, stage1, use_constraints):
 
 
 def main(args):
-    os.makedirs("log", exist_ok=True)
     os.makedirs("model_trained", exist_ok=True)
 
     data_root = args.root_local if str2bool(args.local) else args.root_sever
@@ -217,15 +186,6 @@ def main(args):
         and model_config["model"] == DEFAULT_CLASSIFICATION_MODEL
     ):
         nvrtc_library = preload_cuda_nvrtc()
-
-    stage1 = None
-    if use_constraints and args.constraint_source == "stage1":
-        stage1 = FrozenStage1ConstraintExtractor(
-            model_name=args.stage1_model,
-            checkpoint=args.stage1_ckpt,
-            cluster_bandwidth=args.stage1_cluster_bandwidth,
-        ).to(device)
-        stage1.freeze()
 
     model = build_classification_model(n_classes, model_config).to(device)
     save_stem = args.save_name
@@ -256,22 +216,30 @@ def main(args):
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
 
-    writer = (
-        SummaryWriter(
-            log_dir=os.path.join(
-                "log",
-                save_stem + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
-            )
-        )
-        if SummaryWriter
-        else None
+    wandb_run = initialize_wandb_run(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_run_name or save_stem,
+        config={
+            **vars(args),
+            "model_config": model_config,
+            "parameter_count": parameter_count,
+            "num_classes": n_classes,
+            "data_root": data_root,
+            "constraint_storage": "point_file_fields",
+            "device": str(device),
+        },
     )
     best_acc = 0.0
 
     for epoch in range(args.epoch):
+        epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
         model.train()
         all_preds, all_labels = [], []
         running_loss = 0.0
+        gradient_norm_sum = 0.0
+        gradient_norm_max = 0.0
+        gradient_norm_count = 0
         for data in tqdm(
             train_loader,
             total=len(train_loader),
@@ -281,13 +249,7 @@ def main(args):
             target = data[1].long().to(device, non_blocking=True)
             constraints = None
             if use_constraints:
-                constraints = build_constraints(
-                    data,
-                    device,
-                    args.constraint_source,
-                    stage1,
-                    str2bool(args.stage1_use_gt_normals),
-                )
+                constraints = constraints_from_dataset_batch(data, device)
 
             optimizer.zero_grad(set_to_none=True)
             pred, loss = classification_loss(
@@ -299,48 +261,57 @@ def main(args):
                 model_config,
             )
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            gradient_norm = float(
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            )
+            if np.isfinite(gradient_norm):
+                gradient_norm_sum += gradient_norm
+                gradient_norm_max = max(gradient_norm_max, gradient_norm)
+                gradient_norm_count += 1
             optimizer.step()
 
             running_loss += loss.item()
             all_preds.append(pred.detach().cpu().numpy())
             all_labels.append(target.detach().cpu().numpy())
 
-        scheduler.step()
         train_metrics = all_metric_cls(all_preds, all_labels)
         test_loss, test_metrics = evaluate(
             model,
             test_loader,
             device,
-            args,
-            stage1,
             use_constraints,
         )
         train_loss = running_loss / max(len(train_loader), 1)
 
-        if writer is not None:
-            writer.add_scalar("loss/train", train_loss, epoch)
-            writer.add_scalar("loss/test", test_loss, epoch)
-            for prefix, metrics in (("train", train_metrics), ("test", test_metrics)):
-                writer.add_scalar(f"{prefix}/ins_acc", metrics[0], epoch)
-                writer.add_scalar(f"{prefix}/class_acc", metrics[1], epoch)
-                writer.add_scalar(f"{prefix}/f1_macro", metrics[2], epoch)
-                writer.add_scalar(f"{prefix}/f1_weighted", metrics[3], epoch)
-                writer.add_scalar(f"{prefix}/map", metrics[4], epoch)
-
         torch.save(model.state_dict(), save_path)
-        if test_metrics[0] >= best_acc:
-            best_acc = test_metrics[0]
+        if test_metrics["instance_accuracy"] >= best_acc:
+            best_acc = test_metrics["instance_accuracy"]
             torch.save(model.state_dict(), os.path.join("model_trained", f"{save_stem}_best.pth"))
+
+        wandb_payload = {
+            "epoch": epoch + 1,
+            "learning_rate": epoch_learning_rate,
+            "loss/train": train_loss,
+            "loss/test": test_loss,
+            "best/test_instance_accuracy": best_acc,
+            "train/optimization/gradient_norm_mean": (
+                gradient_norm_sum / max(gradient_norm_count, 1)
+            ),
+            "train/optimization/gradient_norm_max": gradient_norm_max,
+        }
+        wandb_payload.update(flatten_wandb_metrics("train/metric", train_metrics))
+        wandb_payload.update(flatten_wandb_metrics("test/metric", test_metrics))
+        wandb_run.log(wandb_payload, step=epoch)
 
         print(
             f"epoch {epoch + 1}/{args.epoch} "
             f"train_loss={train_loss:.6f} test_loss={test_loss:.6f} "
-            f"train_acc={train_metrics[0]:.4f} test_acc={test_metrics[0]:.4f} best={best_acc:.4f}"
+            f"train_acc={train_metrics['instance_accuracy']:.4f} "
+            f"test_acc={test_metrics['instance_accuracy']:.4f} best={best_acc:.4f}"
         )
+        scheduler.step()
 
-    if writer is not None:
-        writer.close()
+    wandb_run.finish()
 
 
 if __name__ == "__main__":

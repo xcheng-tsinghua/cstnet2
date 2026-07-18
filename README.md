@@ -73,7 +73,7 @@ During inference, Stage 1 post-processing performs:
 3. Fit a primitive to each cluster.
 4. Convert fitted primitives into the 15D per-point constraint tensor.
 
-The reusable implementation is in:
+The reusable implementation is used by the offline dataset-preprocessing step:
 
 ```text
 networks/stage1_extractor.py
@@ -114,6 +114,7 @@ encoder-decoder with feature propagation and a per-point segmentation head.
 cstnet2/
 |-- AGENTS.md                      Project rules and model specification
 |-- README.md                      This file
+|-- .env.example                   WandB API-key template (copy to .env)
 |-- train_cst_pred.py              Stage 1 training entry point
 |-- train_cls.py                   Stage 2 classification training
 |-- train_seg.py                   Stage 2 MFCAD++ segmentation training
@@ -135,7 +136,7 @@ cstnet2/
 |   |-- loss.py                    Stage 1 and geometry losses
 |-- networks/
 |   |-- cst_pred_wrapper.py        Stage 1 model wrapper
-|   |-- stage1_extractor.py        Frozen Stage 1 constraint extractor
+|   |-- stage1_extractor.py        Offline frozen Stage 1 inference helper
 |   |-- stage2.py                  Stage 2 classifier
 |   |-- stage2_segmentation.py     Stage 2 segmentation model
 |   |-- feature_propagation.py     Segmentation decoder propagation
@@ -210,13 +211,12 @@ version first, then install the common Python dependencies:
 conda create -n dp python=3.11
 conda activate dp
 pip install torch torchvision torchaudio
-pip install numpy scipy scikit-learn tqdm colorama einops matplotlib tensorboard
+pip install numpy scipy scikit-learn tqdm colorama einops matplotlib wandb
 ```
 
 Optional dependencies:
 
 ```bash
-pip install wandb          # optional experiment logging
 pip install open3d         # optional visualization
 pip install pymeshlab      # optional CAD point sampling utilities
 pip install pythonocc-core # optional OpenCascade CAD processing, usually via conda-forge
@@ -227,6 +227,29 @@ For Linux servers, `pythonocc-core` is usually installed with:
 ```bash
 conda install -c conda-forge pythonocc-core
 ```
+
+All three training entry points require online WandB logging. Copy the tracked
+template to the ignored `.env` file and insert your API key before training:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then edit `.env`:
+
+```dotenv
+WANDB_API_KEY=your_real_wandb_api_key
+```
+
+The API key is read directly from the project-root `.env`; it is never passed
+as a command-line argument or copied into the WandB run config. Training stops
+with an error if `.env`, the key, or the `wandb` package is missing.
 
 ### 2. Prepare the Dataset
 
@@ -268,7 +291,7 @@ limited, reduce:
 Train Stage 1 first:
 
 ```bash
-python train_cst_pred.py --model pointnet2 --bs 128 --n_points 2000 --use_wandb False
+python train_cst_pred.py --model pointnet2 --bs 128 --n_points 2000
 ```
 
 Useful options:
@@ -276,9 +299,13 @@ Useful options:
 ```text
 --model pointnet2|pointnet|attn_3dgcn
 --is_sample True         run a small sampled dataloader for debugging
---is_load_weight True    resume from model_trained/<save_name>.pth
---use_wandb True         enable wandb if installed
+--resume_checkpoint PATH resume model, optimizer, scheduler, and epoch state
+--init_from_checkpoint PATH load model weights only for a new training run
 ```
+
+Stage 1, classification, and segmentation always log every epoch to WandB.
+This includes all losses, learning rates, aggregate metrics, per-class metrics,
+class histograms, and confusion matrices produced by each task.
 
 Default Stage 1 checkpoint path:
 
@@ -288,32 +315,35 @@ model_trained/pointnet2_pmt_prim_cluster.pth
 
 ### Train Stage 2 Classification
 
-After Stage 1 is trained, run classification with Stage 1 frozen:
+Stage 1 must first traverse the classification point-cloud dataset and write
+its predicted `pmt/mad/dim/nor/loc` values into the point files using the same
+columns and data types as the ground-truth fields. Classification never loads
+or invokes a Stage 1 model. Select predicted or ground-truth constraints by
+pointing the classification loader at the corresponding dataset root.
+
+On Windows, train with a predicted-constraint dataset:
 
 ```bash
 python train_cls.py ^
-  --constraint_source stage1 ^
-  --stage1_model pointnet2 ^
-  --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth ^
+  --local True ^
+  --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_predicted_constraints ^
   --bs 32 ^
   --n_points 2000
 ```
 
-On Linux:
+On Linux, select the corresponding server dataset directory:
 
 ```bash
 python train_cls.py \
-  --constraint_source stage1 \
-  --stage1_model pointnet2 \
-  --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth \
+  --root_sever /opt/data/private/data_set/pcd_cstnet2/Param20K_predicted_constraints \
   --bs 32 \
   --n_points 2000
 ```
 
-For ablation or debugging with ground-truth constraints:
+For an oracle ablation, point the same command at the ground-truth dataset:
 
 ```bash
-python train_cls.py --constraint_source gt --is_sample True
+python train_cls.py --root_sever /path/to/Param20K_ground_truth --is_sample True
 ```
 
 Classification supports the same baseline families as segmentation:
@@ -331,17 +361,15 @@ python train_cls.py --model pointmlp
 ```
 
 Baselines use XYZ only by default. Add `--baseline_use_constraints` to feed
-the 15D per-point constraint as an additional point feature. The constraint can
-come from frozen Stage 1 or from ground truth for an oracle ablation:
+the 15D per-point constraint stored in the selected dataset as an additional
+point feature:
 
 ```bash
 python train_cls.py --model pointnet2 --baseline_use_constraints \
-  --constraint_source stage1 \
-  --stage1_model pointnet2 \
-  --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth
+  --root_sever /path/to/Param20K_predicted_constraints
 
 python train_cls.py --model dgcnn --baseline_use_constraints \
-  --constraint_source gt
+  --root_sever /path/to/Param20K_ground_truth
 ```
 
 With the default `--save_name stage2_cls`, weights are isolated automatically
@@ -352,9 +380,9 @@ the `_constraints` suffix. Training starts fresh unless `--resume true` is set.
 
 The MFCAD++ point files must use the 17-column format documented in
 `data_utils/mfcad_seg_dataset.py`. Constraints are assumed to have already been
-predicted by the frozen Stage 1 extractor. The class count and stable colors are
-read from `data_utils/mfcad_label_map.json`; they are not hard-coded in the
-network.
+written into those files by offline Stage 1 preprocessing. The class count and
+stable colors are read from `data_utils/mfcad_label_map.json`; they are not
+hard-coded in the network.
 
 ```bash
 python train_seg.py --data_root D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd
@@ -427,6 +455,10 @@ Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views
 python eval_seg.py model_trained/seg/constraint_aware/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
 ```
 
+Evaluation also requires `.env` and uploads the complete selected-split loss,
+point/Face metrics, per-class values, and confusion matrices to WandB while
+retaining the local JSON result.
+
 ### Visualization
 
 Visualization is optional and requires `open3d`.
@@ -453,18 +485,17 @@ python -B -c "import train_cst_pred; import train_cls; import train_seg; import 
 
 ### 2. Tiny Forward Smoke Test
 
-This verifies Stage 1 extraction and Stage 2 classification without needing the
-full dataset:
+This verifies construction of the stored constraint representation and Stage 2
+classification without loading a Stage 1 model:
 
 ```bash
-python -B -c "import torch; from functional.constraints import ground_truth_constraints_to_tensor; from networks.stage1_extractor import FrozenStage1ConstraintExtractor; from networks.stage2 import CstNetStage2Classifier; B,N=2,64; xyz=torch.rand(B,N,3); pmt=torch.randint(0,5,(B,N)); cst=ground_truth_constraints_to_tensor(pmt, torch.randn(B,N,3), torch.rand(B,N), torch.randn(B,N,3), torch.randn(B,N,3)); print(CstNetStage2Classifier(6).eval()(xyz,cst).shape); print(FrozenStage1ConstraintExtractor(model_name='pointnet2', checkpoint=None).eval()(xyz[:1]).shape)"
+python -B -c "import torch; from functional.constraints import ground_truth_constraints_to_tensor; from networks.stage2 import CstNetStage2Classifier; B,N=2,64; xyz=torch.rand(B,N,3); pmt=torch.randint(0,5,(B,N)); cst=ground_truth_constraints_to_tensor(pmt, torch.randn(B,N,3), torch.rand(B,N), torch.randn(B,N,3), torch.randn(B,N,3)); print(CstNetStage2Classifier(6).eval()(xyz,cst).shape)"
 ```
 
 Expected output shapes:
 
 ```text
 classification: [2, 6]
-stage1 cst:     [1, 64, 15]
 ```
 
 ### 3. Small Dataset Debug Runs
@@ -472,12 +503,12 @@ stage1 cst:     [1, 64, 15]
 Use sampled dataloaders before long training:
 
 ```bash
-python train_cst_pred.py --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0 --use_wandb False
-python train_cls.py --constraint_source gt --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
+python train_cst_pred.py --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
+python train_cls.py --root_sever /path/to/precomputed_dataset --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
 ```
 
-After these pass, switch `--constraint_source stage1` for Stage 2 and use the
-trained Stage 1 checkpoint.
+After these pass, run Stage 1 preprocessing over the complete dataset and point
+Stage 2 at the generated dataset root.
 
 ## Output Files
 
@@ -485,7 +516,7 @@ Training creates:
 
 ```text
 model_trained/    model checkpoints
-log/              training logs and tensorboard files
+log/              Stage 1 local JSON training-history files
 *.txt.npy         dataset cache files next to source TXT files
 ```
 
@@ -493,11 +524,9 @@ These generated files are intentionally ignored by Git.
 
 ## Notes
 
-- Stage 2 scripts freeze Stage 1 automatically through
-  `FrozenStage1ConstraintExtractor`.
-- `--constraint_source gt` is intended for debugging and ablations, not the main
-  two-stage workflow.
-- If Stage 1 checkpoint loading fails, train Stage 1 first or pass the correct
-  `--stage1_ckpt` path.
+- Stage 2 classification and segmentation never load Stage 1. Stage 1 inference
+  is an offline dataset-preprocessing step.
+- Predicted and ground-truth constraints share the same point-file schema; the
+  dataset root determines which constraint source is used.
 - On Windows PowerShell, use `^` for multi-line commands. On Linux/macOS shells,
   use `\`.

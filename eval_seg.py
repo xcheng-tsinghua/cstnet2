@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
 from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
+from functional.wandb_utils import flatten_wandb_metrics, initialize_wandb_run
 from networks.segmentation_models import build_segmentation_model, segmentation_model_config
 from tools.visualize_mfcad_seg import export_segmentation_sample
 
@@ -29,7 +30,7 @@ def load_full_checkpoint(path: str):
         return torch.load(path, map_location="cpu")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser("Evaluate Stage 2 MFCAD++ point segmentation")
     parser.add_argument("checkpoint")
     parser.add_argument(
@@ -44,7 +45,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_json", default="")
     parser.add_argument("--prediction_dir", default="")
     parser.add_argument("--max_exports", type=int, default=20)
-    return parser.parse_args()
+    parser.add_argument("--wandb_project", type=str, default="cstnet2")
+    parser.add_argument("--wandb_entity", type=str, default="")
+    parser.add_argument("--wandb_run_name", type=str, default="")
+    return parser.parse_args(argv)
 
 
 @torch.no_grad()
@@ -84,6 +88,24 @@ def main(args: argparse.Namespace) -> None:
     model.eval()
     print(f"evaluation model: {model_config}")
     criterion = WeightedSegmentationLoss(checkpoint["class_weights"]).to(device)
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    wandb_run = initialize_wandb_run(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=(
+            args.wandb_run_name
+            or f"stage2_seg_{model_config['model']}_{dataset.split}_eval"
+        ),
+        config={
+            **vars(args),
+            "model_config": model_config,
+            "parameter_count": parameter_count,
+            "num_classes": dataset.num_classes,
+            "label_map": dataset.label_map,
+            "checkpoint_epoch": int(checkpoint.get("epoch", -1)) + 1,
+            "device": str(device),
+        },
+    )
     metrics = SegmentationMetrics(dataset.num_classes)
     total_loss = 0.0
     export_count = 0
@@ -122,6 +144,20 @@ def main(args: argparse.Namespace) -> None:
         "loss": total_loss / max(len(loader), 1),
         **metrics.compute(),
     }
+    wandb_payload = {
+        "checkpoint_epoch": int(checkpoint.get("epoch", -1)) + 1,
+        f"{dataset.split}/loss": result["loss"],
+        f"{dataset.split}/num_samples": len(dataset),
+    }
+    metric_values = {
+        key: value
+        for key, value in result.items()
+        if key not in {"split", "num_samples", "loss"}
+    }
+    wandb_payload.update(
+        flatten_wandb_metrics(f"{dataset.split}/metric", metric_values)
+    )
+    wandb_run.log(wandb_payload)
     output_json = Path(args.output_json) if args.output_json else Path(args.checkpoint).with_name(
         f"{dataset.split}_metrics.json"
     )
@@ -129,6 +165,7 @@ def main(args: argparse.Namespace) -> None:
     with output_json.open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    wandb_run.finish()
 
 
 if __name__ == "__main__":

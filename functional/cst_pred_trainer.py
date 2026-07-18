@@ -23,6 +23,7 @@ from functional.stage1_metrics import (
     primitive_metrics_from_confusion,
     primitive_prediction_collapsed,
 )
+from functional.wandb_utils import flatten_wandb_metrics
 
 
 LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "nor", "loc", "geom", "inst")
@@ -354,10 +355,11 @@ class CstPredTrainer(object):
                 }
                 for name, value in epoch_lrs.items():
                     payload[f"lr/{name}"] = value
-                payload.update(_flatten_for_log("train/loss", train_loss))
-                payload.update(_flatten_for_log("train/metric", train_metrics))
-                payload.update(_flatten_for_log("test/loss", test_loss))
-                payload.update(_flatten_for_log("test/metric", test_metrics))
+                payload.update(flatten_wandb_metrics("train/loss", train_loss))
+                payload.update(flatten_wandb_metrics("train/metric", train_metrics))
+                payload.update(flatten_wandb_metrics("test/loss", test_loss))
+                payload.update(flatten_wandb_metrics("test/metric", test_metrics))
+                payload.update(flatten_wandb_metrics("best", self.best_metrics))
                 self.wandb_run.log(payload, step=global_epoch)
 
             # The checkpoint contains the LR that will be used by the next epoch.
@@ -949,7 +951,6 @@ def _aggregate_metric_dicts(dicts):
         output.update(_to_python(primitive_metrics_from_confusion(confusion)))
     return output
 
-
 def _scalar(data, key):
     value = data.get(key, 0.0)
     if torch.is_tensor(value):
@@ -1005,21 +1006,4 @@ def _mean_dicts(dicts):
             output[key] = float(sum(float(value) for value in values) / len(values))
         else:
             output[key] = _to_python(first)
-    return output
-
-
-def _flatten_for_log(prefix, data):
-    output = {}
-
-    def visit(path, value):
-        if isinstance(value, dict):
-            for key, item in value.items():
-                visit(f"{path}/{key}", item)
-        elif isinstance(value, (list, tuple)):
-            for index, item in enumerate(value):
-                visit(f"{path}/{index}", item)
-        elif isinstance(value, (int, float)):
-            output[path] = value
-
-    visit(prefix, data)
     return output

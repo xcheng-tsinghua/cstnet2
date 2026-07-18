@@ -16,6 +16,7 @@ from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDat
 from functional.cuda_runtime import preload_cuda_nvrtc
 from functional.segmentation_loss import compute_training_class_statistics
 from functional.stage2_seg_trainer import Stage2SegmentationTrainer
+from functional.wandb_utils import initialize_wandb_run
 from networks.segmentation_models import (
     DEFAULT_SEGMENTATION_MODEL,
     SEGMENTATION_MODEL_NAMES,
@@ -136,11 +137,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Ignore cached class statistics and scan the training split again",
     )
     parser.add_argument(
-        "--use_wandb", action="store_true", default=False,
-        help="Enable Weights & Biases logging",
+        "--wandb_project", type=str, default="cstnet2", help="WandB project name",
     )
     parser.add_argument(
-        "--wandb_project", type=str, default="cstnet2", help="WandB project name",
+        "--wandb_entity", type=str, default="", help="Optional WandB entity/team",
     )
     parser.add_argument(
         "--wandb_run_name", type=str, default="stage2_mfcad_seg", help="WandB run name",
@@ -229,8 +229,8 @@ def main(args: argparse.Namespace) -> None:
         num_classes=train_loader.dataset.num_classes,
         config=model_config,
     ).to(device)
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
     if rank == 0:
-        parameter_count = sum(parameter.numel() for parameter in model.parameters())
         print(f"segmentation model: {model_config}; parameters={parameter_count:,}")
     if distributed:
         model = DistributedDataParallel(
@@ -244,17 +244,22 @@ def main(args: argparse.Namespace) -> None:
     )
 
     wandb_run = None
-    if args.use_wandb and rank == 0:
-        try:
-            import wandb
-        except ImportError:
-            print("wandb is not installed; training continues without WandB")
-        else:
-            wandb_run = wandb.init(
-                project=args.wandb_project,
-                name=args.wandb_run_name,
-                config=vars(args),
-            )
+    if rank == 0:
+        wandb_run = initialize_wandb_run(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_run_name,
+            config={
+                **vars(args),
+                "model_config": model_config,
+                "parameter_count": parameter_count,
+                "num_classes": train_loader.dataset.num_classes,
+                "class_weights": class_weights.tolist(),
+                "label_map": train_loader.dataset.label_map,
+                "device": str(device),
+                "world_size": dist.get_world_size() if distributed else 1,
+            },
+        )
 
     trainer = Stage2SegmentationTrainer(
         model=model,
@@ -272,11 +277,13 @@ def main(args: argparse.Namespace) -> None:
         checkpoint_args=vars(args),
         wandb_run=wandb_run,
     )
-    trainer.fit(resume_checkpoint=resume_checkpoint)
-    if wandb_run is not None:
-        wandb_run.finish()
-    if distributed:
-        dist.destroy_process_group()
+    try:
+        trainer.fit(resume_checkpoint=resume_checkpoint)
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
+        if distributed:
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

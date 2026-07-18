@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
 
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
+from functional.wandb_utils import flatten_wandb_metrics
 from networks.segmentation_models import segmentation_model_config
 
 
@@ -186,6 +187,10 @@ class Stage2SegmentationTrainer:
         total_loss = 0.0
         batch_count = 0
         amp_skipped_steps = 0
+        optimizer_steps = 0
+        gradient_norm_sum = 0.0
+        gradient_norm_max = 0.0
+        gradient_norm_count = 0
         description = f"train {epoch + 1}/{self.epochs}" if training else f"val {epoch + 1}/{self.epochs}"
         iterator = tqdm(loader, desc=description, disable=not self.is_main)
 
@@ -204,12 +209,20 @@ class Stage2SegmentationTrainer:
                     loss = self.criterion(logits, batch["labels"])
 
                 if training:
-                    _, optimizer_step_skipped = self._backward_and_step(loss)
+                    gradient_norm, optimizer_step_skipped = self._backward_and_step(loss)
+                    gradient_norm_value = float(gradient_norm.detach().float().cpu())
+                    if np.isfinite(gradient_norm_value):
+                        gradient_norm_sum += gradient_norm_value
+                        gradient_norm_max = max(
+                            gradient_norm_max, gradient_norm_value
+                        )
+                        gradient_norm_count += 1
                     if optimizer_step_skipped:
                         amp_skipped_steps += 1
                     else:
                         self.scheduler.step()
                         self.global_step += 1
+                        optimizer_steps += 1
 
                 total_loss += float(loss.detach().item())
                 batch_count += 1
@@ -222,7 +235,20 @@ class Stage2SegmentationTrainer:
 
         total_loss = _distributed_sum(total_loss, self.device)
         batch_count = int(_distributed_sum(float(batch_count), self.device))
-        return total_loss / max(batch_count, 1), metrics.compute()
+        metric_summary = metrics.compute()
+        if training:
+            metric_summary.update(
+                {
+                    "optimization/optimizer_steps": optimizer_steps,
+                    "optimization/amp_skipped_steps": amp_skipped_steps,
+                    "optimization/amp_scale": float(self.scaler.get_scale()),
+                    "optimization/gradient_norm_mean": (
+                        gradient_norm_sum / max(gradient_norm_count, 1)
+                    ),
+                    "optimization/gradient_norm_max": gradient_norm_max,
+                }
+            )
+        return total_loss / max(batch_count, 1), metric_summary
 
     def _checkpoint_payload(self, epoch: int) -> dict[str, Any]:
         return {
@@ -333,20 +359,17 @@ class Stage2SegmentationTrainer:
                     f"face_mIoU={val_metrics['face_mean_iou']:.4f} best={self.best_metric:.4f}"
                 )
                 if self.wandb_run is not None:
-                    self.wandb_run.log(
-                        {
-                            "epoch": epoch,
-                            "global_step": self.global_step,
-                            "learning_rate": self.optimizer.param_groups[0]["lr"],
-                            "loss/train": train_loss,
-                            "loss/val": val_loss,
-                            "point_miou/train": train_metrics["point_mean_iou"],
-                            "point_miou/val": val_metrics["point_mean_iou"],
-                            "face_miou/train": train_metrics["face_mean_iou"],
-                            "face_miou/val": val_metrics["face_mean_iou"],
-                            "point_accuracy/val": val_metrics["point_overall_accuracy"],
-                            "face_accuracy/val": val_metrics["face_overall_accuracy"],
-                        },
-                        step=self.global_step,
+                    payload = {
+                        "epoch": epoch + 1,
+                        "global_step": self.global_step,
+                        "learning_rate": self.optimizer.param_groups[0]["lr"],
+                        "loss/train": train_loss,
+                        "loss/val": val_loss,
+                        "best/val_point_mean_iou": self.best_metric,
+                    }
+                    payload.update(
+                        flatten_wandb_metrics("train/metric", train_metrics)
                     )
+                    payload.update(flatten_wandb_metrics("val/metric", val_metrics))
+                    self.wandb_run.log(payload, step=epoch)
         return latest_metrics

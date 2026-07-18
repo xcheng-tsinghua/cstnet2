@@ -308,10 +308,10 @@ def surface_knn(points_all: "(bs, n_pnts, 3)", k_near=100, n_stepk=10):
 
 def all_metric_cls(all_preds: list, all_labels: list):
     """
-    计算分类评价指标：Acc.instance, Acc.class, F1-score, mAP
+    Compute aggregate, per-class, histogram, and confusion-matrix metrics.
     :param all_preds: [item0, item1, ...], item: [bs, n_classes]
     :param all_labels: [item0, item1, ...], item: [bs, ], Only int tensor in supported
-    :return: Acc.instance, Acc.class, F1-score-macro, F1-score-weighted, mAP
+    :return: a WandB-ready nested metric dictionary
     """
     all_preds = np.vstack(all_preds)  # [n_samples, n_classes]
     all_labels = np.hstack(all_labels)  # [n_samples]
@@ -320,40 +320,81 @@ def all_metric_cls(all_preds: list, all_labels: list):
     if not np.issubdtype(all_labels.dtype, np.integer):
         raise TypeError('Not all int data in all_labels')
 
-    # ---------- Acc.Instance ----------
     pred_choice = np.argmax(all_preds, axis=1)  # -> [n_samples, ]
-    correct = np.equal(pred_choice, all_labels).sum()
-    acc_ins = correct / n_samples
+    confusion = np.zeros((n_classes, n_classes), dtype=np.int64)
+    np.add.at(confusion, (all_labels, pred_choice), 1)
+    true_positive = np.diag(confusion).astype(np.float64)
+    gt_histogram = confusion.sum(axis=1)
+    pred_histogram = confusion.sum(axis=0)
+    precision = np.divide(
+        true_positive,
+        pred_histogram,
+        out=np.zeros_like(true_positive),
+        where=pred_histogram > 0,
+    )
+    recall = np.divide(
+        true_positive,
+        gt_histogram,
+        out=np.zeros_like(true_positive),
+        where=gt_histogram > 0,
+    )
+    per_class_f1 = np.divide(
+        2.0 * precision * recall,
+        precision + recall,
+        out=np.zeros_like(true_positive),
+        where=(precision + recall) > 0,
+    )
+    union = gt_histogram + pred_histogram - true_positive
+    per_class_iou = np.divide(
+        true_positive,
+        union,
+        out=np.zeros_like(true_positive),
+        where=union > 0,
+    )
+    valid_classes = gt_histogram > 0
+    instance_accuracy = float(true_positive.sum() / max(n_samples, 1))
+    class_accuracy = float(recall[valid_classes].mean()) if valid_classes.any() else 0.0
 
-    # ---------- Acc.class ----------
-    acc_cls = []
-    for class_idx in range(n_classes):
-        class_mask = (all_labels == class_idx)
-        if np.sum(class_mask) == 0:
-            continue
-        cls_acc_sig = np.mean(pred_choice[class_mask] == all_labels[class_mask])
-        acc_cls.append(cls_acc_sig)
-    acc_cls = np.mean(acc_cls)
-
-    # ---------- F1-score ----------
-    f1_m = f1_score(all_labels, pred_choice, average='macro')
-    f1_w = f1_score(all_labels, pred_choice, average='weighted')
-
-    # ---------- mAP ----------
     all_labels_one_hot = label_binarize(all_labels, classes=np.arange(n_classes))
 
     if n_classes == 2:
         all_labels_one_hot_rev = 1 - all_labels_one_hot
         all_labels_one_hot = np.concatenate([all_labels_one_hot_rev, all_labels_one_hot], axis=1)
 
-    ap_sig = []
-    for i in range(n_classes):
-        ap = average_precision_score(all_labels_one_hot[:, i], all_preds[:, i])
-        ap_sig.append(ap)
+    per_class_ap = []
+    for class_index in range(n_classes):
+        if gt_histogram[class_index] == 0:
+            per_class_ap.append(0.0)
+        else:
+            per_class_ap.append(
+                float(
+                    average_precision_score(
+                        all_labels_one_hot[:, class_index],
+                        all_preds[:, class_index],
+                    )
+                )
+            )
 
-    mAP = np.mean(ap_sig)
-
-    return acc_ins, acc_cls, f1_m, f1_w, mAP
+    return {
+        "instance_accuracy": instance_accuracy,
+        "class_accuracy": class_accuracy,
+        "f1_macro": float(
+            f1_score(all_labels, pred_choice, average="macro", zero_division=0)
+        ),
+        "f1_weighted": float(
+            f1_score(all_labels, pred_choice, average="weighted", zero_division=0)
+        ),
+        "mean_average_precision": float(np.mean(per_class_ap)),
+        "per_class_accuracy": recall.tolist(),
+        "per_class_precision": precision.tolist(),
+        "per_class_recall": recall.tolist(),
+        "per_class_f1": per_class_f1.tolist(),
+        "per_class_average_precision": per_class_ap,
+        "per_class_iou": per_class_iou.tolist(),
+        "gt_histogram": gt_histogram.tolist(),
+        "pred_histogram": pred_histogram.tolist(),
+        "confusion_matrix": confusion.tolist(),
+    }
 
 
 def square_distance(src, dst):

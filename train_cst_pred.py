@@ -9,13 +9,9 @@ import torch
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
+from functional.wandb_utils import initialize_wandb_run
 from networks.cst_pred_wrapper import CstPredWrapper
 from colorama import init, Fore, Back
-
-try:
-    import wandb
-except ImportError:  # pragma: no cover - optional dependency
-    wandb = None
 
 
 def str2bool(value):
@@ -29,7 +25,7 @@ def str2bool(value):
     raise argparse.ArgumentTypeError(f"expected True/False, got: {value}")
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=50, help='batch size in training')
     parser.add_argument('--epoch', default=500, type=int, help='number of epoch in training')
@@ -43,7 +39,6 @@ def parse_args():
     parser.add_argument('--local', default=False, type=str2bool)
     parser.add_argument('--root_sever', type=str, default=r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
     parser.add_argument('--root_local', type=str, default=r'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_pcd')
-    parser.add_argument('--use_wandb', default=False, type=str2bool)
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
@@ -78,7 +73,7 @@ def parse_args():
     parser.add_argument('--use_amp', default=False, type=str2bool)
     parser.add_argument('--enable_grad_diagnostics', default=True, type=str2bool)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     return args
 
 
@@ -105,19 +100,6 @@ def main(args):
         is_sample=args.is_sample
     )
 
-    use_wandb = args.use_wandb
-    if use_wandb and wandb is None:
-        print(Fore.YELLOW + 'wandb is not installed; continue without wandb logging')
-        use_wandb = False
-    run = None
-    if use_wandb:
-        run = wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity if args.wandb_entity else None,
-            name=args.wandb_run_name if args.wandb_run_name else save_str,
-            config=vars(args)
-        )
-
     # trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     use_extra_features = args.use_extra_features
@@ -140,12 +122,25 @@ def main(args):
         'geom': args.enable_geom_loss,
         'inst': args.enable_inst_loss,
     }
+    stage1_model = CstPredWrapper(
+        args.model,
+        channel_fea=channel_fea,
+        stage1_mode=args.stage1_mode,
+    ).to(device)
+    parameter_count = sum(parameter.numel() for parameter in stage1_model.parameters())
+    run = initialize_wandb_run(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_run_name if args.wandb_run_name else save_str,
+        config={
+            **vars(args),
+            'parameter_count': parameter_count,
+            'input_feature_dim': channel_fea,
+            'device': str(device),
+        },
+    )
     trainer = CstPredTrainer(
-        model = CstPredWrapper(
-            args.model,
-            channel_fea=channel_fea,
-            stage1_mode=args.stage1_mode,
-        ).to(device),
+        model=stage1_model,
         train_loader = train_loader,
         test_loader = test_loader,
         checkpoint_dir=os.path.join('model_trained', save_str),
@@ -176,8 +171,7 @@ def main(args):
     try:
         trainer.start()
     finally:
-        if run is not None:
-            run.finish()
+        run.finish()
 
 
 if __name__ == '__main__':

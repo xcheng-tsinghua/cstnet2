@@ -43,6 +43,11 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertFalse(defaults.resume)
         self.assertFalse(hasattr(defaults, "dgcnn_k"))
         self.assertFalse(hasattr(defaults, "pointmamba_tokens"))
+        self.assertFalse(hasattr(defaults, "use_wandb"))
+        self.assertFalse(hasattr(defaults, "constraint_source"))
+        self.assertFalse(hasattr(defaults, "stage1_ckpt"))
+        self.assertFalse(hasattr(defaults, "stage1_model"))
+        self.assertEqual(defaults.wandb_project, "cstnet2")
 
         args = train_cls.parse_args(
             ["--model", "pointnet2", "--baseline_use_constraints", "--resume"]
@@ -50,6 +55,31 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertEqual(args.model, "pointnet2")
         self.assertTrue(args.baseline_use_constraints)
         self.assertTrue(args.resume)
+
+    def test_classification_constraints_are_read_from_dataset_fields(self):
+        import train_cls
+
+        from functional.constraints import ground_truth_constraints_to_tensor
+
+        batch_size, n_points = 2, 8
+        data = (
+            torch.randn(batch_size, n_points, 3),
+            torch.zeros(batch_size, dtype=torch.long),
+            torch.randint(0, 5, (batch_size, n_points)),
+            torch.randn(batch_size, n_points, 3),
+            torch.randn(batch_size, n_points),
+            torch.randn(batch_size, n_points, 3),
+            torch.randn(batch_size, n_points, 3),
+            torch.zeros(batch_size, n_points, dtype=torch.long),
+        )
+        expected = ground_truth_constraints_to_tensor(
+            data[2], data[3], data[4], data[5], data[6]
+        )
+        actual = train_cls.constraints_from_dataset_batch(
+            data, torch.device("cpu")
+        )
+
+        self.assertTrue(torch.equal(actual, expected))
 
     def test_classification_model_config_and_run_names(self):
         from networks.classification_models import (
