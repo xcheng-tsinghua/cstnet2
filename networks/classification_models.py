@@ -12,6 +12,10 @@ from networks.attn_3dgcn import Attn3DGcnPointEmbedding
 from networks.dgcnn_gn import DGCNNEncoderGn
 from networks.point_net import PointNet
 from networks.point_net2 import PointNet2Cls
+from networks.point_mamba import PointMambaClassifier
+from networks.point_transformer import PointTransformerClassifier
+from networks.pointmlp import PointMLPClassifier
+from networks.pointnext import PointNeXtClassifier
 from networks.stage2 import (
     CstNetStage2Classifier,
     CstNetStage2ClassifierDiscriminative,
@@ -26,6 +30,10 @@ CLASSIFICATION_MODEL_NAMES = (
     "pointnet2",
     "dgcnn",
     "attn3dgcn",
+    "pointtransformer",
+    "pointmamba",
+    "pointnext",
+    "pointmlp",
 )
 BASELINE_CLASSIFICATION_MODELS = CLASSIFICATION_MODEL_NAMES[1:]
 CONSTRAINT_AWARE_VARIANTS = ("baseline", "discriminative", "token_fusion")
@@ -46,7 +54,10 @@ def _as_bool(value: Any) -> bool:
 def classification_model_config(
     source: Mapping[str, Any] | Any,
 ) -> dict[str, Any]:
-    """Return only parameters that define the classification architecture."""
+    """Return checkpoint-relevant model selection and constraint settings.
+
+    Baseline internals deliberately come from defaults in their model files.
+    """
     model_name = str(
         _config_value(source, "model", DEFAULT_CLASSIFICATION_MODEL)
         or DEFAULT_CLASSIFICATION_MODEL
@@ -100,13 +111,6 @@ def classification_model_config(
         config["baseline_use_constraints"] = _as_bool(
             _config_value(source, "baseline_use_constraints", False)
         )
-        if model_name == "dgcnn":
-            config["dgcnn_k"] = int(_config_value(source, "dgcnn_k", 20))
-        elif model_name == "attn3dgcn":
-            config.update(
-                attn_neighbors=int(_config_value(source, "attn_neighbors", 20)),
-                attn_k=int(_config_value(source, "attn_k", 16)),
-            )
     return config
 
 
@@ -338,14 +342,35 @@ def build_classification_model(
     if model_name == "dgcnn":
         return DGCNNClassificationAdapter(
             num_classes,
-            k=model_config["dgcnn_k"],
             use_constraints=model_config["baseline_use_constraints"],
         )
     if model_name == "attn3dgcn":
         return Attn3DGCNClassificationAdapter(
             num_classes,
-            n_neighbors=model_config["attn_neighbors"],
-            attn_k=model_config["attn_k"],
             use_constraints=model_config["baseline_use_constraints"],
+        )
+    if model_name == "pointtransformer":
+        return PointTransformerClassifier(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointmamba":
+        return PointMambaClassifier(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointnext":
+        return PointNeXtClassifier(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointmlp":
+        return PointMLPClassifier(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
         )
     raise AssertionError(f"unhandled classification model: {model_name}")

@@ -61,40 +61,42 @@ class Stage2SegmentationTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        import train_stage2_seg
+        import train_seg
 
-        default_args = train_stage2_seg.parse_args([])
+        default_args = train_seg.parse_args([])
         self.assertFalse(default_args.resume)
         self.assertFalse(hasattr(default_args, "output_dir"))
-        self.assertTrue(train_stage2_seg.parse_args(["--resume"]).resume)
-        self.assertTrue(train_stage2_seg.parse_args(["--resume", "true"]).resume)
-        self.assertFalse(train_stage2_seg.parse_args(["--resume", "false"]).resume)
+        self.assertFalse(hasattr(default_args, "dgcnn_k"))
+        self.assertFalse(hasattr(default_args, "pointmamba_tokens"))
+        self.assertTrue(train_seg.parse_args(["--resume"]).resume)
+        self.assertTrue(train_seg.parse_args(["--resume", "true"]).resume)
+        self.assertFalse(train_seg.parse_args(["--resume", "false"]).resume)
 
-        original_root = train_stage2_seg.MODEL_OUTPUT_ROOT
+        original_root = train_seg.MODEL_OUTPUT_ROOT
         try:
             with tempfile.TemporaryDirectory() as directory:
-                train_stage2_seg.MODEL_OUTPUT_ROOT = Path(directory)
+                train_seg.MODEL_OUTPUT_ROOT = Path(directory)
                 config = {
                     "model": "pointnet2",
                     "baseline_use_constraints": True,
                 }
-                output_dir, checkpoint = train_stage2_seg.resolve_training_paths(
+                output_dir, checkpoint = train_seg.resolve_training_paths(
                     config, resume=False
                 )
                 self.assertEqual(output_dir.name, "pointnet2_constraints")
                 self.assertIsNone(checkpoint)
 
                 with self.assertRaises(FileNotFoundError):
-                    train_stage2_seg.resolve_training_paths(config, resume=True)
+                    train_seg.resolve_training_paths(config, resume=True)
                 output_dir.mkdir(parents=True)
                 expected_checkpoint = output_dir / "last.pth"
                 expected_checkpoint.touch()
-                _, checkpoint = train_stage2_seg.resolve_training_paths(
+                _, checkpoint = train_seg.resolve_training_paths(
                     config, resume=True
                 )
                 self.assertEqual(checkpoint, expected_checkpoint)
         finally:
-            train_stage2_seg.MODEL_OUTPUT_ROOT = original_root
+            train_seg.MODEL_OUTPUT_ROOT = original_root
 
     def test_registered_baseline_models_use_common_output_layout(self):
         from networks.segmentation_models import build_segmentation_model
@@ -102,11 +104,12 @@ class Stage2SegmentationTest(unittest.TestCase):
         cases = (
             ({"model": "pointnet"}, 32),
             ({"model": "pointnet2"}, 64),
-            ({"model": "dgcnn", "dgcnn_k": 8}, 24),
-            (
-                {"model": "attn3dgcn", "attn_neighbors": 8, "attn_k": 4},
-                24,
-            ),
+            ({"model": "dgcnn"}, 24),
+            ({"model": "attn3dgcn"}, 24),
+            ({"model": "pointtransformer"}, 16),
+            ({"model": "pointmamba"}, 16),
+            ({"model": "pointnext"}, 16),
+            ({"model": "pointmlp"}, 16),
         )
         for base_config, n_points in cases:
             for use_constraints in (False, True):
@@ -159,7 +162,19 @@ class Stage2SegmentationTest(unittest.TestCase):
             {
                 "model": "dgcnn",
                 "baseline_use_constraints": False,
-                "dgcnn_k": 12,
+            },
+        )
+        self.assertEqual(
+            segmentation_model_config(
+                {
+                    "model": "pointmamba",
+                    "pointmamba_tokens": 64,
+                    "pointmamba_group_size": 16,
+                }
+            ),
+            {
+                "model": "pointmamba",
+                "baseline_use_constraints": False,
             },
         )
         self.assertEqual(

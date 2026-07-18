@@ -78,25 +78,6 @@ def parse_args(argv: list[str] | None = None):
         help="Use the 15D per-point constraint as baseline point features",
     )
     parser.add_argument(
-        "--dgcnn_k",
-        type=int,
-        default=20,
-        help="DGCNN nearest-neighbor count",
-    )
-    parser.add_argument(
-        "--attn_neighbors",
-        type=int,
-        default=20,
-        help="Attention 3DGCN graph-neighbor count",
-    )
-    parser.add_argument(
-        "--attn_k",
-        type=int,
-        default=16,
-        help="Attention 3DGCN transformer-neighbor count",
-    )
-
-    parser.add_argument(
         "--stage2_variant",
         choices=["baseline", "discriminative", "token_fusion"],
         default="baseline",

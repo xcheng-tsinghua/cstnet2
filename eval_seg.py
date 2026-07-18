@@ -1,3 +1,5 @@
+"""Evaluate Stage 2 MFCAD++ point segmentation checkpoints."""
+
 from __future__ import annotations
 
 import argparse

@@ -67,12 +67,12 @@ One-batch overfit
 python train_cst_pred.py --epoch 20 --bs 20 --stage1_mode multitask --train_phase joint --overfit_one_batch True --geom_start_epoch 0 --geom_ramp_epochs 5
 
 -- stage2 seg
-nohup python train_stage2_seg.py > out_s2seg.log 2>&1 &
-nohup python train_stage2_seg.py --no_amp --batch_size 20 --learning_rate 0.0001 --gradient_clip_norm 0.5 > out_s2seg.log 2>&1 &
+nohup python train_seg.py > out_s2seg.log 2>&1 &
+nohup python train_seg.py --no_amp --batch_size 20 --learning_rate 0.0001 --gradient_clip_norm 0.5 > out_s2seg.log 2>&1 &
 tail -f out_s2seg.log
 
 
 // pointnet++
-nohup python train_stage2_seg.py --model pointnet2 --resume false --batch_size=100 > out_s2seg_pn2.log 2>&1 &
+nohup python train_seg.py --model pointnet2 --resume false --batch_size=100 > out_s2seg_pn2.log 2>&1 &
 tail -f out_s2seg_pn2.log
 

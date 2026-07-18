@@ -11,6 +11,10 @@ from networks.attn_3dgcn import Attn3DGcnPointEmbedding
 from networks.dgcnn_gn import DGCNGn
 from networks.point_net import PointNetSeg
 from networks.point_net2 import PointNet2Seg
+from networks.point_mamba import PointMambaSegmenter
+from networks.point_transformer import PointTransformerSegmenter
+from networks.pointmlp import PointMLPSegmenter
+from networks.pointnext import PointNeXtSegmenter
 from networks.stage2_segmentation import Stage2SegmentationModel
 
 
@@ -21,6 +25,10 @@ SEGMENTATION_MODEL_NAMES = (
     "pointnet2",
     "dgcnn",
     "attn3dgcn",
+    "pointtransformer",
+    "pointmamba",
+    "pointnext",
+    "pointmlp",
 )
 BASELINE_SEGMENTATION_MODELS = SEGMENTATION_MODEL_NAMES[1:]
 
@@ -32,7 +40,10 @@ def _config_value(source: Mapping[str, Any] | Any, name: str, default: Any) -> A
 
 
 def segmentation_model_config(source: Mapping[str, Any] | Any) -> dict[str, Any]:
-    """Return the architecture-defining checkpoint configuration."""
+    """Return checkpoint-relevant model selection and constraint settings.
+
+    Baseline internals deliberately come from defaults in their model files.
+    """
     model_name = str(
         _config_value(source, "model", DEFAULT_SEGMENTATION_MODEL)
         or DEFAULT_SEGMENTATION_MODEL
@@ -57,13 +68,6 @@ def segmentation_model_config(source: Mapping[str, Any] | Any) -> dict[str, Any]
         config["baseline_use_constraints"] = bool(
             _config_value(source, "baseline_use_constraints", False)
         )
-        if model_name == "dgcnn":
-            config["dgcnn_k"] = int(_config_value(source, "dgcnn_k", 20))
-        elif model_name == "attn3dgcn":
-            config.update(
-                attn_neighbors=int(_config_value(source, "attn_neighbors", 20)),
-                attn_k=int(_config_value(source, "attn_k", 16)),
-            )
     return config
 
 
@@ -271,14 +275,35 @@ def build_segmentation_model(
     if model_name == "dgcnn":
         return DGCNNSegmentationAdapter(
             num_classes,
-            k=model_config["dgcnn_k"],
             use_constraints=model_config["baseline_use_constraints"],
         )
     if model_name == "attn3dgcn":
         return Attn3DGCNSegmentationAdapter(
             num_classes,
-            n_neighbors=model_config["attn_neighbors"],
-            attn_k=model_config["attn_k"],
             use_constraints=model_config["baseline_use_constraints"],
+        )
+    if model_name == "pointtransformer":
+        return PointTransformerSegmenter(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointmamba":
+        return PointMambaSegmenter(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointnext":
+        return PointNeXtSegmenter(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
+        )
+    if model_name == "pointmlp":
+        return PointMLPSegmenter(
+            num_classes,
+            use_constraints=model_config["baseline_use_constraints"],
+            constraint_dim=CONSTRAINT_DIM,
         )
     raise AssertionError(f"unhandled segmentation model: {model_name}")

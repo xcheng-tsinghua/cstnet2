@@ -116,8 +116,8 @@ cstnet2/
 |-- README.md                      This file
 |-- train_cst_pred.py              Stage 1 training entry point
 |-- train_cls.py                   Stage 2 classification training
-|-- train_stage2_seg.py            Stage 2 MFCAD++ segmentation training
-|-- eval_stage2_seg.py             Stage 2 MFCAD++ segmentation evaluation
+|-- train_seg.py                   Stage 2 MFCAD++ segmentation training
+|-- eval_seg.py                    Stage 2 MFCAD++ segmentation evaluation
 |-- vis_cstpred.py                 Optional point cloud visualization
 |-- func_test.py                   Small local test script
 |-- eval_model.py                  EvalScope helper script
@@ -322,8 +322,12 @@ Classification supports the same baseline families as segmentation:
 python train_cls.py --model constraint_aware
 python train_cls.py --model pointnet
 python train_cls.py --model pointnet2
-python train_cls.py --model dgcnn --dgcnn_k 20
-python train_cls.py --model attn3dgcn --attn_neighbors 20 --attn_k 16
+python train_cls.py --model dgcnn
+python train_cls.py --model attn3dgcn
+python train_cls.py --model pointtransformer
+python train_cls.py --model pointmamba
+python train_cls.py --model pointnext
+python train_cls.py --model pointmlp
 ```
 
 Baselines use XYZ only by default. Add `--baseline_use_constraints` to feed
@@ -337,7 +341,7 @@ python train_cls.py --model pointnet2 --baseline_use_constraints \
   --stage1_ckpt model_trained/pointnet2_pmt_prim_cluster.pth
 
 python train_cls.py --model dgcnn --baseline_use_constraints \
-  --constraint_source gt --dgcnn_k 20
+  --constraint_source gt
 ```
 
 With the default `--save_name stage2_cls`, weights are isolated automatically
@@ -353,33 +357,54 @@ read from `data_utils/mfcad_label_map.json`; they are not hard-coded in the
 network.
 
 ```bash
-python train_stage2_seg.py --data_root D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd
+python train_seg.py --data_root D:\document\DeepLearning\DataSet\pcd_cstnet2\mfcad_pcd
 ```
 
 Select the segmentation architecture with `--model`:
 
 ```bash
-python train_stage2_seg.py --model constraint_aware
-python train_stage2_seg.py --model pointnet
-python train_stage2_seg.py --model pointnet2
-python train_stage2_seg.py --model dgcnn --dgcnn_k 20
-python train_stage2_seg.py --model attn3dgcn --attn_neighbors 20 --attn_k 16
+python train_seg.py --model constraint_aware
+python train_seg.py --model pointnet
+python train_seg.py --model pointnet2
+python train_seg.py --model dgcnn
+python train_seg.py --model attn3dgcn
+python train_seg.py --model pointtransformer
+python train_seg.py --model pointmamba
+python train_seg.py --model pointnext
+python train_seg.py --model pointmlp
 ```
+
+The four newer baselines are kept in one self-contained file per method:
+`networks/point_transformer.py`,
+`networks/point_mamba.py`, `networks/pointnext.py`, and
+`networks/pointmlp.py`. Each file contains both its classifier and
+segmenter. They are pure-PyTorch adaptations of the official architectures,
+so no `pointops`, `pointnet2_ops`, KNN-CUDA, OpenPoints, or `mamba_ssm`
+installation is required. Baseline training exposes only the common
+`--baseline_use_constraints` switch; architecture defaults are edited directly
+in each model file and are intentionally not duplicated in the training CLI.
+Architecture references are the Point Transformer
+[paper](https://arxiv.org/abs/2012.09164) and
+[repository](https://github.com/POSTECH-CVLab/point-transformer), the official
+[PointMamba](https://github.com/LMD0311/PointMamba),
+[PointNeXt](https://github.com/guochengqian/PointNeXt), and
+[pointMLP](https://github.com/ma-xu/pointMLP-pytorch) repositories.
 
 Each baseline uses XYZ only by default. Add `--baseline_use_constraints` to
 concatenate the full 15D constraint vector as point attributes, producing an
 18-channel `XYZ + constraints` input:
 
 ```bash
-python train_stage2_seg.py --model pointnet2 --baseline_use_constraints
-python train_stage2_seg.py --model dgcnn --baseline_use_constraints --dgcnn_k 20
+python train_seg.py --model pointnet2 --baseline_use_constraints
+python train_seg.py --model dgcnn --baseline_use_constraints
 ```
 
 All variants share the same dataset, loss, and metrics. Checkpoints are written
 to model-named subdirectories under `model_trained/seg/`; constraint-enabled baselines use names such
 as `pointnet2_constraints/` so they cannot overwrite XYZ-only results. All
 experiments reuse the training-only `class_statistics.json` cache. Evaluation
-reconstructs both the architecture and its input mode from the checkpoint.
+reconstructs the model family and input mode from the checkpoint; baseline
+architecture defaults are read from the corresponding model file.
 
 Training starts fresh by default. Set `--resume true` to load `last.pth` from
 the selected model's fixed output directory. A missing checkpoint is reported
@@ -393,13 +418,13 @@ output directory.
 Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
 
 ```bash
-python train_stage2_seg.py --model constraint_aware --resume true
+python train_seg.py --model constraint_aware --resume true
 ```
 
 Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views:
 
 ```bash
-python eval_stage2_seg.py model_trained/seg/constraint_aware/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
+python eval_seg.py model_trained/seg/constraint_aware/best_point_miou.pth --split test --prediction_dir predictions/mfcad_seg
 ```
 
 ### Visualization
@@ -417,13 +442,13 @@ python vis_cstpred.py --root_dataset path/to/pointclouds --num_point 2500
 Run compile checks:
 
 ```bash
-python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py train_stage2_seg.py eval_stage2_seg.py vis_cstpred.py
+python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py train_seg.py eval_seg.py vis_cstpred.py
 ```
 
 Run import checks:
 
 ```bash
-python -B -c "import train_cst_pred; import train_cls; import train_stage2_seg; import eval_stage2_seg; import vis_cstpred; print('imports ok')"
+python -B -c "import train_cst_pred; import train_cls; import train_seg; import eval_seg; import vis_cstpred; print('imports ok')"
 ```
 
 ### 2. Tiny Forward Smoke Test

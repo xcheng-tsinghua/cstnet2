@@ -41,6 +41,8 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertEqual(defaults.model, "constraint_aware")
         self.assertFalse(defaults.baseline_use_constraints)
         self.assertFalse(defaults.resume)
+        self.assertFalse(hasattr(defaults, "dgcnn_k"))
+        self.assertFalse(hasattr(defaults, "pointmamba_tokens"))
 
         args = train_cls.parse_args(
             ["--model", "pointnet2", "--baseline_use_constraints", "--resume"]
@@ -69,11 +71,25 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
             {
                 "model": "dgcnn",
                 "baseline_use_constraints": True,
-                "dgcnn_k": 12,
             },
         )
         self.assertTrue(classification_model_uses_constraints(config))
         self.assertEqual(classification_run_name(config), "dgcnn_constraints")
+
+        pointmamba = classification_model_config(
+            {
+                "model": "pointmamba",
+                "pointmamba_tokens": 64,
+                "pointmamba_group_size": 16,
+            }
+        )
+        self.assertEqual(
+            pointmamba,
+            {
+                "model": "pointmamba",
+                "baseline_use_constraints": False,
+            },
+        )
 
         xyz_only = classification_model_config({"model": "pointnet"})
         self.assertFalse(classification_model_uses_constraints(xyz_only))
@@ -93,11 +109,12 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         cases = (
             ({"model": "pointnet"}, 32),
             ({"model": "pointnet2"}, 64),
-            ({"model": "dgcnn", "dgcnn_k": 8}, 24),
-            (
-                {"model": "attn3dgcn", "attn_neighbors": 8, "attn_k": 4},
-                24,
-            ),
+            ({"model": "dgcnn"}, 24),
+            ({"model": "attn3dgcn"}, 24),
+            ({"model": "pointtransformer"}, 16),
+            ({"model": "pointmamba"}, 16),
+            ({"model": "pointnext"}, 16),
+            ({"model": "pointmlp"}, 16),
         )
         for base_config, n_points in cases:
             for use_constraints in (False, True):
@@ -119,6 +136,34 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
                         output = model(xyz, constraints)
                     self.assertEqual(tuple(output.shape), (2, self.n_classes))
                     self.assertTrue(torch.isfinite(output).all())
+
+    def test_new_baselines_support_training_backward(self):
+        from networks.classification_models import build_classification_model
+        from networks.segmentation_models import build_segmentation_model
+
+        configs = (
+            {"model": "pointtransformer"},
+            {"model": "pointmamba"},
+            {"model": "pointnext"},
+            {"model": "pointmlp"},
+        )
+        xyz = torch.randn(2, 16, 3, device=self.device)
+        constraints = torch.randn(2, 16, 15, device=self.device)
+        for base_config in configs:
+            config = {**base_config, "baseline_use_constraints": True}
+            with self.subTest(model=config["model"]):
+                classifier = build_classification_model(5, config).to(self.device)
+                classifier(xyz, constraints).square().mean().backward()
+                segmenter = build_segmentation_model(5, config).to(self.device)
+                segmenter(xyz, constraints, None).square().mean().backward()
+                for model in (classifier, segmenter):
+                    self.assertTrue(
+                        all(
+                            parameter.grad is None
+                            or torch.isfinite(parameter.grad).all()
+                            for parameter in model.parameters()
+                        )
+                    )
 
     def test_constraint_enabled_baseline_requires_constraints(self):
         from networks.classification_models import build_classification_model

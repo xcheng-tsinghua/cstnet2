@@ -1,3 +1,5 @@
+"""Train Stage 2 MFCAD++ point segmentation models."""
+
 from __future__ import annotations
 
 import argparse
@@ -111,18 +113,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--norm_type", choices=("ln", "bn"), default="ln",
         help="Constraint-stream normalization",
-    )
-    parser.add_argument(
-        "--dgcnn_k", type=int, default=20,
-        help="DGCNN nearest-neighbor count",
-    )
-    parser.add_argument(
-        "--attn_neighbors", type=int, default=20,
-        help="Attention 3DGCN graph-neighbor count",
-    )
-    parser.add_argument(
-        "--attn_k", type=int, default=16,
-        help="Attention 3DGCN transformer-neighbor count",
     )
     parser.add_argument("--seed", type=int, default=2026, help="Base random seed")
     parser.add_argument(
