@@ -187,7 +187,7 @@ def main(args: argparse.Namespace) -> None:
         if nvrtc_library is not None:
             print(f"CUDA NVRTC: preloaded {nvrtc_library}")
 
-    train_loader, val_loader, _ = MFCADSegmentationDataset.create_dataloaders(
+    train_loader, val_loader, test_loader = MFCADSegmentationDataset.create_dataloaders(
         root=args.data_root,
         batch_size=args.batch_size,
         n_points=args.n_points,
@@ -252,7 +252,7 @@ def main(args: argparse.Namespace) -> None:
         model=model,
         optimizer=optimizer,
         train_loader=train_loader,
-        val_loader=val_loader,
+        val_loader=test_loader,
         class_weights=class_weights,
         label_map=train_loader.dataset.label_map,
         output_dir=output_dir,
