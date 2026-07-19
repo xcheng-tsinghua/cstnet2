@@ -14,17 +14,6 @@ from networks.cst_pred_wrapper import CstPredWrapper
 from colorama import init, Fore, Back
 
 
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    lowered = value.lower()
-    if lowered in ("true", "1", "yes", "y"):
-        return True
-    if lowered in ("false", "0", "no", "n"):
-        return False
-    raise argparse.ArgumentTypeError(f"expected True/False, got: {value}")
-
-
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=50, help='batch size in training')
@@ -34,9 +23,9 @@ def parse_args(argv=None):
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
     parser.add_argument('--model', default='attn_3dgcn', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
-    parser.add_argument('--is_sample', default=False, type=str2bool)
+    parser.add_argument('--is_sample', action='store_true', default=False)
 
-    parser.add_argument('--local', default=False, type=str2bool)
+    parser.add_argument('--local', action='store_true', default=False)
     parser.add_argument('--root_sever', type=str, default=r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
     parser.add_argument('--root_local', type=str, default=r'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_pcd')
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
@@ -44,11 +33,11 @@ def parse_args(argv=None):
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--stage1_mode', default='baseline', choices=['baseline', 'multitask'], type=str)
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
-    parser.add_argument('--use_extra_features', default=False, type=str2bool)
+    parser.add_argument('--use_extra_features', action='store_true', default=False)
     parser.add_argument('--normal_source', default='none', choices=['gt', 'pca', 'none'], type=str)
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
-    parser.add_argument('--overfit_one_batch', default=False, type=str2bool)
+    parser.add_argument('--overfit_one_batch', action='store_true', default=False)
     parser.add_argument('--resume_checkpoint', default='', type=str,
                         help='resume model, optimizer, scheduler, epoch and all training state')
     parser.add_argument('--init_from_checkpoint', default='', type=str,
@@ -63,15 +52,20 @@ def parse_args(argv=None):
     parser.add_argument('--w_inst', default=0.005, type=float)
     parser.add_argument('--geom_start_epoch', default=20, type=int)
     parser.add_argument('--geom_ramp_epochs', default=20, type=int)
-    parser.add_argument('--enable_mad_loss', default=True, type=str2bool)
-    parser.add_argument('--enable_dim_loss', default=True, type=str2bool)
-    parser.add_argument('--enable_nor_loss', default=True, type=str2bool)
-    parser.add_argument('--enable_loc_loss', default=True, type=str2bool)
-    parser.add_argument('--enable_geom_loss', default=True, type=str2bool)
-    parser.add_argument('--enable_inst_loss', default=True, type=str2bool)
+    parser.add_argument('--disable_mad_loss', dest='enable_mad_loss', action='store_false', default=True)
+    parser.add_argument('--disable_dim_loss', dest='enable_dim_loss', action='store_false', default=True)
+    parser.add_argument('--disable_nor_loss', dest='enable_nor_loss', action='store_false', default=True)
+    parser.add_argument('--disable_loc_loss', dest='enable_loc_loss', action='store_false', default=True)
+    parser.add_argument('--disable_geom_loss', dest='enable_geom_loss', action='store_false', default=True)
+    parser.add_argument('--disable_inst_loss', dest='enable_inst_loss', action='store_false', default=True)
     parser.add_argument('--joint_backbone_lr_scale', default=0.1, type=float)
-    parser.add_argument('--use_amp', default=False, type=str2bool)
-    parser.add_argument('--enable_grad_diagnostics', default=True, type=str2bool)
+    parser.add_argument('--use_amp', action='store_true', default=False)
+    parser.add_argument(
+        '--disable_grad_diagnostics',
+        dest='enable_grad_diagnostics',
+        action='store_false',
+        default=True,
+    )
 
     args = parser.parse_args(argv)
     return args

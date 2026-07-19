@@ -27,17 +27,6 @@ from networks.classification_models import (
 from networks.utils import all_metric_cls
 
 
-def str2bool(value: str | bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    normalized = value.strip().lower()
-    if normalized in {"true", "1", "yes", "y", "on"}:
-        return True
-    if normalized in {"false", "0", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
-
-
 def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser("Stage 2 classification training")
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=32)
@@ -46,8 +35,8 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--decay_rate", type=float, default=1e-4)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2000)
-    parser.add_argument("--is_sample", default="False", choices=["True", "False"])
-    parser.add_argument("--local", default="False", choices=["True", "False"])
+    parser.add_argument("--is_sample", action="store_true", default=False)
+    parser.add_argument("--local", action="store_true", default=False)
     parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
 
@@ -77,7 +66,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--transformer_heads", type=int, default=8)
     parser.add_argument("--token_dropout", type=float, default=0.1)
     parser.add_argument("--stream_dropout", type=float, default=0.1)
-    parser.add_argument("--use_stats_token", default="False", choices=["True", "False"])
+    parser.add_argument("--use_stats_token", action="store_true", default=False)
 
     parser.add_argument("--save_name", type=str, default="stage2_cls")
     parser.add_argument("--wandb_project", type=str, default="cstnet2")
@@ -85,9 +74,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--wandb_run_name", type=str, default="")
     parser.add_argument(
         "--resume",
-        type=str2bool,
-        nargs="?",
-        const=True,
+        action="store_true",
         default=False,
         help="Load the selected model's existing weight file before training",
     )
@@ -181,13 +168,13 @@ def save_classification_checkpoints(
 def main(args):
     os.makedirs("model_trained", exist_ok=True)
 
-    data_root = args.root_local if str2bool(args.local) else args.root_sever
+    data_root = args.root_local if args.local else args.root_sever
     train_loader, test_loader = CstNet2Dataset.create_dataloader(
         root=data_root,
         bs=args.bs,
         n_points=args.n_points,
         num_workers=args.workers,
-        is_sample=str2bool(args.is_sample),
+        is_sample=args.is_sample,
     )
     n_classes = train_loader.dataset.n_classes()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

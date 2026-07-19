@@ -28,17 +28,6 @@ from networks.segmentation_models import (
 MODEL_OUTPUT_ROOT = Path("model_trained/seg")
 
 
-def parse_bool(value: str | bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    normalized = value.strip().lower()
-    if normalized in ("1", "true", "yes", "y", "on"):
-        return True
-    if normalized in ("0", "false", "no", "n", "off"):
-        return False
-    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
-
-
 def segmentation_run_name(model_config: dict[str, object]) -> str:
     model_name = str(model_config["model"])
     if model_name != DEFAULT_SEGMENTATION_MODEL and bool(
@@ -126,9 +115,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--resume",
-        type=parse_bool,
-        nargs="?",
-        const=True,
+        action="store_true",
         default=False,
         help="Resume from model_trained/seg/<model_name>/last.pth",
     )

@@ -66,11 +66,19 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertFalse(hasattr(defaults, "stage1_model"))
         self.assertEqual(defaults.wandb_project, "cstnet2")
 
-        args = train_cls.parse_args(
-            ["--model", "pointnet2", "--baseline_use_constraints", "--resume"]
-        )
+        args = train_cls.parse_args([
+            "--model", "pointnet2",
+            "--baseline_use_constraints",
+            "--use_stats_token",
+            "--is_sample",
+            "--local",
+            "--resume",
+        ])
         self.assertEqual(args.model, "pointnet2")
         self.assertTrue(args.baseline_use_constraints)
+        self.assertTrue(args.use_stats_token)
+        self.assertTrue(args.is_sample)
+        self.assertTrue(args.local)
         self.assertTrue(args.resume)
 
     def test_classification_constraints_are_read_from_dataset_fields(self):

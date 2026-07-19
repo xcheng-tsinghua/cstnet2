@@ -267,12 +267,12 @@ or use the local Windows path configured in the scripts:
 D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend
 ```
 
-Use `--local True` to select the local Windows path, or override the root
+Use `--local` to select the local Windows path, or override the root
 directly:
 
 ```bash
 python train_cst_pred.py --root_sever data/pcd_cstnet2/Param20K_Extend
-python train_cls.py --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend --local True
+python train_cls.py --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend --local
 ```
 
 ### 3. Recommended Hardware
@@ -300,10 +300,16 @@ Useful options:
 
 ```text
 --model pointnet2|pointnet|attn_3dgcn
---is_sample True         run a small sampled dataloader for debugging
+--is_sample              run a small sampled dataloader for debugging
 --resume_checkpoint PATH resume model, optimizer, scheduler, and epoch state
 --init_from_checkpoint PATH load model weights only for a new training run
 ```
+
+All training boolean options are value-less flags. For example, use `--local`,
+`--is_sample`, `--resume`, or `--use_amp` to enable an option; do not append
+`True` or `False`. Stage 1 losses and gradient diagnostics are enabled by
+default and can be turned off with flags such as `--disable_mad_loss` and
+`--disable_grad_diagnostics`.
 
 Stage 1, classification, and segmentation always log every epoch to WandB.
 This includes all losses, learning rates, aggregate metrics, per-class metrics,
@@ -368,7 +374,7 @@ On Windows, train with a predicted-constraint dataset:
 
 ```bash
 python train_cls.py ^
-  --local True ^
+  --local ^
   --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_predicted_constraints ^
   --bs 32 ^
   --n_points 2000
@@ -386,7 +392,7 @@ python train_cls.py \
 For an oracle ablation, point the same command at the ground-truth dataset:
 
 ```bash
-python train_cls.py --root_sever /path/to/Param20K_ground_truth --is_sample True
+python train_cls.py --root_sever /path/to/Param20K_ground_truth --is_sample
 ```
 
 Classification supports the same baseline families as segmentation:
@@ -417,7 +423,7 @@ python train_cls.py --model dgcnn --baseline_use_constraints \
 
 With the default `--save_name stage2_cls`, weights are isolated automatically
 as `model_trained/stage2_cls_<model_name>.pth`; constraint-enabled baselines use
-the `_constraints` suffix. Training starts fresh unless `--resume true` is set.
+the `_constraints` suffix. Training starts fresh unless `--resume` is set.
 
 ### Train Stage 2 MFCAD++ Segmentation
 
@@ -477,7 +483,7 @@ experiments reuse the training-only `class_statistics.json` cache. Evaluation
 reconstructs the model family and input mode from the checkpoint; baseline
 architecture defaults are read from the corresponding model file.
 
-Training starts fresh by default. Set `--resume true` to load `last.pth` from
+Training starts fresh by default. Set `--resume` to load `last.pth` from
 the selected model's fixed output directory. A missing checkpoint is reported
 as an error instead of silently starting over.
 
@@ -489,7 +495,7 @@ output directory.
 Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
 
 ```bash
-python train_seg.py --model constraint_aware --resume true
+python train_seg.py --model constraint_aware --resume
 ```
 
 Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views:
@@ -546,8 +552,8 @@ classification: [2, 6]
 Use sampled dataloaders before long training:
 
 ```bash
-python train_cst_pred.py --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
-python train_cls.py --root_sever /path/to/precomputed_dataset --is_sample True --epoch 1 --bs 2 --n_points 128 --workers 0
+python train_cst_pred.py --is_sample --epoch 1 --bs 2 --n_points 128 --workers 0
+python train_cls.py --root_sever /path/to/precomputed_dataset --is_sample --epoch 1 --bs 2 --n_points 128 --workers 0
 ```
 
 After these pass, run Stage 1 preprocessing over the complete dataset and point

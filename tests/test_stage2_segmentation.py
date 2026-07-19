@@ -93,8 +93,6 @@ class Stage2SegmentationTest(unittest.TestCase):
         self.assertFalse(hasattr(default_args, "use_wandb"))
         self.assertEqual(default_args.wandb_project, "cstnet2")
         self.assertTrue(train_seg.parse_args(["--resume"]).resume)
-        self.assertTrue(train_seg.parse_args(["--resume", "true"]).resume)
-        self.assertFalse(train_seg.parse_args(["--resume", "false"]).resume)
 
         original_root = train_seg.MODEL_OUTPUT_ROOT
         try:

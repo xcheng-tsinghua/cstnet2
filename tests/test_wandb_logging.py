@@ -35,6 +35,35 @@ class WandBLoggingTest(unittest.TestCase):
             self.assertFalse(hasattr(args, "use_wandb"))
             self.assertEqual(args.wandb_project, "cstnet2")
 
+    def test_stage1_boolean_options_are_flag_based(self):
+        import train_cst_pred
+
+        defaults = train_cst_pred.parse_args([])
+        self.assertFalse(defaults.is_sample)
+        self.assertFalse(defaults.local)
+        self.assertFalse(defaults.use_extra_features)
+        self.assertFalse(defaults.overfit_one_batch)
+        self.assertFalse(defaults.use_amp)
+        self.assertTrue(defaults.enable_mad_loss)
+        self.assertTrue(defaults.enable_grad_diagnostics)
+
+        enabled = train_cst_pred.parse_args([
+            "--is_sample",
+            "--local",
+            "--use_extra_features",
+            "--overfit_one_batch",
+            "--use_amp",
+            "--disable_mad_loss",
+            "--disable_grad_diagnostics",
+        ])
+        self.assertTrue(enabled.is_sample)
+        self.assertTrue(enabled.local)
+        self.assertTrue(enabled.use_extra_features)
+        self.assertTrue(enabled.overfit_one_batch)
+        self.assertTrue(enabled.use_amp)
+        self.assertFalse(enabled.enable_mad_loss)
+        self.assertFalse(enabled.enable_grad_diagnostics)
+
     def test_env_reader_and_required_key(self):
         previous = os.environ.get("WANDB_API_KEY")
         try:
