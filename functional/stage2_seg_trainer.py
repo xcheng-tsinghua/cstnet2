@@ -20,6 +20,11 @@ except ImportError:  # pragma: no cover - progress bars are optional
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
 from functional.wandb_utils import flatten_wandb_metrics
+from functional.checkpoint_io import (
+    CHECKPOINT_SAVE_ATTEMPTS,
+    CHECKPOINT_RETRY_SECONDS,
+    safe_torch_save,
+)
 from networks.segmentation_models import segmentation_model_config
 
 
@@ -266,12 +271,11 @@ class Stage2SegmentationTrainer:
             "rng_state": capture_rng_state(),
         }
 
-    def _save_checkpoint(self, path: Path, epoch: int) -> None:
+    def _save_checkpoint(self, path: Path, epoch: int) -> bool:
         if not self.is_main:
-            return
-        temporary = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-        torch.save(self._checkpoint_payload(epoch), temporary)
-        os.replace(temporary, path)
+            return True
+        payload = self._checkpoint_payload(epoch)
+        return safe_torch_save(payload, path)
 
     def load_checkpoint(self, checkpoint_path: str | os.PathLike[str]) -> None:
         checkpoint = _load_full_checkpoint(checkpoint_path)
@@ -340,9 +344,14 @@ class Stage2SegmentationTrainer:
             if improved:
                 self.best_metric = point_miou
 
-            self._save_checkpoint(self.output_dir / "last.pth", epoch)
+            last_checkpoint_saved = self._save_checkpoint(
+                self.output_dir / "last.pth", epoch
+            )
+            best_checkpoint_saved = True
             if improved:
-                self._save_checkpoint(self.output_dir / "best_point_miou.pth", epoch)
+                best_checkpoint_saved = self._save_checkpoint(
+                    self.output_dir / "best_point_miou.pth", epoch
+                )
 
             latest_metrics = {
                 "epoch": epoch,
@@ -351,6 +360,8 @@ class Stage2SegmentationTrainer:
                 "train": train_metrics,
                 "val": val_metrics,
                 "best_point_miou": self.best_metric,
+                "last_checkpoint_saved": last_checkpoint_saved,
+                "best_checkpoint_saved": best_checkpoint_saved,
             }
             if self.is_main:
                 print(
@@ -366,6 +377,8 @@ class Stage2SegmentationTrainer:
                         "loss/train": train_loss,
                         "loss/val": val_loss,
                         "best/val_point_mean_iou": self.best_metric,
+                        "checkpoint/last_saved": int(last_checkpoint_saved),
+                        "checkpoint/best_saved": int(best_checkpoint_saved),
                     }
                     payload.update(
                         flatten_wandb_metrics("train/metric", train_metrics)

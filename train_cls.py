@@ -13,6 +13,7 @@ from colorama import init
 
 from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
+from functional.checkpoint_io import safe_torch_save
 from functional.cuda_runtime import preload_cuda_nvrtc
 from functional.wandb_utils import flatten_wandb_metrics, initialize_wandb_run
 from networks.classification_models import (
@@ -164,6 +165,19 @@ def evaluate(model, loader, device, use_constraints):
     return total_loss / max(len(loader), 1), metrics
 
 
+def save_classification_checkpoints(
+    model_state,
+    save_path: str,
+    best_path: str,
+    save_best: bool,
+) -> dict[str, bool]:
+    status = {"last": safe_torch_save(model_state, save_path)}
+    status["best"] = (
+        safe_torch_save(model_state, best_path) if save_best else True
+    )
+    return status
+
+
 def main(args):
     os.makedirs("model_trained", exist_ok=True)
 
@@ -283,10 +297,15 @@ def main(args):
         )
         train_loss = running_loss / max(len(train_loader), 1)
 
-        torch.save(model.state_dict(), save_path)
-        if test_metrics["instance_accuracy"] >= best_acc:
+        improved = test_metrics["instance_accuracy"] >= best_acc
+        if improved:
             best_acc = test_metrics["instance_accuracy"]
-            torch.save(model.state_dict(), os.path.join("model_trained", f"{save_stem}_best.pth"))
+        checkpoint_status = save_classification_checkpoints(
+            model.state_dict(),
+            save_path,
+            os.path.join("model_trained", f"{save_stem}_best.pth"),
+            save_best=improved,
+        )
 
         wandb_payload = {
             "epoch": epoch + 1,
@@ -294,6 +313,8 @@ def main(args):
             "loss/train": train_loss,
             "loss/test": test_loss,
             "best/test_instance_accuracy": best_acc,
+            "checkpoint/last_saved": int(checkpoint_status["last"]),
+            "checkpoint/best_saved": int(checkpoint_status["best"]),
             "train/optimization/gradient_norm_mean": (
                 gradient_norm_sum / max(gradient_norm_count, 1)
             ),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 try:
     import torch
@@ -10,6 +11,27 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_checkpoint_io_failure_is_retried_then_skipped(self):
+        import tempfile
+        from pathlib import Path
+
+        from functional.stage2_seg_trainer import Stage2SegmentationTrainer
+
+        trainer = Stage2SegmentationTrainer.__new__(Stage2SegmentationTrainer)
+        trainer.is_main = True
+        trainer._checkpoint_payload = lambda epoch: {"epoch": epoch}
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint_path = Path(directory) / "last.pth"
+            with mock.patch(
+                "functional.stage2_seg_trainer.safe_torch_save",
+                return_value=False,
+            ) as safe_save:
+                saved = trainer._save_checkpoint(checkpoint_path, epoch=24)
+
+            self.assertFalse(saved)
+            safe_save.assert_called_once_with({"epoch": 24}, checkpoint_path)
+
     def test_nvrtc_preloader_finds_pip_packaged_library(self):
         import tempfile
         from pathlib import Path

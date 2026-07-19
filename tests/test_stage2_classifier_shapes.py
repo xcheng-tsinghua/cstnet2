@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 try:
@@ -16,6 +17,22 @@ if str(REPO_ROOT) not in sys.path:
 
 
 class Stage2ClassifierShapeTest(unittest.TestCase):
+    def test_classification_checkpoint_failures_do_not_raise(self):
+        import train_cls
+
+        with mock.patch(
+            "train_cls.safe_torch_save", side_effect=[False, False]
+        ) as safe_save:
+            status = train_cls.save_classification_checkpoints(
+                {"weight": torch.ones(1)},
+                "last.pth",
+                "best.pth",
+                save_best=True,
+            )
+
+        self.assertEqual(status, {"last": False, "best": False})
+        self.assertEqual(safe_save.call_count, 2)
+
     def setUp(self):
         if torch is None:
             self.skipTest("PyTorch is required for Stage2 classifier shape tests")

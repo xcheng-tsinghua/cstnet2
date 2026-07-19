@@ -23,6 +23,7 @@ from functional.stage1_metrics import (
     primitive_metrics_from_confusion,
     primitive_prediction_collapsed,
 )
+from functional.checkpoint_io import safe_torch_save
 from functional.wandb_utils import flatten_wandb_metrics
 
 
@@ -346,25 +347,27 @@ class CstPredTrainer(object):
             test_metrics["constraint_score"] = constraint_score
             improved = self._update_best_metrics(global_epoch, test_metrics)
 
-            if self.wandb_run is not None:
-                payload = {
+            wandb_payload = {
                     "epoch": global_epoch,
                     "global_step": self.global_step,
                     "time/train_sec": train_time,
                     "time/test_sec": test_time,
-                }
-                for name, value in epoch_lrs.items():
-                    payload[f"lr/{name}"] = value
-                payload.update(flatten_wandb_metrics("train/loss", train_loss))
-                payload.update(flatten_wandb_metrics("train/metric", train_metrics))
-                payload.update(flatten_wandb_metrics("test/loss", test_loss))
-                payload.update(flatten_wandb_metrics("test/metric", test_metrics))
-                payload.update(flatten_wandb_metrics("best", self.best_metrics))
-                self.wandb_run.log(payload, step=global_epoch)
+            }
+            for name, value in epoch_lrs.items():
+                wandb_payload[f"lr/{name}"] = value
+            wandb_payload.update(flatten_wandb_metrics("train/loss", train_loss))
+            wandb_payload.update(flatten_wandb_metrics("train/metric", train_metrics))
+            wandb_payload.update(flatten_wandb_metrics("test/loss", test_loss))
+            wandb_payload.update(flatten_wandb_metrics("test/metric", test_metrics))
+            wandb_payload.update(flatten_wandb_metrics("best", self.best_metrics))
 
             # The checkpoint contains the LR that will be used by the next epoch.
             self.scheduler.step()
-            self.save(global_epoch, improved)
+            checkpoint_status = self.save(global_epoch, improved)
+            for name, saved in checkpoint_status.items():
+                wandb_payload[f"checkpoint/{name}_saved"] = int(saved)
+            if self.wandb_run is not None:
+                self.wandb_run.log(wandb_payload, step=global_epoch)
 
     def _update_best_metrics(self, epoch, test_metrics):
         candidates = {
@@ -383,12 +386,14 @@ class CstPredTrainer(object):
         improved = [] if improved is None else list(improved)
         payload = self._checkpoint_payload(epoch)
         last_path = os.path.join(self.checkpoint_dir, "last.pth")
-        _atomic_torch_save(payload, last_path)
-        print(Fore.GREEN + f"saved checkpoint: {last_path}")
+        status = {"last": safe_torch_save(payload, last_path)}
+        if status["last"]:
+            print(Fore.GREEN + f"saved checkpoint: {last_path}")
         for metric_name in improved:
             best_path = os.path.join(self.checkpoint_dir, BEST_FILE_NAMES[metric_name])
-            _atomic_torch_save(payload, best_path)
-            print(Fore.GREEN + f"saved best checkpoint: {best_path}")
+            status[metric_name] = safe_torch_save(payload, best_path)
+            if status[metric_name]:
+                print(Fore.GREEN + f"saved best checkpoint: {best_path}")
 
         log_payload = {
             "run": {
@@ -403,6 +408,7 @@ class CstPredTrainer(object):
         }
         with open(self.log_savepth, "w") as file:
             json.dump(log_payload, file, ensure_ascii=False, indent=4)
+        return status
 
     def _checkpoint_payload(self, epoch):
         checkpoint_config = _critical_checkpoint_config(self.checkpoint_args)
@@ -919,12 +925,6 @@ def _normalize_best_metrics(best_metrics):
         else:
             normalized[name] = {"value": float(value), "epoch": -1}
     return normalized
-
-
-def _atomic_torch_save(payload, path):
-    temporary_path = path + ".tmp"
-    torch.save(payload, temporary_path)
-    os.replace(temporary_path, path)
 
 
 def _aggregate_metric_dicts(dicts):

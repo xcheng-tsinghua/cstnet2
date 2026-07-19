@@ -132,6 +132,7 @@ cstnet2/
 |   |-- cone_gen.py                Synthetic cone data helper
 |   |-- vis.py                     Visualization helpers
 |-- functional/
+|   |-- checkpoint_io.py           Shared fault-tolerant checkpoint saving
 |   |-- constraints.py             Constraint assembly and primitive fitting
 |   |-- cst_pred_trainer.py        Stage 1 training loop
 |   |-- loss.py                    Stage 1 and geometry losses
@@ -307,6 +308,12 @@ Useful options:
 Stage 1, classification, and segmentation always log every epoch to WandB.
 This includes all losses, learning rates, aggregate metrics, per-class metrics,
 class histograms, and confusion matrices produced by each task.
+
+All three training tasks use the same atomic checkpoint writer. A storage I/O
+failure is retried three times; if all attempts fail, the temporary file is
+removed, the previous valid checkpoint is retained, and training continues.
+WandB checkpoint fields ending in `_saved` record whether each attempted epoch
+checkpoint was written successfully.
 
 Default Stage 1 checkpoint path:
 

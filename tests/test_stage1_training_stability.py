@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import torch
 
@@ -92,6 +93,18 @@ def make_trainer(
 
 
 class Stage1TrainingStabilityTest(unittest.TestCase):
+    def test_checkpoint_io_failure_is_reported_without_raising(self):
+        with tempfile.TemporaryDirectory(dir=".") as root:
+            trainer = make_trainer(root, "baseline", "semantic")
+            with mock.patch(
+                "functional.cst_pred_trainer.safe_torch_save",
+                return_value=False,
+            ) as safe_save:
+                status = trainer.save(0, improved=["pmt_miou"])
+
+            self.assertEqual(status, {"last": False, "pmt_miou": False})
+            self.assertEqual(safe_save.call_count, 2)
+
     def test_baseline_and_multitask_phase_smokes(self):
         for mode, phase in (
             ("baseline", "semantic"),
