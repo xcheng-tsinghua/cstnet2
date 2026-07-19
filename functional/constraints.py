@@ -233,6 +233,9 @@ def assemble_constraints_from_stage1(
     direction = torch.zeros(bsz, n_points, 3, device=device, dtype=dtype)
     dimension = torch.full((bsz, n_points), -1.0, device=device, dtype=dtype)
     location = torch.zeros(bsz, n_points, 3, device=device, dtype=dtype)
+    affiliate_idx = torch.full(
+        (bsz, n_points), -1, device=device, dtype=torch.long
+    )
 
     if normals is None:
         continuity = estimate_normals_pca(xyz, k=normal_k).to(dtype=dtype)
@@ -241,6 +244,7 @@ def assemble_constraints_from_stage1(
 
     for b in range(bsz):
         labels = cluster_embeddings_radius(cluster_embedding[b], bandwidth=cluster_bandwidth).to(device)
+        affiliate_idx[b] = labels
         for cluster_id in labels.unique(sorted=True):
             mask = labels == cluster_id
             points = xyz[b, mask]
@@ -269,6 +273,7 @@ def assemble_constraints_from_stage1(
         "dimension": dimension,
         "continuity": continuity,
         "location": location,
+        "affiliate_idx": affiliate_idx,
     }
 
 

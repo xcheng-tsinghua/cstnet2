@@ -116,6 +116,7 @@ cstnet2/
 |-- README.md                      This file
 |-- .env.example                   WandB API-key template (copy to .env)
 |-- train_cst_pred.py              Stage 1 training entry point
+|-- gen_cst_pred.py                Offline Stage 1 constraint generation
 |-- train_cls.py                   Stage 2 classification training
 |-- train_seg.py                   Stage 2 MFCAD++ segmentation training
 |-- eval_seg.py                    Stage 2 MFCAD++ segmentation evaluation
@@ -312,6 +313,41 @@ Default Stage 1 checkpoint path:
 ```text
 model_trained/pointnet2_pmt_prim_cluster.pth
 ```
+
+### Generate Offline Stage 1 Constraints
+
+`gen_cst_pred.py` recursively runs a trained Stage 1 checkpoint over a point-cloud
+directory. Only the first three values in every row are used as model input. The
+relative directory and file paths are reproduced below the output directory.
+
+The first 15 output columns always use the same layout as ground truth:
+
+```text
+xyz(3), pmt(1), mad(3), dim(1), nor(3), loc(3), affiliate_idx(1)
+```
+
+Any unknown input columns after `xyz` are not read by Stage 1. They are copied
+unchanged after the predicted 15-column core so task-specific fields such as
+MFCAD++ face ids and segmentation labels are retained. With the default
+`--input_layout auto`, existing 15-column GT constraints are replaced instead
+of duplicated. Use `--input_layout raw` if a raw file happens to resemble the
+GT column layout, or `--input_layout gt` to force replacement.
+
+```bash
+python gen_cst_pred.py \
+  --input_dir /opt/data/private/data_set/pcd_cstnet2/MFCAD_raw \
+  --output_dir /opt/data/private/data_set/pcd_cstnet2/MFCAD_predicted_constraints \
+  --checkpoint model_trained/pointnet2_pmt_prim_cluster/best_constraint_score.pth
+```
+
+The checkpoint argument can also be its containing directory. The generator
+then selects `best_constraint_score.pth`, `best_pmt_miou.pth`,
+`best_cluster_ari.pth`, or `last.pth`, in that order. Model name, Stage 1 mode,
+feature settings, and clustering bandwidth are read from current checkpoint
+metadata. For a legacy weights-only checkpoint, specify `--model` and
+`--stage1_mode` explicitly. Existing outputs are skipped unless `--overwrite`
+is supplied. TXT is processed by default; use for example
+`--extensions .txt,.npy` when required.
 
 ### Train Stage 2 Classification
 
