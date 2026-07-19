@@ -107,6 +107,8 @@ networks/stage2_segmentation.py
 
 Classification uses an encoder and classification head. Segmentation uses an
 encoder-decoder with feature propagation and a per-point segmentation head.
+The constraint-aware classifier has a single token-fusion architecture: tokens
+pooled from every constraint stream and encoder level are fused by a Transformer.
 
 ## Directory Structure
 
@@ -408,6 +410,11 @@ python train_cls.py --model pointmamba
 python train_cls.py --model pointnext
 python train_cls.py --model pointmlp
 ```
+
+`constraint_aware` always selects the token-fusion classifier. There is no
+classification variant switch. Its run and weight name retains the
+`constraint_aware_token_fusion` suffix so existing token-fusion weights remain
+separate from incompatible checkpoints produced by the removed architectures.
 
 Baselines use XYZ only by default. Add `--baseline_use_constraints` to feed
 the 15D per-point constraint stored in the selected dataset as an additional

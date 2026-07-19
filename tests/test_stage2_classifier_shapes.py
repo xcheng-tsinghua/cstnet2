@@ -64,6 +64,7 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertFalse(hasattr(defaults, "constraint_source"))
         self.assertFalse(hasattr(defaults, "stage1_ckpt"))
         self.assertFalse(hasattr(defaults, "stage1_model"))
+        self.assertFalse(hasattr(defaults, "stage2_variant"))
         self.assertEqual(defaults.wandb_project, "cstnet2")
 
         args = train_cls.parse_args([
@@ -158,6 +159,28 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
                 }
             )
 
+        constraint_aware = classification_model_config(
+            {"model": "constraint_aware"}
+        )
+        self.assertEqual(
+            constraint_aware,
+            {
+                "model": "constraint_aware",
+                "stage2_norm": "ln",
+                "token_dim": 256,
+                "transformer_layers": 3,
+                "transformer_heads": 8,
+                "token_dropout": 0.1,
+                "stream_dropout": 0.1,
+                "use_stats_token": False,
+            },
+        )
+        self.assertNotIn("stage2_variant", constraint_aware)
+        self.assertEqual(
+            classification_run_name(constraint_aware),
+            "constraint_aware_token_fusion",
+        )
+
     def test_registered_baseline_classifier_shapes(self):
         from networks.classification_models import build_classification_model
 
@@ -231,29 +254,10 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
             with torch.no_grad():
                 model(self.xyz, None)
 
-    def test_baseline_classifier_shape(self):
+    def test_constraint_aware_token_fusion_classifier_shapes(self):
         from networks.stage2 import CstNetStage2Classifier
 
-        self._check_log_probs(CstNetStage2Classifier(n_classes=self.n_classes))
-
-    def test_discriminative_classifier_shapes(self):
-        from networks.stage2 import CstNetStage2ClassifierDiscriminative
-
-        model = CstNetStage2ClassifierDiscriminative(n_classes=self.n_classes)
-        self._check_log_probs(model)
-        model.eval()
-        with torch.no_grad():
-            aux = model(self.xyz, self.constraints, return_aux=True)
-
-        self.assertEqual(tuple(aux["log_probs"].shape), (2, self.n_classes))
-        self.assertEqual(tuple(aux["main_logits"].shape), (2, self.n_classes))
-        self.assertEqual(tuple(aux["aux_component_logits"].shape), (2, self.n_classes))
-        self.assertEqual(tuple(aux["aux_constraint_logits"].shape), (2, self.n_classes))
-
-    def test_token_fusion_classifier_shapes(self):
-        from networks.stage2 import CstNetStage2ClassifierTokenFusion
-
-        model = CstNetStage2ClassifierTokenFusion(n_classes=self.n_classes)
+        model = CstNetStage2Classifier(n_classes=self.n_classes)
         self._check_log_probs(model)
         model.eval()
         with torch.no_grad():

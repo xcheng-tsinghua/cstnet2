@@ -52,12 +52,6 @@ def parse_args(argv: list[str] | None = None):
         default=False,
         help="Use the 15D per-point constraint as baseline point features",
     )
-    parser.add_argument(
-        "--stage2_variant",
-        choices=["baseline", "discriminative", "token_fusion"],
-        default="baseline",
-        help="baseline keeps the existing classifier; the other two use the new Stage2 classification heads.",
-    )
     parser.add_argument("--stage2_norm", choices=["ln", "bn"], default="ln")
     parser.add_argument("--label_smoothing", type=float, default=0.05)
     parser.add_argument("--aux_loss_weight", type=float, default=0.1)
@@ -97,10 +91,8 @@ def build_stage2_classifier(args, n_classes: int) -> torch.nn.Module:
 
 
 def classification_loss(model, xyz, constraints, target, args, model_config):
-    variant = model_config.get("stage2_variant", "baseline")
     use_aux = (
         model_config["model"] == DEFAULT_CLASSIFICATION_MODEL
-        and variant != "baseline"
         and args.aux_loss_weight > 0.0
     )
     if not use_aux:
@@ -118,12 +110,7 @@ def classification_loss(model, xyz, constraints, target, args, model_config):
         label_smoothing=args.label_smoothing,
     )
 
-    if variant == "discriminative":
-        aux_keys = ("aux_component_logits", "aux_constraint_logits")
-    else:
-        aux_keys = ("aux_final_constraint_logits", "aux_component_token_logits")
-
-    for key in aux_keys:
+    for key in ("aux_final_constraint_logits", "aux_component_token_logits"):
         loss = loss + args.aux_loss_weight * F.cross_entropy(
             output[key],
             target,

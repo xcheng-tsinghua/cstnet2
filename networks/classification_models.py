@@ -16,11 +16,7 @@ from networks.point_mamba import PointMambaClassifier
 from networks.point_transformer import PointTransformerClassifier
 from networks.pointmlp import PointMLPClassifier
 from networks.pointnext import PointNeXtClassifier
-from networks.stage2 import (
-    CstNetStage2Classifier,
-    CstNetStage2ClassifierDiscriminative,
-    CstNetStage2ClassifierTokenFusion,
-)
+from networks.stage2 import CstNetStage2Classifier
 
 
 DEFAULT_CLASSIFICATION_MODEL = "constraint_aware"
@@ -36,7 +32,6 @@ CLASSIFICATION_MODEL_NAMES = (
     "pointmlp",
 )
 BASELINE_CLASSIFICATION_MODELS = CLASSIFICATION_MODEL_NAMES[1:]
-CONSTRAINT_AWARE_VARIANTS = ("baseline", "discriminative", "token_fusion")
 
 
 def _config_value(source: Mapping[str, Any] | Any, name: str, default: Any) -> Any:
@@ -75,39 +70,24 @@ def classification_model_config(
                 "baseline_use_constraints is only valid for baseline "
                 "classification models"
             )
-        variant = str(_config_value(source, "stage2_variant", "baseline"))
-        if variant not in CONSTRAINT_AWARE_VARIANTS:
-            raise ValueError(
-                f"unknown constraint-aware classification variant {variant!r}; "
-                f"expected one of {CONSTRAINT_AWARE_VARIANTS}"
-            )
-        config["stage2_variant"] = variant
-        if variant != "baseline":
-            config["stage2_norm"] = str(
-                _config_value(source, "stage2_norm", "ln")
-            )
-        if variant == "token_fusion":
-            config.update(
-                token_dim=int(_config_value(source, "token_dim", 256)),
-                transformer_layers=int(
-                    _config_value(source, "transformer_layers", 3)
-                ),
-                transformer_heads=int(
-                    _config_value(source, "transformer_heads", 8)
-                ),
-                token_dropout=float(_config_value(source, "token_dropout", 0.1)),
-                stream_dropout=float(
-                    _config_value(source, "stream_dropout", 0.1)
-                ),
-                use_stats_token=_as_bool(
-                    _config_value(source, "use_stats_token", False)
-                ),
-            )
+        config.update(
+            stage2_norm=str(_config_value(source, "stage2_norm", "ln")),
+            token_dim=int(_config_value(source, "token_dim", 256)),
+            transformer_layers=int(
+                _config_value(source, "transformer_layers", 3)
+            ),
+            transformer_heads=int(
+                _config_value(source, "transformer_heads", 8)
+            ),
+            token_dropout=float(_config_value(source, "token_dropout", 0.1)),
+            stream_dropout=float(
+                _config_value(source, "stream_dropout", 0.1)
+            ),
+            use_stats_token=_as_bool(
+                _config_value(source, "use_stats_token", False)
+            ),
+        )
     else:
-        if str(_config_value(source, "stage2_variant", "baseline")) != "baseline":
-            raise ValueError(
-                "stage2_variant is only valid for the constraint_aware model"
-            )
         config["baseline_use_constraints"] = _as_bool(
             _config_value(source, "baseline_use_constraints", False)
         )
@@ -123,8 +103,7 @@ def classification_model_uses_constraints(config: Mapping[str, Any]) -> bool:
 def classification_run_name(config: Mapping[str, Any]) -> str:
     model_name = str(config["model"])
     if model_name == DEFAULT_CLASSIFICATION_MODEL:
-        variant = str(config.get("stage2_variant", "baseline"))
-        return model_name if variant == "baseline" else f"{model_name}_{variant}"
+        return f"{model_name}_token_fusion"
     if bool(config.get("baseline_use_constraints", False)):
         return f"{model_name}_constraints"
     return model_name
@@ -309,26 +288,16 @@ def build_classification_model(
     model_name = model_config["model"]
 
     if model_name == DEFAULT_CLASSIFICATION_MODEL:
-        variant = model_config["stage2_variant"]
-        if variant == "baseline":
-            return CstNetStage2Classifier(n_classes=num_classes)
-        if variant == "discriminative":
-            return CstNetStage2ClassifierDiscriminative(
-                n_classes=num_classes,
-                norm_type=model_config["stage2_norm"],
-            )
-        if variant == "token_fusion":
-            return CstNetStage2ClassifierTokenFusion(
-                n_classes=num_classes,
-                norm_type=model_config["stage2_norm"],
-                token_dim=model_config["token_dim"],
-                transformer_layers=model_config["transformer_layers"],
-                transformer_heads=model_config["transformer_heads"],
-                dropout=model_config["token_dropout"],
-                stream_dropout=model_config["stream_dropout"],
-                use_stats_token=model_config["use_stats_token"],
-            )
-        raise AssertionError(f"unhandled constraint-aware variant: {variant}")
+        return CstNetStage2Classifier(
+            n_classes=num_classes,
+            norm_type=model_config["stage2_norm"],
+            token_dim=model_config["token_dim"],
+            transformer_layers=model_config["transformer_layers"],
+            transformer_heads=model_config["transformer_heads"],
+            dropout=model_config["token_dropout"],
+            stream_dropout=model_config["stream_dropout"],
+            use_stats_token=model_config["use_stats_token"],
+        )
     if model_name == "pointnet":
         return PointNetClassificationAdapter(
             num_classes,
