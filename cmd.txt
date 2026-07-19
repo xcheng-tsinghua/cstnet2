@@ -72,3 +72,19 @@ tail -f out_s2seg.log
 nohup python train_seg.py --model pointnet2 --batch_size=100 > out_s2seg_pn2.log 2>&1 &
 tail -f out_s2seg_pn2.log
 
+nohup python train_seg.py --model pointnet --batch_size=100 && python train_seg.py --model dgcnn --batch_size=100 && python train_seg.py --model attn3dgcn --batch_size=100 &
+
+nohup bash -c '
+  python train_seg.py --model pointnet    --batch_size=100 --epochs=70 2>&1 | tee pointnet.log
+  python train_seg.py --model dgcnn       --batch_size=100 --epochs=70 2>&1 | tee dgcnn.log
+  python train_seg.py --model attn3dgcn   --batch_size=100 --epochs=70 2>&1 | tee attn3dgcn.log
+' > /dev/null 2>&1 &
+
+nohup bash -c '
+  python train_seg.py --model pointtransformer    --batch_size=100 --epochs=70 2>&1 | tee pointtransformer.log
+  python train_seg.py --model pointmamba       --batch_size=100 --epochs=70 2>&1 | tee pointmamba.log
+  python train_seg.py --model pointnext   --batch_size=100 --epochs=70 2>&1 | tee pointnext.log
+  python train_seg.py --model pointmlp   --batch_size=100 --epochs=70 2>&1 | tee pointmlp.log
+' > /dev/null 2>&1 &
+
+
