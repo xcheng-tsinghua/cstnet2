@@ -85,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Concatenate the full 15D constraint vector with XYZ for baseline models",
     )
-    parser.add_argument("--batch_size", type=int, default=40, help="Samples per batch")
+    parser.add_argument("--batch_size", type=int, default=20, help="Samples per batch")
     parser.add_argument("--n_points", type=int, default=2048, help="Points sampled per part")
     parser.add_argument("--workers", type=int, default=4, help="DataLoader worker processes")
     parser.add_argument("--epochs", type=int, default=200, help="Total training epochs")
@@ -106,7 +106,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=2026, help="Base random seed")
     parser.add_argument(
-        "--no_amp", action="store_true", default=False,
+        "--use_amp", action="store_true", default=False,
         help="Disable CUDA automatic mixed precision",
     )
     parser.add_argument(
@@ -114,7 +114,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Read and write parsed point-cloud NPY caches",
     )
     parser.add_argument(
-        "--resume",
+        "--not_resume",
         action="store_true",
         default=False,
         help="Resume from model_trained/seg/<model_name>/last.pth",
@@ -181,7 +181,7 @@ def main(args: argparse.Namespace) -> None:
         and model_config["model"] == DEFAULT_SEGMENTATION_MODEL
     ):
         nvrtc_library = preload_cuda_nvrtc()
-    output_dir, resume_checkpoint = resolve_training_paths(model_config, args.resume)
+    output_dir, resume_checkpoint = resolve_training_paths(model_config, not args.not_resume)
     if rank == 0:
         log_training_configuration(args, device, output_dir)
         if nvrtc_library is not None:
@@ -260,7 +260,7 @@ def main(args: argparse.Namespace) -> None:
         epochs=args.epochs,
         warmup_epochs=args.warmup_epochs,
         gradient_clip_norm=args.gradient_clip_norm,
-        use_amp=not args.no_amp,
+        use_amp=args.use_amp,
         checkpoint_args=vars(args),
         wandb_run=wandb_run,
     )

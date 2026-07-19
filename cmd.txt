@@ -65,7 +65,6 @@ python train_cst_pred.py --epoch 20 --bs 20 --stage1_mode multitask --train_phas
 
 -- stage2 seg
 nohup python train_seg.py > out_s2seg.log 2>&1 &
-nohup python train_seg.py --no_amp --batch_size 20 --learning_rate 0.0001 --gradient_clip_norm 0.5 > out_s2seg.log 2>&1 &
 tail -f out_s2seg.log
 
 
