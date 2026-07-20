@@ -50,39 +50,27 @@ class CstPredWrapper(nn.Module):
                  channel_mid=128,
                  channel_out=32,
                  n_prim_type=5,
-                 stage1_mode: str = "baseline",
                  ):
         super().__init__()
 
-        if stage1_mode not in ("baseline", "multitask"):
-            raise ValueError(f"unsupported stage1_mode: {stage1_mode}")
-        self.stage1_mode = stage1_mode
         self.embedding = get_embedding_model(embedding_model_name, channel_coord, channel_fea, channel_mid)
         self.emb_head = utils.MLP(1, (channel_mid, math.ceil((channel_out*channel_mid)**0.5), channel_out))
         self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))
-        self.mad_head = None
-        self.dim_head = None
-        self.nor_head = None
-        self.loc_head = None
-        self.geometry_decoder = None
-
-        if self.stage1_mode == "multitask":
-            attr_mid = math.ceil((3 * channel_mid) ** 0.5)
-            dim_mid = math.ceil(channel_mid ** 0.5)
-            self.geometry_decoder = utils.MLP(
-                1, (channel_mid, channel_mid, channel_mid), dropout=0.0
-            )
-            self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
-            self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
-            self.nor_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
-            self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
+        attr_mid = math.ceil((3 * channel_mid) ** 0.5)
+        dim_mid = math.ceil(channel_mid ** 0.5)
+        self.geometry_decoder = utils.MLP(
+            1, (channel_mid, channel_mid, channel_mid), dropout=0.0
+        )
+        self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
+        self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
+        self.nor_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
+        self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
 
     def forward(self, xyz, fea=None):
         """
         xyz: [bs, N, 3]
         fea: [bs, N, channel_fea]
-        return baseline: [bs, N, channel_out], [bs, N, n_prim_type]
-        return multitask: dict of Stage 1 predictions
+        return: dict containing all Stage 1 semantic and geometry predictions
         """
         xyz = xyz.permute(0, 2, 1)
         if fea is not None:
@@ -103,9 +91,6 @@ class CstPredWrapper(nn.Module):
 
         # -> [bs, n, fea]
         pnt_fea_l2norm, pmt_log_softmax = pnt_fea_l2norm.permute(0, 2, 1), pmt_log_softmax.permute(0, 2, 1)
-        if self.stage1_mode == "baseline":
-            return pnt_fea_l2norm, pmt_log_softmax
-
         geometry_fea = self.geometry_decoder(embedding)
         mad_pred = F.normalize(self.mad_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
         dim_pred = F.softplus(self.dim_head(geometry_fea)).squeeze(1)
@@ -125,16 +110,14 @@ class CstPredWrapper(nn.Module):
         """Configure the exact trainable parameter set for Stage 1 phases."""
         if phase not in ("semantic", "geometry", "joint"):
             raise ValueError(f"unsupported Stage 1 train phase: {phase}")
-        if self.stage1_mode == "baseline" and phase != "semantic":
-            raise ValueError("baseline Stage 1 only supports train_phase=semantic")
 
         for param in self.parameters():
             param.requires_grad_(False)
 
         if phase == "semantic":
-            trainable_prefixes = ["embedding", "emb_head", "cls_head"]
-            if self.stage1_mode == "multitask":
-                trainable_prefixes.extend(["geometry_decoder", "nor_head"])
+            trainable_prefixes = [
+                "embedding", "emb_head", "cls_head", "geometry_decoder", "nor_head"
+            ]
         elif phase == "geometry":
             trainable_prefixes = [
                 "geometry_decoder", "mad_head", "dim_head", "nor_head", "loc_head"

@@ -1,11 +1,178 @@
 from __future__ import annotations
 
-from typing import Dict
+import math
+from typing import Any, Dict, Iterable, Mapping
 
 import torch
 import torch.nn.functional as F
 
 from functional.constraints import cluster_embeddings_radius
+
+
+CONSTRAINT_ATTRIBUTE_METRIC_SPECS = {
+    "direction_mean_angular_error_deg": (
+        "_constraint_attribute_sum/direction_angular_error_deg",
+        "_constraint_attribute_count/direction",
+        "direction_valid_points",
+    ),
+    "continuity_mean_angular_error_deg": (
+        "_constraint_attribute_sum/continuity_angular_error_deg",
+        "_constraint_attribute_count/continuity",
+        "continuity_valid_points",
+    ),
+    "dimension_mean_absolute_error": (
+        "_constraint_attribute_sum/dimension_absolute_error",
+        "_constraint_attribute_count/dimension",
+        "dimension_valid_points",
+    ),
+    "location_mean_distance_error": (
+        "_constraint_attribute_sum/location_distance_error",
+        "_constraint_attribute_count/location",
+        "location_valid_points",
+    ),
+}
+
+CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS = frozenset(
+    key
+    for _, (sum_key, count_key, _) in CONSTRAINT_ATTRIBUTE_METRIC_SPECS.items()
+    for key in (sum_key, count_key)
+)
+
+
+def _primitive_mask(pmt_gt: torch.Tensor, valid_types: tuple[int, ...]) -> torch.Tensor:
+    mask = torch.zeros_like(pmt_gt, dtype=torch.bool)
+    for primitive_type in valid_types:
+        mask |= pmt_gt == primitive_type
+    return mask
+
+
+def _canonicalize_direction(vectors: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Apply the project's dir_unify sign convention to normalized vectors."""
+    x, y, z = vectors.unbind(dim=-1)
+    z_zero = z.abs() <= eps
+    y_zero = y.abs() <= eps
+    flip = (z < -eps) | (z_zero & (y < -eps)) | (
+        z_zero & y_zero & (x < -eps)
+    )
+    return torch.where(flip.unsqueeze(-1), -vectors, vectors)
+
+
+def _angular_error_sum_and_count(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    canonicalize: bool,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    pred_norm = prediction.norm(dim=-1)
+    target_norm = target.norm(dim=-1)
+    valid = (
+        mask
+        & torch.isfinite(prediction).all(dim=-1)
+        & torch.isfinite(target).all(dim=-1)
+        & (pred_norm > eps)
+        & (target_norm > eps)
+    )
+    count = valid.sum().to(dtype=torch.float32)
+    if not bool(valid.any()):
+        return prediction.new_zeros((), dtype=torch.float32), count
+
+    pred_unit = F.normalize(prediction[valid].float(), dim=-1, eps=eps)
+    target_unit = F.normalize(target[valid].float(), dim=-1, eps=eps)
+    if canonicalize:
+        pred_unit = _canonicalize_direction(pred_unit, eps=eps)
+        target_unit = _canonicalize_direction(target_unit, eps=eps)
+    cosine = (pred_unit * target_unit).sum(dim=-1).clamp(-1.0, 1.0)
+    error_deg = torch.acos(cosine) * (180.0 / math.pi)
+    return error_deg.sum(), count
+
+
+@torch.no_grad()
+def evaluate_constraint_attribute_metrics(
+    mad_pred: torch.Tensor,
+    dim_pred: torch.Tensor,
+    nor_pred: torch.Tensor,
+    loc_pred: torch.Tensor,
+    pmt_gt: torch.Tensor,
+    mad_gt: torch.Tensor,
+    dim_gt: torch.Tensor,
+    nor_gt: torch.Tensor,
+    loc_gt: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Return additive accumulators for exact epoch-level constraint errors."""
+    direction_sum, direction_count = _angular_error_sum_and_count(
+        mad_pred,
+        mad_gt,
+        _primitive_mask(pmt_gt, (0, 1, 2)),
+        canonicalize=True,
+    )
+    continuity_sum, continuity_count = _angular_error_sum_and_count(
+        nor_pred,
+        nor_gt,
+        _primitive_mask(pmt_gt, (0, 1, 2, 3, 4)),
+        canonicalize=False,
+    )
+
+    dimension_mask = (
+        _primitive_mask(pmt_gt, (1, 2, 3))
+        & torch.isfinite(dim_pred)
+        & torch.isfinite(dim_gt)
+    )
+    dimension_errors = (dim_pred.float() - dim_gt.float()).abs()
+    dimension_sum = (
+        dimension_errors[dimension_mask].sum()
+        if bool(dimension_mask.any())
+        else dimension_errors.new_zeros(())
+    )
+    dimension_count = dimension_mask.sum().to(dtype=torch.float32)
+
+    location_mask = (
+        _primitive_mask(pmt_gt, (0, 1, 2, 3))
+        & torch.isfinite(loc_pred).all(dim=-1)
+        & torch.isfinite(loc_gt).all(dim=-1)
+    )
+    location_errors = (loc_pred.float() - loc_gt.float()).norm(dim=-1)
+    location_sum = (
+        location_errors[location_mask].sum()
+        if bool(location_mask.any())
+        else location_errors.new_zeros(())
+    )
+    location_count = location_mask.sum().to(dtype=torch.float32)
+
+    return {
+        "_constraint_attribute_sum/direction_angular_error_deg": direction_sum,
+        "_constraint_attribute_count/direction": direction_count,
+        "_constraint_attribute_sum/continuity_angular_error_deg": continuity_sum,
+        "_constraint_attribute_count/continuity": continuity_count,
+        "_constraint_attribute_sum/dimension_absolute_error": dimension_sum,
+        "_constraint_attribute_count/dimension": dimension_count,
+        "_constraint_attribute_sum/location_distance_error": location_sum,
+        "_constraint_attribute_count/location": location_count,
+    }
+
+
+def aggregate_constraint_attribute_metrics(
+    metric_batches: Iterable[Mapping[str, Any]],
+) -> Dict[str, float]:
+    """Convert per-batch additive accumulators into exact epoch means."""
+    batches = list(metric_batches)
+    output: Dict[str, float] = {}
+    for metric_name, (sum_key, count_key, valid_count_name) in (
+        CONSTRAINT_ATTRIBUTE_METRIC_SPECS.items()
+    ):
+        available = [
+            batch for batch in batches if sum_key in batch and count_key in batch
+        ]
+        if not available:
+            continue
+        total_sum = sum(float(torch.as_tensor(batch[sum_key]).item()) for batch in available)
+        total_count = sum(
+            float(torch.as_tensor(batch[count_key]).item()) for batch in available
+        )
+        output[metric_name] = total_sum / max(total_count, 1.0)
+        output[valid_count_name] = total_count
+    return output
 
 
 def _contingency_matrix(y_true_idx: torch.Tensor, y_pred_idx: torch.Tensor) -> torch.Tensor:

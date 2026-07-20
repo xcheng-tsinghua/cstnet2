@@ -302,6 +302,7 @@ Useful options:
 
 ```text
 --model pointnet2|pointnet|attn_3dgcn
+--train_phase semantic|geometry|joint
 --is_sample              run a small sampled dataloader for debugging
 --resume_checkpoint PATH resume model, optimizer, scheduler, and epoch state
 --init_from_checkpoint PATH load model weights only for a new training run
@@ -317,16 +318,26 @@ Stage 1, classification, and segmentation always log every epoch to WandB.
 This includes all losses, learning rates, aggregate metrics, per-class metrics,
 class histograms, and confusion matrices produced by each task.
 
+Stage 1 reports constraint-property errors using GT
+primitive validity masks: Direction and Continuity mean angular error in
+degrees, Dimension mean absolute error, and Location mean Euclidean distance.
+Classification reports Top-1 and Top-5 accuracy (Top-5 is clipped to the
+available class count). Segmentation reports per-class and macro F1/Dice at
+both point and Face levels.
+
 All three training tasks use the same atomic checkpoint writer. A storage I/O
 failure is retried three times; if all attempts fail, the temporary file is
 removed, the previous valid checkpoint is retained, and training continues.
 WandB checkpoint fields ending in `_saved` record whether each attempted epoch
 checkpoint was written successfully.
 
-Default Stage 1 checkpoint path:
+Stage 1 uses the multitask model exclusively. Its three training phases write
+to separate, compatible checkpoint directories. For example:
 
 ```text
-model_trained/pointnet2_pmt_prim_cluster.pth
+model_trained/attn_3dgcn_multitask_semantic_pmt_prim_cluster/
+model_trained/attn_3dgcn_multitask_geometry_pmt_prim_cluster/
+model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/
 ```
 
 ### Generate Offline Stage 1 Constraints
@@ -357,11 +368,10 @@ python gen_cst_pred.py \
 
 The checkpoint argument can also be its containing directory. The generator
 then selects `best_constraint_score.pth`, `best_pmt_miou.pth`,
-`best_cluster_ari.pth`, or `last.pth`, in that order. Model name, Stage 1 mode,
-feature settings, and clustering bandwidth are read from current checkpoint
-metadata. For a legacy weights-only checkpoint, specify `--model` and
-`--stage1_mode` explicitly. Existing outputs are skipped unless `--overwrite`
-is supplied. TXT is processed by default; use for example
+`best_cluster_ari.pth`, or `last.pth`, in that order. Model name, feature
+settings, and clustering bandwidth are read from current checkpoint metadata.
+For a legacy weights-only checkpoint, specify `--model` explicitly. Existing
+outputs are skipped unless `--overwrite` is supplied. TXT is processed by default; use for example
 `--extensions .txt,.npy` when required.
 
 ### Train Stage 2 Classification
@@ -490,19 +500,25 @@ experiments reuse the training-only `class_statistics.json` cache. Evaluation
 reconstructs the model family and input mode from the checkpoint; baseline
 architecture defaults are read from the corresponding model file.
 
-Training starts fresh by default. Set `--resume` to load `last.pth` from
-the selected model's fixed output directory. A missing checkpoint is reported
-as an error instead of silently starting over.
+The default segmentation WandB Run name is generated from the resolved model
+configuration, for example `constraint_aware`, `pointnet2`, or
+`pointnet2_constraints`. `--wandb_run_name` remains available as an explicit
+override.
+
+Segmentation attempts to resume `last.pth` from the selected model's fixed
+output directory by default. Add `--not_resume` to start fresh. A missing
+checkpoint is reported as an error instead of silently starting over.
 
 Training accepts either `val/` or `validation/` and can start before a `test/`
 directory is present. It writes the shared `class_statistics.json` using the
 training split only, plus `last.pth` and `best_point_miou.pth` under each model's
 output directory.
 
-Resume all optimizer, scheduler, AMP, epoch, metric, and RNG state with:
+Resume all optimizer, scheduler, AMP, epoch, metric, RNG, and the original
+WandB Run by omitting `--not_resume`:
 
 ```bash
-python train_seg.py --model constraint_aware --resume
+python train_seg.py --model constraint_aware
 ```
 
 Evaluate point-level and Face-level metrics, and optionally export NPZ/PLY views:

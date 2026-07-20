@@ -16,7 +16,10 @@ from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDat
 from functional.cuda_runtime import preload_cuda_nvrtc
 from functional.segmentation_loss import compute_training_class_statistics
 from functional.stage2_seg_trainer import Stage2SegmentationTrainer
-from functional.wandb_utils import initialize_wandb_run
+from functional.wandb_utils import (
+    initialize_wandb_run,
+    read_wandb_run_id_from_checkpoint,
+)
 from networks.segmentation_models import (
     DEFAULT_SEGMENTATION_MODEL,
     SEGMENTATION_MODEL_NAMES,
@@ -35,6 +38,12 @@ def segmentation_run_name(model_config: dict[str, object]) -> str:
     ):
         model_name += "_constraints"
     return model_name
+
+
+def segmentation_wandb_run_name(
+    model_config: dict[str, object], requested_name: str = ""
+) -> str:
+    return requested_name.strip() or segmentation_run_name(model_config)
 
 
 def resolve_training_paths(
@@ -107,7 +116,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2026, help="Base random seed")
     parser.add_argument(
         "--use_amp", action="store_true", default=False,
-        help="Disable CUDA automatic mixed precision",
+        help="Enable CUDA automatic mixed precision",
     )
     parser.add_argument(
         "--use_npy_cache", action="store_true", default=False,
@@ -117,7 +126,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--not_resume",
         action="store_true",
         default=False,
-        help="Resume from model_trained/seg/<model_name>/last.pth",
+        help="Start fresh instead of resuming model_trained/seg/<model_name>/last.pth",
     )
     parser.add_argument(
         "--recompute_class_statistics", action="store_true", default=False,
@@ -130,7 +139,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--wandb_entity", type=str, default="", help="Optional WandB entity/team",
     )
     parser.add_argument(
-        "--wandb_run_name", type=str, default="stage2_mfcad_seg", help="WandB run name",
+        "--wandb_run_name", type=str, default="",
+        help="Optional WandB run name; defaults to the resolved segmentation model name",
     )
     return parser.parse_args(argv)
 
@@ -232,12 +242,23 @@ def main(args: argparse.Namespace) -> None:
 
     wandb_run = None
     if rank == 0:
+        wandb_resume_id = read_wandb_run_id_from_checkpoint(resume_checkpoint)
+        if resume_checkpoint and not wandb_resume_id:
+            print(
+                "WARNING: resume checkpoint has no wandb_run_id; "
+                "a new WandB Run will be created for this legacy checkpoint"
+            )
+        resolved_run_name = segmentation_wandb_run_name(
+            model_config, args.wandb_run_name
+        )
         wandb_run = initialize_wandb_run(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=args.wandb_run_name,
+            name=resolved_run_name,
+            run_id=wandb_resume_id,
             config={
                 **vars(args),
+                "resolved_wandb_run_name": resolved_run_name,
                 "model_config": model_config,
                 "parameter_count": parameter_count,
                 "num_classes": train_loader.dataset.num_classes,

@@ -88,7 +88,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             ["--input_dir", "input", "--output_dir", "output", "--checkpoint", "weights.pth"]
         )
         self.assertEqual(args.model, "auto")
-        self.assertEqual(args.stage1_mode, "auto")
+        self.assertFalse(hasattr(args, "stage1_mode"))
         self.assertEqual(args.extensions, ".txt")
         self.assertEqual(args.input_layout, "auto")
         self.assertFalse(args.overwrite)
@@ -96,13 +96,13 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
     def test_real_stage1_checkpoint_xyz_inference_smoke(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
             checkpoint_path = Path(temporary) / "last.pth"
-            model = CstPredWrapper("pointnet", stage1_mode="baseline")
+            model = CstPredWrapper("pointnet")
             torch.save(
                 {
                     "model": model.state_dict(),
                     "args": {
                         "model": "pointnet",
-                        "stage1_mode": "baseline",
+                        "stage1_mode": "multitask",
                         "use_extra_features": False,
                         "normal_source": "none",
                         "feature_k": 16,

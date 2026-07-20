@@ -9,7 +9,10 @@ import torch
 from data_utils.datasets import CstNet2Dataset
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
-from functional.wandb_utils import initialize_wandb_run
+from functional.wandb_utils import (
+    initialize_wandb_run,
+    read_wandb_run_id_from_checkpoint,
+)
 from networks.cst_pred_wrapper import CstPredWrapper
 from colorama import init, Fore, Back
 
@@ -31,7 +34,6 @@ def parse_args(argv=None):
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
-    parser.add_argument('--stage1_mode', default='baseline', choices=['baseline', 'multitask'], type=str)
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
     parser.add_argument('--use_extra_features', action='store_true', default=False)
     parser.add_argument('--normal_source', default='none', choices=['gt', 'pca', 'none'], type=str)
@@ -74,11 +76,7 @@ def parse_args(argv=None):
 def main(args):
     if args.resume_checkpoint and args.init_from_checkpoint:
         raise ValueError('--resume_checkpoint and --init_from_checkpoint are mutually exclusive')
-    save_str = (
-        f'{args.model}_pmt_prim_cluster'
-        if args.stage1_mode == 'baseline'
-        else f'{args.model}_multitask_{args.train_phase}_pmt_prim_cluster'
-    )
+    save_str = f'{args.model}_multitask_{args.train_phase}_pmt_prim_cluster'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
     os.makedirs('log', exist_ok=True)
@@ -119,13 +117,20 @@ def main(args):
     stage1_model = CstPredWrapper(
         args.model,
         channel_fea=channel_fea,
-        stage1_mode=args.stage1_mode,
     ).to(device)
     parameter_count = sum(parameter.numel() for parameter in stage1_model.parameters())
+    wandb_resume_id = read_wandb_run_id_from_checkpoint(args.resume_checkpoint)
+    if args.resume_checkpoint and not wandb_resume_id:
+        print(
+            Fore.YELLOW
+            + 'WARNING: resume checkpoint has no wandb_run_id; '
+            'a new WandB Run will be created for this legacy checkpoint'
+        )
     run = initialize_wandb_run(
         project=args.wandb_project,
         entity=args.wandb_entity,
         name=args.wandb_run_name if args.wandb_run_name else save_str,
+        run_id=wandb_resume_id,
         config={
             **vars(args),
             'parameter_count': parameter_count,
@@ -144,7 +149,6 @@ def main(args):
         decay_rate=args.decay_rate,
         save_str=save_str,
         wandb_run=run,
-        stage1_mode=args.stage1_mode,
         loss_weights=loss_weights,
         geom_start_epoch=args.geom_start_epoch,
         geom_ramp_epochs=args.geom_ramp_epochs,

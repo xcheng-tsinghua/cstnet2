@@ -17,6 +17,49 @@ if str(REPO_ROOT) not in sys.path:
 
 
 class Stage2ClassifierShapeTest(unittest.TestCase):
+    def test_classification_full_checkpoint_restores_epoch_and_wandb_id(self):
+        import train_cls
+
+        model_config = {
+            "model": "pointnet",
+            "baseline_use_constraints": False,
+        }
+        source_model = torch.nn.Linear(3, 2)
+        source_optimizer = torch.optim.Adam(source_model.parameters(), lr=1e-3)
+        source_scheduler = torch.optim.lr_scheduler.StepLR(
+            source_optimizer, step_size=2
+        )
+        checkpoint = {
+            "epoch": 4,
+            "model": source_model.state_dict(),
+            "optimizer": source_optimizer.state_dict(),
+            "scheduler": source_scheduler.state_dict(),
+            "best_acc": 0.75,
+            "model_config": model_config,
+            "wandb_run_id": "classification-run-id",
+        }
+        restored_model = torch.nn.Linear(3, 2)
+        restored_optimizer = torch.optim.Adam(
+            restored_model.parameters(), lr=9e-3
+        )
+        restored_scheduler = torch.optim.lr_scheduler.StepLR(
+            restored_optimizer, step_size=2
+        )
+
+        state = train_cls.restore_classification_training_state(
+            checkpoint,
+            restored_model,
+            restored_optimizer,
+            restored_scheduler,
+            model_config,
+        )
+
+        self.assertEqual(state, (5, 0.75, "classification-run-id", False))
+        for expected, actual in zip(
+            source_model.parameters(), restored_model.parameters()
+        ):
+            self.assertTrue(torch.equal(expected, actual))
+
     def test_classification_checkpoint_failures_do_not_raise(self):
         import train_cls
 

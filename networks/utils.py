@@ -354,6 +354,11 @@ def all_metric_cls(all_preds: list, all_labels: list):
     valid_classes = gt_histogram > 0
     instance_accuracy = float(true_positive.sum() / max(n_samples, 1))
     class_accuracy = float(recall[valid_classes].mean()) if valid_classes.any() else 0.0
+    top_5_k = min(5, n_classes)
+    top_5_predictions = np.argsort(all_preds, axis=1)[:, -top_5_k:]
+    top_5_accuracy = float(
+        np.any(top_5_predictions == all_labels[:, None], axis=1).mean()
+    )
 
     all_labels_one_hot = label_binarize(all_labels, classes=np.arange(n_classes))
 
@@ -377,6 +382,9 @@ def all_metric_cls(all_preds: list, all_labels: list):
 
     return {
         "instance_accuracy": instance_accuracy,
+        "top_1_accuracy": instance_accuracy,
+        "top_5_accuracy": top_5_accuracy,
+        "top_5_effective_k": top_5_k,
         "class_accuracy": class_accuracy,
         "f1_macro": float(
             f1_score(all_labels, pred_choice, average="macro", zero_division=0)

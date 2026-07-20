@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
 from functional.wandb_utils import flatten_wandb_metrics
+from functional.wandb_utils import wandb_run_id
 from functional.checkpoint_io import (
     CHECKPOINT_SAVE_ATTEMPTS,
     CHECKPOINT_RETRY_SECONDS,
@@ -269,6 +270,7 @@ class Stage2SegmentationTrainer:
             "label_map": self.label_map,
             "class_weights": self.class_weights,
             "rng_state": capture_rng_state(),
+            "wandb_run_id": wandb_run_id(self.wandb_run),
         }
 
     def _save_checkpoint(self, path: Path, epoch: int) -> bool:
@@ -367,7 +369,10 @@ class Stage2SegmentationTrainer:
                 print(
                     f"epoch {epoch + 1}/{self.epochs} train_loss={train_loss:.6f} "
                     f"val_loss={val_loss:.6f} point_mIoU={point_miou:.4f} "
-                    f"face_mIoU={val_metrics['face_mean_iou']:.4f} best={self.best_metric:.4f}"
+                    f"point_F1={val_metrics['point_mean_f1']:.4f} "
+                    f"face_mIoU={val_metrics['face_mean_iou']:.4f} "
+                    f"face_F1={val_metrics['face_mean_f1']:.4f} "
+                    f"best={self.best_metric:.4f}"
                 )
                 if self.wandb_run is not None:
                     payload = {

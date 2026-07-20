@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 import torch
 
@@ -10,7 +11,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from functional.cst_pred_trainer import CstPredTrainer, warn_if_primitive_collapsed
+from functional.cst_pred_trainer import (
+    CstPredTrainer,
+    _aggregate_metric_dicts,
+    warn_if_primitive_collapsed,
+)
+from functional.stage1_metrics import evaluate_constraint_attribute_metrics
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
@@ -34,10 +40,9 @@ def synthetic_batch(batch_size=2, n_points=20):
     return xyz, category, primitive, direction, dimension, normal, location, affiliate
 
 
-def checkpoint_args(mode, phase, n_points=20):
+def checkpoint_args(phase, n_points=20):
     return {
         "model": "pointnet",
-        "stage1_mode": mode,
         "train_phase": phase,
         "use_extra_features": False,
         "normal_source": "none",
@@ -65,11 +70,11 @@ def checkpoint_args(mode, phase, n_points=20):
 
 
 def make_trainer(
-    root, mode, phase, max_epoch=1, resume="", init_from="", args_override=None
+    root, phase, max_epoch=1, resume="", init_from="", args_override=None
 ):
     batch = synthetic_batch()
     return CstPredTrainer(
-        model=CstPredWrapper("pointnet", stage1_mode=mode),
+        model=CstPredWrapper("pointnet"),
         train_loader=[batch],
         test_loader=[batch],
         checkpoint_dir=os.path.join(root, "checkpoints"),
@@ -77,11 +82,10 @@ def make_trainer(
         max_epoch=max_epoch,
         lr=1e-4,
         save_str="stage1_stability_smoke",
-        stage1_mode=mode,
         train_phase=phase,
         enabled_losses={name: True for name in LOSS_NAMES},
         checkpoint_args=(
-            checkpoint_args(mode, phase) if args_override is None else args_override
+            checkpoint_args(phase) if args_override is None else args_override
         ),
         geom_start_epoch=0,
         geom_ramp_epochs=4,
@@ -93,9 +97,70 @@ def make_trainer(
 
 
 class Stage1TrainingStabilityTest(unittest.TestCase):
+    def test_constraint_attribute_errors_use_valid_primitive_masks(self):
+        primitive = torch.tensor([[0, 1, 2, 3, 4]])
+        direction_gt = torch.tensor(
+            [[[1.0, 0.0, 0.0]] * 5],
+        )
+        direction_pred = direction_gt.clone()
+        direction_pred[0, 1] = torch.tensor([0.0, 1.0, 0.0])
+        direction_pred[0, 2] = torch.tensor([-1.0, 0.0, 0.0])
+
+        continuity_gt = torch.tensor(
+            [[[0.0, 0.0, 1.0]] * 5],
+        )
+        continuity_pred = continuity_gt.clone()
+        continuity_pred[0, 4] = torch.tensor([0.0, 0.0, -1.0])
+
+        dimension_gt = torch.zeros(1, 5)
+        dimension_pred = torch.tensor([[100.0, 1.0, 2.0, 3.0, 100.0]])
+        location_gt = torch.zeros(1, 5, 3)
+        location_pred = torch.zeros(1, 5, 3)
+        location_pred[0, :4, 0] = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        location_pred[0, 4, 0] = 100.0
+
+        batch_metrics = evaluate_constraint_attribute_metrics(
+            direction_pred,
+            dimension_pred,
+            continuity_pred,
+            location_pred,
+            primitive,
+            direction_gt,
+            dimension_gt,
+            continuity_gt,
+            location_gt,
+        )
+        metrics = _aggregate_metric_dicts([batch_metrics])
+
+        self.assertAlmostEqual(
+            metrics["direction_mean_angular_error_deg"], 30.0, places=4
+        )
+        self.assertAlmostEqual(
+            metrics["continuity_mean_angular_error_deg"], 36.0, places=4
+        )
+        self.assertAlmostEqual(
+            metrics["dimension_mean_absolute_error"], 2.0, places=6
+        )
+        self.assertAlmostEqual(
+            metrics["location_mean_distance_error"], 2.5, places=6
+        )
+        self.assertEqual(metrics["direction_valid_points"], 3.0)
+        self.assertEqual(metrics["continuity_valid_points"], 5.0)
+        self.assertEqual(metrics["dimension_valid_points"], 3.0)
+        self.assertEqual(metrics["location_valid_points"], 4.0)
+
+    def test_stage1_checkpoint_persists_wandb_run_id(self):
+        with tempfile.TemporaryDirectory(dir=".") as root:
+            trainer = make_trainer(root, "semantic")
+            trainer.wandb_run = SimpleNamespace(id="stage1-run-id")
+            self.assertEqual(
+                trainer._checkpoint_payload(0)["wandb_run_id"],
+                "stage1-run-id",
+            )
+
     def test_checkpoint_io_failure_is_reported_without_raising(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
-            trainer = make_trainer(root, "baseline", "semantic")
+            trainer = make_trainer(root, "semantic")
             with mock.patch(
                 "functional.cst_pred_trainer.safe_torch_save",
                 return_value=False,
@@ -105,31 +170,30 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertEqual(status, {"last": False, "pmt_miou": False})
             self.assertEqual(safe_save.call_count, 2)
 
-    def test_baseline_and_multitask_phase_smokes(self):
-        for mode, phase in (
-            ("baseline", "semantic"),
-            ("multitask", "semantic"),
-            ("multitask", "geometry"),
-            ("multitask", "joint"),
-        ):
-            with self.subTest(mode=mode, phase=phase):
+    def test_all_multitask_phase_smokes(self):
+        for phase in ("semantic", "geometry", "joint"):
+            with self.subTest(phase=phase):
                 with tempfile.TemporaryDirectory(dir=".") as root:
-                    trainer = make_trainer(root, mode, phase)
+                    trainer = make_trainer(root, phase)
                     loss, metrics = trainer.process_batch(
                         synthetic_batch(),
                         global_epoch=1,
                         is_train=True,
-                        diagnose_gradients=(mode == "multitask" and phase == "semantic"),
+                        diagnose_gradients=phase == "semantic",
                     )
                     self.assertTrue(torch.isfinite(loss["loss_all"]))
                     self.assertIn("pmt_confusion_matrix", metrics)
-                    if mode == "multitask" and phase == "semantic":
+                    self.assertIn(
+                        "_constraint_attribute_sum/direction_angular_error_deg",
+                        metrics,
+                    )
+                    if phase == "semantic":
                         self.assertIn("grad_norm/pmt", metrics)
                         self.assertIn("grad_cosine/pmt_vs_geom", metrics)
 
     def test_geometry_freezes_semantic_path(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
-            trainer = make_trainer(root, "multitask", "geometry")
+            trainer = make_trainer(root, "geometry")
             trainable = {
                 name for name, parameter in trainer.model.named_parameters()
                 if parameter.requires_grad
@@ -142,7 +206,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
 
     def test_joint_uses_lower_backbone_lr(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
-            trainer = make_trainer(root, "multitask", "joint")
+            trainer = make_trainer(root, "joint")
             learning_rates = trainer.current_lrs()
             self.assertAlmostEqual(
                 learning_rates["backbone_high"], learning_rates["heads"] * 0.1
@@ -156,7 +220,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
 
     def test_checkpoint_resume_and_model_only_init(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
-            first = make_trainer(root, "multitask", "joint", max_epoch=1)
+            first = make_trainer(root, "joint", max_epoch=1)
             initial_lrs = [group["lr"] for group in first.optimizer.param_groups]
             first.scheduler.step_size = 1
             first.start()
@@ -176,8 +240,17 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             ):
                 self.assertTrue(os.path.isfile(os.path.join(root, "checkpoints", filename)))
 
+            legacy_multitask_path = os.path.join(root, "legacy_multitask.pth")
+            first_state["args"]["stage1_mode"] = "multitask"
+            first_state["checkpoint_config"]["stage1_mode"] = "multitask"
+            torch.save(first_state, legacy_multitask_path)
+            legacy_resumed = make_trainer(
+                root, "joint", max_epoch=2, resume=legacy_multitask_path
+            )
+            self.assertEqual(legacy_resumed.start_epoch, 1)
+
             resumed = make_trainer(
-                root, "multitask", "joint", max_epoch=2, resume=last_path
+                root, "joint", max_epoch=2, resume=last_path
             )
             self.assertEqual(resumed.start_epoch, 1)
             self.assertEqual(resumed.global_step, 1)
@@ -193,12 +266,11 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertEqual(resumed_state["global_step"], 2)
             self.assertAlmostEqual(resumed_state["loss_schedule"]["aux_progress"], 0.25)
 
-            mismatched_args = checkpoint_args("multitask", "joint")
+            mismatched_args = checkpoint_args("joint")
             mismatched_args["n_points"] = 21
             with self.assertRaisesRegex(ValueError, "configuration mismatch"):
                 make_trainer(
                     root,
-                    "multitask",
                     "joint",
                     max_epoch=2,
                     resume=last_path,
@@ -206,7 +278,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                 )
 
             initialized = make_trainer(
-                root, "multitask", "joint", max_epoch=1, init_from=last_path
+                root, "joint", max_epoch=1, init_from=last_path
             )
             self.assertEqual(initialized.start_epoch, 0)
             self.assertEqual(initialized.global_step, 0)

@@ -69,6 +69,7 @@ def initialize_wandb_run(
     name: str,
     config: Mapping[str, Any],
     entity: str = "",
+    run_id: str = "",
     env_path: str | os.PathLike[str] = DEFAULT_ENV_PATH,
 ):
     """Authenticate from .env and create the mandatory online WandB run."""
@@ -81,13 +82,45 @@ def initialize_wandb_run(
         ) from exc
 
     wandb.login(key=api_key, relogin=True)
-    return wandb.init(
+    init_kwargs = dict(
         project=project,
         entity=entity or None,
         name=name,
         config=dict(config),
         mode="online",
     )
+    if run_id:
+        init_kwargs.update(id=str(run_id), resume="must")
+    return wandb.init(**init_kwargs)
+
+
+def read_wandb_run_id_from_checkpoint(
+    path: str | os.PathLike[str] | None,
+) -> str:
+    """Read a persisted WandB Run ID without constructing a training model."""
+    if not path:
+        return ""
+    checkpoint_path = Path(path).expanduser()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is required to inspect a checkpoint") from exc
+    try:
+        checkpoint = torch.load(
+            checkpoint_path, map_location="cpu", weights_only=False
+        )
+    except TypeError:  # PyTorch versions before weights_only was added
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(checkpoint, Mapping):
+        return ""
+    return str(checkpoint.get("wandb_run_id", "") or "").strip()
+
+
+def wandb_run_id(run: Any) -> str:
+    """Return a live run's stable ID, or an empty string for test doubles."""
+    return str(getattr(run, "id", "") or "").strip()
 
 
 def flatten_wandb_metrics(prefix: str, data: Any) -> dict[str, float]:
@@ -123,6 +156,8 @@ __all__ = [
     "DEFAULT_ENV_PATH",
     "flatten_wandb_metrics",
     "initialize_wandb_run",
+    "read_wandb_run_id_from_checkpoint",
     "read_env_file",
     "require_wandb_api_key",
+    "wandb_run_id",
 ]

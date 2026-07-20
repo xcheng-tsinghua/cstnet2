@@ -6,25 +6,26 @@ from contextlib import nullcontext
 from time import time
 
 import torch
-import torch.nn.functional as F
 from colorama import Back, Fore
 from tqdm import tqdm
 
 from functional.loss import (
     constraint_loss,
-    discriminative_loss,
     evaluate_clustering,
     linear_ramp,
 )
 from functional.point_features import build_stage1_input_features
 from functional.stage1_metrics import (
+    CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
+    aggregate_constraint_attribute_metrics,
+    evaluate_constraint_attribute_metrics,
     evaluate_predicted_clustering,
     evaluate_primitive_metrics,
     primitive_metrics_from_confusion,
     primitive_prediction_collapsed,
 )
 from functional.checkpoint_io import safe_torch_save
-from functional.wandb_utils import flatten_wandb_metrics
+from functional.wandb_utils import flatten_wandb_metrics, wandb_run_id
 
 
 LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "nor", "loc", "geom", "inst")
@@ -36,7 +37,7 @@ BEST_FILE_NAMES = {
 
 
 class CstPredTrainer(object):
-    """Train baseline or multitask Stage 1 without coupling it to Stage 2."""
+    """Train the multitask Stage 1 model without coupling it to Stage 2."""
 
     def __init__(
         self,
@@ -50,7 +51,6 @@ class CstPredTrainer(object):
         save_str,
         wandb_run=None,
         decay_rate=1e-4,
-        stage1_mode="baseline",
         loss_weights=None,
         geom_start_epoch=20,
         geom_ramp_epochs=20,
@@ -81,7 +81,6 @@ class CstPredTrainer(object):
         self.save_str = save_str
         self.wandb_run = wandb_run
         self.decay_rate = decay_rate
-        self.stage1_mode = stage1_mode
         self.loss_weights = {} if loss_weights is None else dict(loss_weights)
         self.geom_start_epoch = int(geom_start_epoch)
         self.geom_ramp_epochs = int(geom_ramp_epochs)
@@ -140,6 +139,7 @@ class CstPredTrainer(object):
         resume_state = None
         if self.resume_checkpoint:
             resume_state = self._load_checkpoint_file(self.resume_checkpoint)
+            self._validate_checkpoint_mode(resume_state, self.resume_checkpoint)
             self._validate_full_checkpoint(resume_state, self.resume_checkpoint)
             self._validate_resume_config(resume_state)
             self._load_model_state(
@@ -147,6 +147,7 @@ class CstPredTrainer(object):
             )
         elif self.init_from_checkpoint:
             init_state = self._load_checkpoint_file(self.init_from_checkpoint)
+            self._validate_checkpoint_mode(init_state, self.init_from_checkpoint)
             self._load_model_state(
                 _extract_model_state(init_state),
                 require_complete=False,
@@ -209,10 +210,23 @@ class CstPredTrainer(object):
                 "Use --init_from_checkpoint for model-only/legacy weights."
             )
 
+    @staticmethod
+    def _validate_checkpoint_mode(state, source):
+        if not isinstance(state, dict) or not isinstance(state.get("args"), dict):
+            return
+        saved_mode = state["args"].get("stage1_mode")
+        if saved_mode not in (None, "multitask"):
+            raise ValueError(
+                f"unsupported legacy Stage 1 checkpoint mode {saved_mode!r}: {source}"
+            )
+
     def _validate_resume_config(self, checkpoint):
         saved_config = checkpoint.get("checkpoint_config")
         if saved_config is None:
             saved_config = _critical_checkpoint_config(checkpoint.get("args", {}))
+        else:
+            saved_config = dict(saved_config)
+            saved_config.pop("stage1_mode", None)
         current_config = _critical_checkpoint_config(self.checkpoint_args)
         differences = _config_differences(saved_config, current_config)
         if differences:
@@ -421,6 +435,7 @@ class CstPredTrainer(object):
             "best_metrics": self.best_metrics,
             "args": self.checkpoint_args,
             "checkpoint_config": checkpoint_config,
+            "wandb_run_id": wandb_run_id(self.wandb_run),
             "loss_schedule": {
                 "global_epoch": int(epoch),
                 "next_global_epoch": int(epoch) + 1,
@@ -466,6 +481,17 @@ class CstPredTrainer(object):
             f"cluster_ari_real={metric_summary.get('cluster_ari_real', 0.0):.4f}, "
             f"cluster_nmi_real={metric_summary.get('cluster_nmi_real', 0.0):.4f}"
         )
+        if "direction_mean_angular_error_deg" in metric_summary:
+            print(
+                f"{split}: direction_angle_error="
+                f"{metric_summary['direction_mean_angular_error_deg']:.4f} deg, "
+                f"continuity_angle_error="
+                f"{metric_summary['continuity_mean_angular_error_deg']:.4f} deg, "
+                f"dimension_mae="
+                f"{metric_summary['dimension_mean_absolute_error']:.6f}, "
+                f"location_distance_error="
+                f"{metric_summary['location_mean_distance_error']:.6f}"
+            )
         print(f"{split}: gt primitive histogram={metric_summary.get('pmt_gt_histogram', [])}")
         print(f"{split}: predicted primitive histogram={metric_summary.get('pmt_pred_histogram', [])}")
         print(f"{split}: confusion matrix={metric_summary.get('pmt_confusion_matrix', [])}")
@@ -543,16 +569,16 @@ class CstPredTrainer(object):
 
     @staticmethod
     def _unpack_model_output(model_output):
-        if isinstance(model_output, dict):
-            return model_output
-        embedding, log_pmt = model_output
-        return {"embedding": embedding, "log_pmt": log_pmt}
+        if not isinstance(model_output, dict):
+            raise TypeError("Stage 1 model must return the multitask prediction dictionary")
+        required = {"embedding", "log_pmt", "mad", "dim", "nor", "loc"}
+        missing = sorted(required.difference(model_output))
+        if missing:
+            raise ValueError(f"Stage 1 model output is missing fields: {missing}")
+        return model_output
 
     def _active_losses(self):
         active = {name: False for name in LOSS_NAMES}
-        if self.stage1_mode == "baseline":
-            active.update({"pmt": True, "cluster": True})
-            return active
         if self.train_phase in ("semantic", "joint"):
             active["pmt"] = True
             active["cluster"] = True
@@ -595,39 +621,26 @@ class CstPredTrainer(object):
                 outputs = self._unpack_model_output(self.model(xyz, extra_fea))
                 self._assert_finite_outputs(outputs)
                 active_losses = self._active_losses()
-                if self.stage1_mode == "multitask" and all(
-                    key in outputs for key in ("mad", "dim", "nor", "loc")
-                ):
-                    loss, loss_dict = constraint_loss(
-                        xyz=xyz,
-                        log_pmt_pred=outputs["log_pmt"].float(),
-                        mad_pred=outputs["mad"].float(),
-                        dim_pred=outputs["dim"].float(),
-                        nor_pred=outputs["nor"].float(),
-                        loc_pred=outputs["loc"].float(),
-                        pmt_gt=pmt_gt,
-                        mad_gt=mad_gt,
-                        dim_gt=dim_gt,
-                        nor_gt=nor_gt,
-                        loc_gt=loc_gt,
-                        affil_idx=affiliate_idx,
-                        point_emb=outputs["embedding"].float(),
-                        weights=self.loss_weights,
-                        global_epoch=global_epoch,
-                        geom_start_epoch=self.geom_start_epoch,
-                        geom_ramp_epochs=self.geom_ramp_epochs,
-                        enabled_losses=active_losses,
-                    )
-                else:
-                    pmt_loss, cluster_loss = compute_loss(
-                        outputs["embedding"].float(),
-                        affiliate_idx,
-                        outputs["log_pmt"].float(),
-                        pmt_gt,
-                    )
-                    loss, loss_dict = _baseline_loss_dict(
-                        pmt_loss, cluster_loss, self.loss_weights, xyz
-                    )
+                loss, loss_dict = constraint_loss(
+                    xyz=xyz,
+                    log_pmt_pred=outputs["log_pmt"].float(),
+                    mad_pred=outputs["mad"].float(),
+                    dim_pred=outputs["dim"].float(),
+                    nor_pred=outputs["nor"].float(),
+                    loc_pred=outputs["loc"].float(),
+                    pmt_gt=pmt_gt,
+                    mad_gt=mad_gt,
+                    dim_gt=dim_gt,
+                    nor_gt=nor_gt,
+                    loc_gt=loc_gt,
+                    affil_idx=affiliate_idx,
+                    point_emb=outputs["embedding"].float(),
+                    weights=self.loss_weights,
+                    global_epoch=global_epoch,
+                    geom_start_epoch=self.geom_start_epoch,
+                    geom_ramp_epochs=self.geom_ramp_epochs,
+                    enabled_losses=active_losses,
+                )
 
             self._assert_finite_losses(loss_dict)
             gradient_metrics = {}
@@ -665,10 +678,22 @@ class CstPredTrainer(object):
                 oracle_acc, oracle_nmi, oracle_ari = evaluate_clustering(
                     affiliate_idx, outputs["embedding"]
                 )
+                attribute_metrics = evaluate_constraint_attribute_metrics(
+                    mad_pred=outputs["mad"],
+                    dim_pred=outputs["dim"],
+                    nor_pred=outputs["nor"],
+                    loc_pred=outputs["loc"],
+                    pmt_gt=pmt_gt,
+                    mad_gt=mad_gt,
+                    dim_gt=dim_gt,
+                    nor_gt=nor_gt,
+                    loc_gt=loc_gt,
+                )
 
             metric_dict = {}
             metric_dict.update(primitive_metrics)
             metric_dict.update(real_cluster_metrics)
+            metric_dict.update(attribute_metrics)
             metric_dict.update({
                 "cluster_acc_oracle_optional": oracle_acc,
                 "cluster_nmi_oracle_optional": oracle_nmi,
@@ -733,54 +758,6 @@ class CstPredTrainer(object):
             }
             print(Fore.RED + f"non-finite loss terms: {bad}; values={values}")
             raise FloatingPointError(f"non-finite loss terms: {bad}")
-
-
-def compute_loss(pnt_fea, affiliate_idx, log_pmt, pmt_gt):
-    """Baseline Stage 1 loss: primitive NLL plus instance discriminative loss."""
-    pnt_fea = _nan_to_num(pnt_fea.float(), nan=0.0, posinf=1e4, neginf=-1e4)
-    log_pmt = _nan_to_num(log_pmt.float(), nan=0.0, posinf=1e4, neginf=-1e4)
-    cluster_loss = discriminative_loss(pnt_fea, affiliate_idx)
-    pmt_loss = F.nll_loss(log_pmt.reshape(-1, log_pmt.shape[-1]), pmt_gt.reshape(-1))
-    return pmt_loss, _nan_to_num(cluster_loss, nan=0.0, posinf=1e4, neginf=-1e4)
-
-
-def _baseline_loss_dict(pmt_loss, cluster_loss, weights, reference):
-    zero = reference.sum() * 0.0
-    raw = {name: zero for name in LOSS_NAMES}
-    raw["pmt"] = pmt_loss
-    raw["cluster"] = cluster_loss
-    target = {
-        "pmt": float(weights.get("w_pmt", 1.0)),
-        "cluster": float(weights.get("w_cluster", 0.5)),
-    }
-    weighted = {name: zero for name in LOSS_NAMES}
-    weighted["pmt"] = raw["pmt"] * target["pmt"]
-    weighted["cluster"] = raw["cluster"] * target["cluster"]
-    loss = weighted["pmt"] + weighted["cluster"]
-    output = {
-        "loss_all": loss,
-        "pmt_loss": pmt_loss,
-        "cluster_loss": cluster_loss,
-        "mad_loss": zero,
-        "dim_loss": zero,
-        "nor_loss": zero,
-        "loc_loss": zero,
-        "geom_loss": zero,
-        "inst_loss": zero,
-        "loss_plane": zero,
-        "loss_cylinder": zero,
-        "loss_cone": zero,
-        "loss_sphere": zero,
-        "aux_factor": zero,
-        "schedule/aux_progress": zero,
-    }
-    for name in LOSS_NAMES:
-        output[f"raw/{name}"] = raw[name]
-        output[f"weighted/{name}"] = weighted[name]
-        output[f"effective_weight/{name}"] = reference.new_tensor(
-            target.get(name, 0.0)
-        )
-    return loss, output
 
 
 def warn_if_primitive_collapsed(metric_summary, split="unknown", epoch=-1, threshold=0.95):
@@ -866,7 +843,6 @@ def _critical_checkpoint_config(args):
     }
     return {
         "model": _normalize_config_value(args.get("model", "<missing>")),
-        "stage1_mode": _normalize_config_value(args.get("stage1_mode", "<missing>")),
         "train_phase": _normalize_config_value(args.get("train_phase", "<missing>")),
         "use_extra_features": _normalize_config_value(
             args.get("use_extra_features", "<missing>")
@@ -941,14 +917,16 @@ def _aggregate_metric_dicts(dicts):
         "pmt_per_class_precision", "pmt_per_class_f1", "pmt_macro_f1",
         "pmt_per_class_iou", "pmt_miou",
     }
+    excluded_keys = primitive_keys | CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
     filtered = [
-        {key: value for key, value in item.items() if key not in primitive_keys}
+        {key: value for key, value in item.items() if key not in excluded_keys}
         for item in dicts
     ]
     output = _mean_dicts(filtered)
     if confusion_values:
         confusion = torch.stack([value.float() for value in confusion_values]).sum(dim=0)
         output.update(_to_python(primitive_metrics_from_confusion(confusion)))
+    output.update(aggregate_constraint_attribute_metrics(dicts))
     return output
 
 def _scalar(data, key):
@@ -959,14 +937,6 @@ def _scalar(data, key):
         flat = torch.as_tensor(value).float()
         return float(flat.mean()) if flat.numel() else 0.0
     return float(value)
-
-
-def _nan_to_num(value, nan=0.0, posinf=1e4, neginf=-1e4):
-    if hasattr(torch, "nan_to_num"):
-        return torch.nan_to_num(value, nan=nan, posinf=posinf, neginf=neginf)
-    value = torch.where(torch.isnan(value), value.new_tensor(nan), value)
-    value = torch.where(value == float("inf"), value.new_tensor(posinf), value)
-    return torch.where(value == float("-inf"), value.new_tensor(neginf), value)
 
 
 def _detach_dict(data):

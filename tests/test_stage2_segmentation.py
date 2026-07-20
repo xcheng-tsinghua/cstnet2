@@ -11,6 +11,46 @@ except ImportError:  # pragma: no cover - depends on the active training environ
 
 @unittest.skipIf(torch is None, "PyTorch is required for Stage 2 segmentation tests")
 class Stage2SegmentationTest(unittest.TestCase):
+    def test_segmentation_metrics_include_f1_and_dice(self):
+        from functional.segmentation_metrics import _metrics_from_confusion
+
+        metrics = _metrics_from_confusion(
+            torch.tensor([[2, 1], [1, 2]], dtype=torch.int64),
+            "point",
+        )
+
+        self.assertAlmostEqual(metrics["point_mean_f1"], 2.0 / 3.0)
+        self.assertAlmostEqual(metrics["point_mean_dice"], 2.0 / 3.0)
+        self.assertEqual(metrics["point_per_class_f1"], metrics["point_per_class_dice"])
+
+    def test_segmentation_checkpoint_persists_wandb_run_id(self):
+        from types import SimpleNamespace
+
+        from functional.stage2_seg_trainer import Stage2SegmentationTrainer
+
+        model = torch.nn.Linear(3, 2)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        trainer = Stage2SegmentationTrainer.__new__(Stage2SegmentationTrainer)
+        trainer.global_step = 7
+        trainer.model = model
+        trainer.optimizer = optimizer
+        trainer.scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=2
+        )
+        trainer.use_amp = False
+        trainer.best_metric = 0.75
+        trainer.checkpoint_args = {
+            "model": "pointnet2",
+            "baseline_use_constraints": False,
+        }
+        trainer.label_map = {"labels": [{"id": 0}, {"id": 1}]}
+        trainer.class_weights = torch.ones(2)
+        trainer.wandb_run = SimpleNamespace(id="segmentation-run-id")
+
+        payload = trainer._checkpoint_payload(epoch=3)
+
+        self.assertEqual(payload["wandb_run_id"], "segmentation-run-id")
+
     def test_checkpoint_io_failure_is_retried_then_skipped(self):
         import tempfile
         from pathlib import Path
@@ -86,22 +126,30 @@ class Stage2SegmentationTest(unittest.TestCase):
         import train_seg
 
         default_args = train_seg.parse_args([])
-        self.assertFalse(default_args.resume)
+        self.assertFalse(default_args.not_resume)
         self.assertFalse(hasattr(default_args, "output_dir"))
         self.assertFalse(hasattr(default_args, "dgcnn_k"))
         self.assertFalse(hasattr(default_args, "pointmamba_tokens"))
         self.assertFalse(hasattr(default_args, "use_wandb"))
         self.assertEqual(default_args.wandb_project, "cstnet2")
-        self.assertTrue(train_seg.parse_args(["--resume"]).resume)
+        self.assertTrue(train_seg.parse_args(["--not_resume"]).not_resume)
+        config = {
+            "model": "pointnet2",
+            "baseline_use_constraints": True,
+        }
+        self.assertEqual(
+            train_seg.segmentation_wandb_run_name(config),
+            "pointnet2_constraints",
+        )
+        self.assertEqual(
+            train_seg.segmentation_wandb_run_name(config, "custom-run"),
+            "custom-run",
+        )
 
         original_root = train_seg.MODEL_OUTPUT_ROOT
         try:
             with tempfile.TemporaryDirectory() as directory:
                 train_seg.MODEL_OUTPUT_ROOT = Path(directory)
-                config = {
-                    "model": "pointnet2",
-                    "baseline_use_constraints": True,
-                }
                 output_dir, checkpoint = train_seg.resolve_training_paths(
                     config, resume=False
                 )

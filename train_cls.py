@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Mapping
 
 import numpy as np
 import torch
@@ -15,7 +16,11 @@ from data_utils.datasets import CstNet2Dataset
 from functional.constraints import ground_truth_constraints_to_tensor
 from functional.checkpoint_io import safe_torch_save
 from functional.cuda_runtime import preload_cuda_nvrtc
-from functional.wandb_utils import flatten_wandb_metrics, initialize_wandb_run
+from functional.wandb_utils import (
+    flatten_wandb_metrics,
+    initialize_wandb_run,
+    wandb_run_id,
+)
 from networks.classification_models import (
     CLASSIFICATION_MODEL_NAMES,
     DEFAULT_CLASSIFICATION_MODEL,
@@ -140,16 +145,65 @@ def evaluate(model, loader, device, use_constraints):
 
 
 def save_classification_checkpoints(
-    model_state,
+    checkpoint_payload,
     save_path: str,
     best_path: str,
     save_best: bool,
 ) -> dict[str, bool]:
-    status = {"last": safe_torch_save(model_state, save_path)}
+    status = {"last": safe_torch_save(checkpoint_payload, save_path)}
     status["best"] = (
-        safe_torch_save(model_state, best_path) if save_best else True
+        safe_torch_save(checkpoint_payload, best_path) if save_best else True
     )
     return status
+
+
+def load_classification_checkpoint(path: str, map_location) -> object:
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:  # PyTorch versions before weights_only was added
+        return torch.load(path, map_location=map_location)
+
+
+def restore_classification_training_state(
+    checkpoint,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    requested_model_config: dict,
+) -> tuple[int, float, str, bool]:
+    """Restore a full checkpoint, while accepting legacy model-only weights."""
+    if not (isinstance(checkpoint, Mapping) and "model" in checkpoint):
+        state = (
+            checkpoint["state_dict"]
+            if isinstance(checkpoint, Mapping) and "state_dict" in checkpoint
+            else checkpoint
+        )
+        model.load_state_dict(state, strict=True)
+        return 0, 0.0, "", True
+
+    required = {"epoch", "model", "optimizer", "scheduler", "best_acc"}
+    missing = sorted(required.difference(checkpoint))
+    if missing:
+        raise ValueError(
+            f"incomplete classification checkpoint; missing fields: {missing}"
+        )
+    saved_model_config = classification_model_config(
+        checkpoint.get("model_config", requested_model_config)
+    )
+    if saved_model_config != requested_model_config:
+        raise ValueError(
+            "classification checkpoint model configuration mismatch: "
+            f"saved={saved_model_config}, requested={requested_model_config}"
+        )
+    model.load_state_dict(checkpoint["model"], strict=True)
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    scheduler.load_state_dict(checkpoint["scheduler"])
+    return (
+        int(checkpoint["epoch"]) + 1,
+        float(checkpoint["best_acc"]),
+        str(checkpoint.get("wandb_run_id", "") or "").strip(),
+        False,
+    )
 
 
 def main(args):
@@ -185,15 +239,10 @@ def main(args):
     print(f"constraints required by model: {use_constraints}")
     if nvrtc_library is not None:
         print(f"CUDA NVRTC: preloaded {nvrtc_library}")
-    if args.resume and os.path.exists(save_path):
-        model.load_state_dict(torch.load(save_path, map_location=device))
-        print(f"checkpoint: loaded model weights from {save_path}")
-    elif args.resume:
+    if args.resume and not os.path.exists(save_path):
         raise FileNotFoundError(
             f"resume=true but no classification weights were found: {save_path}"
         )
-    else:
-        print(f"checkpoint: none provided; starting a new training run ({save_path})")
 
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -204,10 +253,40 @@ def main(args):
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
 
+    start_epoch = 0
+    best_acc = 0.0
+    wandb_resume_id = ""
+    if args.resume:
+        checkpoint = load_classification_checkpoint(save_path, map_location=device)
+        start_epoch, best_acc, wandb_resume_id, legacy_checkpoint = (
+            restore_classification_training_state(
+                checkpoint, model, optimizer, scheduler, model_config
+            )
+        )
+        if legacy_checkpoint:
+            print(
+                "WARNING: loaded a legacy model-only classification checkpoint; "
+                "optimizer/epoch/WandB state cannot be resumed, so training and "
+                "WandB logging restart from epoch 1"
+            )
+        else:
+            print(
+                f"checkpoint: resumed {save_path}; next_epoch={start_epoch + 1}, "
+                f"best_acc={best_acc:.4f}, wandb_run_id={wandb_resume_id or '<missing>'}"
+            )
+            if not wandb_resume_id:
+                print(
+                    "WARNING: resume checkpoint has no wandb_run_id; "
+                    "a new WandB Run will be created"
+                )
+    else:
+        print(f"checkpoint: none provided; starting a new training run ({save_path})")
+
     wandb_run = initialize_wandb_run(
         project=args.wandb_project,
         entity=args.wandb_entity,
         name=args.wandb_run_name or save_stem,
+        run_id=wandb_resume_id,
         config={
             **vars(args),
             "model_config": model_config,
@@ -218,9 +297,7 @@ def main(args):
             "device": str(device),
         },
     )
-    best_acc = 0.0
-
-    for epoch in range(args.epoch):
+    for epoch in range(start_epoch, args.epoch):
         epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
         model.train()
         all_preds, all_labels = [], []
@@ -274,8 +351,19 @@ def main(args):
         improved = test_metrics["instance_accuracy"] >= best_acc
         if improved:
             best_acc = test_metrics["instance_accuracy"]
+        scheduler.step()
+        checkpoint_payload = {
+            "epoch": int(epoch),
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "best_acc": float(best_acc),
+            "args": vars(args),
+            "model_config": model_config,
+            "wandb_run_id": wandb_run_id(wandb_run),
+        }
         checkpoint_status = save_classification_checkpoints(
-            model.state_dict(),
+            checkpoint_payload,
             save_path,
             os.path.join("model_trained", f"{save_stem}_best.pth"),
             save_best=improved,
@@ -302,9 +390,10 @@ def main(args):
             f"epoch {epoch + 1}/{args.epoch} "
             f"train_loss={train_loss:.6f} test_loss={test_loss:.6f} "
             f"train_acc={train_metrics['instance_accuracy']:.4f} "
-            f"test_acc={test_metrics['instance_accuracy']:.4f} best={best_acc:.4f}"
+            f"test_acc={test_metrics['instance_accuracy']:.4f} "
+            f"test_top5={test_metrics['top_5_accuracy']:.4f} "
+            f"best={best_acc:.4f}"
         )
-        scheduler.step()
 
     wandb_run.finish()
 

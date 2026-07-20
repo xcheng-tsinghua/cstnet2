@@ -26,7 +26,6 @@ from networks.cst_pred_wrapper import CstPredWrapper
 
 
 MODEL_NAMES = ("pointnet2", "pointnet", "attn_3dgcn")
-STAGE1_MODES = ("baseline", "multitask")
 GT_CORE_COLUMNS = 15
 
 
@@ -45,10 +44,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--model", default="auto", choices=("auto",) + MODEL_NAMES,
         help="Default: read the model name from checkpoint metadata.",
-    )
-    parser.add_argument(
-        "--stage1_mode", default="auto", choices=("auto",) + STAGE1_MODES,
-        help="Default: read baseline/multitask from checkpoint metadata.",
     )
     parser.add_argument(
         "--device", default="auto", type=str,
@@ -128,7 +123,6 @@ class Stage1Predictor:
         checkpoint_path: str | os.PathLike[str],
         device: torch.device,
         model_name: str = "auto",
-        stage1_mode: str = "auto",
         cluster_bandwidth: float | None = None,
         normal_k: int = 16,
     ):
@@ -142,14 +136,13 @@ class Stage1Predictor:
             str(checkpoint_args.get("model", "pointnet2"))
             if model_name == "auto" else model_name
         )
-        self.stage1_mode = (
-            str(checkpoint_args.get("stage1_mode", "baseline"))
-            if stage1_mode == "auto" else stage1_mode
-        )
         if self.model_name not in MODEL_NAMES:
             raise ValueError(f"unsupported Stage 1 model: {self.model_name}")
-        if self.stage1_mode not in STAGE1_MODES:
-            raise ValueError(f"unsupported Stage 1 mode: {self.stage1_mode}")
+        saved_mode = checkpoint_args.get("stage1_mode")
+        if saved_mode not in (None, "multitask"):
+            raise ValueError(
+                f"unsupported legacy Stage 1 checkpoint mode: {saved_mode!r}"
+            )
 
         self.use_extra_features = _as_bool(
             checkpoint_args.get("use_extra_features", False)
@@ -167,7 +160,6 @@ class Stage1Predictor:
         self.model = CstPredWrapper(
             self.model_name,
             channel_fea=channel_fea,
-            stage1_mode=self.stage1_mode,
         )
         self.model.load_state_dict(_extract_state_dict(checkpoint), strict=True)
         self.device = device
@@ -202,11 +194,8 @@ class Stage1Predictor:
             np.ascontiguousarray(xyz_array), dtype=torch.float32, device=self.device
         ).unsqueeze(0)
         model_output = self.model(xyz, self._extra_features(xyz))
-        if isinstance(model_output, dict):
-            embedding = model_output["embedding"]
-            log_pmt = model_output["log_pmt"]
-        else:
-            embedding, log_pmt = model_output
+        embedding = model_output["embedding"]
+        log_pmt = model_output["log_pmt"]
         if not torch.isfinite(embedding).all() or not torch.isfinite(log_pmt).all():
             raise FloatingPointError("Stage 1 output contains NaN or Inf")
 
@@ -374,14 +363,13 @@ def generate_dataset(args) -> None:
         checkpoint_path=args.checkpoint,
         device=device,
         model_name=args.model,
-        stage1_mode=args.stage1_mode,
         cluster_bandwidth=args.cluster_bandwidth,
         normal_k=args.normal_k,
     )
     print(
         "Stage 1 predictor: "
         f"checkpoint={predictor.checkpoint_path}; model={predictor.model_name}; "
-        f"mode={predictor.stage1_mode}; device={device}; "
+        f"device={device}; "
         f"cluster_bandwidth={predictor.cluster_bandwidth}"
     )
     print(f"input files: {len(files)}; input={input_dir}; output={output_dir}")

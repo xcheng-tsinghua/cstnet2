@@ -13,6 +13,7 @@ import numpy as np
 from functional.wandb_utils import (
     flatten_wandb_metrics,
     initialize_wandb_run,
+    read_wandb_run_id_from_checkpoint,
     read_env_file,
     require_wandb_api_key,
 )
@@ -39,6 +40,7 @@ class WandBLoggingTest(unittest.TestCase):
         import train_cst_pred
 
         defaults = train_cst_pred.parse_args([])
+        self.assertFalse(hasattr(defaults, "stage1_mode"))
         self.assertFalse(defaults.is_sample)
         self.assertFalse(defaults.local)
         self.assertFalse(defaults.use_extra_features)
@@ -135,6 +137,46 @@ class WandBLoggingTest(unittest.TestCase):
             mode="online",
         )
 
+    def test_initializer_resumes_exact_wandb_run_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text("WANDB_API_KEY=test-key\n", encoding="utf-8")
+            fake_wandb = SimpleNamespace(
+                login=Mock(),
+                init=Mock(return_value=SimpleNamespace(id="run-123")),
+            )
+            with patch.dict(sys.modules, {"wandb": fake_wandb}):
+                initialize_wandb_run(
+                    project="project",
+                    entity="team",
+                    name="pointnet2",
+                    config={"model": "pointnet2"},
+                    run_id="run-123",
+                    env_path=env_path,
+                )
+
+        fake_wandb.init.assert_called_once_with(
+            project="project",
+            entity="team",
+            name="pointnet2",
+            config={"model": "pointnet2"},
+            mode="online",
+            id="run-123",
+            resume="must",
+        )
+
+    def test_checkpoint_wandb_run_id_reader_supports_new_and_legacy_files(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "last.pth"
+            torch.save({"model": {}, "wandb_run_id": "stable-id"}, checkpoint)
+            self.assertEqual(
+                read_wandb_run_id_from_checkpoint(checkpoint), "stable-id"
+            )
+            torch.save({"model": {}}, checkpoint)
+            self.assertEqual(read_wandb_run_id_from_checkpoint(checkpoint), "")
+
     def test_classification_metrics_include_per_class_and_confusion_data(self):
         scores = [
             np.asarray(
@@ -151,6 +193,9 @@ class WandBLoggingTest(unittest.TestCase):
         metrics = all_metric_cls(scores, labels)
 
         self.assertIn("instance_accuracy", metrics)
+        self.assertAlmostEqual(metrics["top_1_accuracy"], 0.75)
+        self.assertAlmostEqual(metrics["top_5_accuracy"], 1.0)
+        self.assertEqual(metrics["top_5_effective_k"], 3)
         self.assertEqual(len(metrics["per_class_precision"]), 3)
         self.assertEqual(len(metrics["per_class_average_precision"]), 3)
         self.assertEqual(np.asarray(metrics["confusion_matrix"]).shape, (3, 3))

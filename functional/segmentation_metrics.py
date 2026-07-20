@@ -16,10 +16,14 @@ def _metrics_from_confusion(confusion: torch.Tensor, prefix: str) -> dict[str, A
     precision = tp / (tp + fp).clamp_min(1.0)
     recall = tp / (tp + fn).clamp_min(1.0)
     iou = tp / (tp + fp + fn).clamp_min(1.0)
+    f1 = 2.0 * tp / (2.0 * tp + fp + fn).clamp_min(1.0)
+    dice = f1.clone()
     valid_classes = gt > 0
     valid_count = valid_classes.sum().clamp_min(1)
     mean_accuracy = recall[valid_classes].sum() / valid_count
     mean_iou = iou[valid_classes].sum() / valid_count
+    mean_f1 = f1[valid_classes].sum() / valid_count
+    mean_dice = dice[valid_classes].sum() / valid_count
     overall_accuracy = tp.sum() / confusion.sum().clamp_min(1.0)
     return {
         f"{prefix}_overall_accuracy": float(overall_accuracy.item()),
@@ -27,6 +31,10 @@ def _metrics_from_confusion(confusion: torch.Tensor, prefix: str) -> dict[str, A
         f"{prefix}_per_class_precision": precision.cpu().tolist(),
         f"{prefix}_per_class_recall": recall.cpu().tolist(),
         f"{prefix}_per_class_iou": iou.cpu().tolist(),
+        f"{prefix}_per_class_f1": f1.cpu().tolist(),
+        f"{prefix}_mean_f1": float(mean_f1.item()),
+        f"{prefix}_per_class_dice": dice.cpu().tolist(),
+        f"{prefix}_mean_dice": float(mean_dice.item()),
         f"{prefix}_mean_iou": float(mean_iou.item()),
         f"{prefix}_confusion_matrix": confusion.to(dtype=torch.int64).cpu().tolist(),
     }
