@@ -25,10 +25,15 @@ from functional.stage1_metrics import (
     primitive_prediction_collapsed,
 )
 from functional.checkpoint_io import safe_torch_save
-from functional.wandb_utils import flatten_wandb_metrics, wandb_run_id
+from functional.wandb_utils import (
+    flatten_wandb_summary_metrics,
+    wandb_confusion_matrix,
+    wandb_run_id,
+)
 
 
 LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "nor", "loc", "geom", "inst")
+PRIMITIVE_CLASS_NAMES = ("plane", "cylinder", "cone", "sphere", "other")
 BEST_FILE_NAMES = {
     "pmt_miou": "best_pmt_miou.pth",
     "cluster_ari": "best_cluster_ari.pth",
@@ -369,11 +374,21 @@ class CstPredTrainer(object):
             }
             for name, value in epoch_lrs.items():
                 wandb_payload[f"lr/{name}"] = value
-            wandb_payload.update(flatten_wandb_metrics("train/loss", train_loss))
-            wandb_payload.update(flatten_wandb_metrics("train/metric", train_metrics))
-            wandb_payload.update(flatten_wandb_metrics("test/loss", test_loss))
-            wandb_payload.update(flatten_wandb_metrics("test/metric", test_metrics))
-            wandb_payload.update(flatten_wandb_metrics("best", self.best_metrics))
+            wandb_payload.update(
+                flatten_wandb_summary_metrics("train/loss", train_loss)
+            )
+            wandb_payload.update(
+                flatten_wandb_summary_metrics("train/metric", train_metrics)
+            )
+            wandb_payload.update(
+                flatten_wandb_summary_metrics("test/loss", test_loss)
+            )
+            wandb_payload.update(
+                flatten_wandb_summary_metrics("test/metric", test_metrics)
+            )
+            wandb_payload.update(
+                flatten_wandb_summary_metrics("best", self.best_metrics)
+            )
 
             # The checkpoint contains the LR that will be used by the next epoch.
             self.scheduler.step()
@@ -381,6 +396,20 @@ class CstPredTrainer(object):
             for name, saved in checkpoint_status.items():
                 wandb_payload[f"checkpoint/{name}_saved"] = int(saved)
             if self.wandb_run is not None:
+                wandb_payload["train/confusion_matrix/primitive"] = (
+                    wandb_confusion_matrix(
+                        train_metrics["pmt_confusion_matrix"],
+                        PRIMITIVE_CLASS_NAMES,
+                        title="Train Primitive Confusion Matrix",
+                    )
+                )
+                wandb_payload["test/confusion_matrix/primitive"] = (
+                    wandb_confusion_matrix(
+                        test_metrics["pmt_confusion_matrix"],
+                        PRIMITIVE_CLASS_NAMES,
+                        title="Test Primitive Confusion Matrix",
+                    )
+                )
                 self.wandb_run.log(wandb_payload, step=global_epoch)
 
     def _update_best_metrics(self, epoch, test_metrics):

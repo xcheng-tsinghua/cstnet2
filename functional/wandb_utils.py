@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -152,12 +153,102 @@ def flatten_wandb_metrics(prefix: str, data: Any) -> dict[str, float]:
     return output
 
 
+def flatten_wandb_summary_metrics(prefix: str, data: Any) -> dict[str, float]:
+    """Flatten scalar epoch summaries while skipping vectors and matrices."""
+    output: dict[str, float] = {}
+
+    def visit(path: str, value: Any) -> None:
+        if hasattr(value, "detach") and hasattr(value, "numel"):
+            value = value.detach().float().cpu()
+            if value.numel() == 1:
+                output[path] = float(value.item())
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                visit(f"{path}/{key}", item)
+            return
+        if isinstance(value, bool):
+            output[path] = float(value)
+        elif isinstance(value, Real):
+            output[path] = float(value)
+
+    visit(prefix.rstrip("/"), data)
+    return output
+
+
+def wandb_confusion_matrix(
+    confusion_matrix: Any,
+    class_names: Sequence[str],
+    *,
+    title: str,
+):
+    """Build one native WandB confusion-matrix panel from aggregated counts."""
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError(
+            "wandb is required for confusion-matrix logging; "
+            "install it with `python -m pip install wandb`"
+        ) from exc
+
+    if hasattr(confusion_matrix, "detach"):
+        confusion_matrix = confusion_matrix.detach().cpu()
+    if hasattr(confusion_matrix, "tolist"):
+        confusion_matrix = confusion_matrix.tolist()
+    if not isinstance(confusion_matrix, Sequence) or isinstance(
+        confusion_matrix, (str, bytes)
+    ):
+        raise TypeError("confusion_matrix must be a square numeric matrix")
+
+    matrix = [list(row) for row in confusion_matrix]
+    size = len(matrix)
+    names = [str(name) for name in class_names]
+    if size == 0 or any(len(row) != size for row in matrix):
+        raise ValueError("confusion_matrix must be non-empty and square")
+    if len(names) != size:
+        raise ValueError(
+            f"expected {size} class names for confusion matrix, got {len(names)}"
+        )
+
+    data = []
+    for actual_index, row in enumerate(matrix):
+        for predicted_index, value in enumerate(row):
+            if hasattr(value, "item"):
+                value = value.item()
+            if not isinstance(value, Real):
+                raise TypeError("confusion_matrix values must be numeric")
+            count = float(value)
+            if count < 0:
+                raise ValueError("confusion_matrix values must be non-negative")
+            if count.is_integer():
+                count = int(count)
+            data.append(
+                [names[actual_index], names[predicted_index], count]
+            )
+
+    columns = ["Actual", "Predicted", "nPredictions"]
+    table = wandb.Table(columns=columns, data=data)
+    fields = {
+        "Actual": "Actual",
+        "Predicted": "Predicted",
+        "nPredictions": "nPredictions",
+    }
+    return wandb.plot_table(
+        "wandb/confusion_matrix/v1",
+        table,
+        fields,
+        {"title": str(title)},
+    )
+
+
 __all__ = [
     "DEFAULT_ENV_PATH",
     "flatten_wandb_metrics",
+    "flatten_wandb_summary_metrics",
     "initialize_wandb_run",
     "read_wandb_run_id_from_checkpoint",
     "read_env_file",
     "require_wandb_api_key",
+    "wandb_confusion_matrix",
     "wandb_run_id",
 ]

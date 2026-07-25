@@ -18,7 +18,11 @@ except ImportError:  # pragma: no cover - progress bars are optional
 from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
-from functional.wandb_utils import flatten_wandb_metrics, initialize_wandb_run
+from functional.wandb_utils import (
+    flatten_wandb_summary_metrics,
+    initialize_wandb_run,
+    wandb_confusion_matrix,
+)
 from networks.segmentation_models import build_segmentation_model, segmentation_model_config
 from tools.visualize_mfcad_seg import export_segmentation_sample
 
@@ -155,8 +159,27 @@ def main(args: argparse.Namespace) -> None:
         if key not in {"split", "num_samples", "loss"}
     }
     wandb_payload.update(
-        flatten_wandb_metrics(f"{dataset.split}/metric", metric_values)
+        flatten_wandb_summary_metrics(f"{dataset.split}/metric", metric_values)
     )
+    class_names = [
+        str(
+            label.get("display_name")
+            or label.get("name")
+            or f"class_{label.get('id', index)}"
+        )
+        for index, label in enumerate(dataset.label_map["labels"])
+    ]
+    for level in ("point", "face"):
+        wandb_payload[f"{dataset.split}/confusion_matrix/{level}"] = (
+            wandb_confusion_matrix(
+                metric_values[f"{level}_confusion_matrix"],
+                class_names,
+                title=(
+                    f"{dataset.split.title()} "
+                    f"{level.title()} Confusion Matrix"
+                ),
+            )
+        )
     wandb_run.log(wandb_payload)
     output_json = Path(args.output_json) if args.output_json else Path(args.checkpoint).with_name(
         f"{dataset.split}_metrics.json"

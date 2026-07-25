@@ -17,8 +17,9 @@ from functional.constraints import ground_truth_constraints_to_tensor
 from functional.checkpoint_io import safe_torch_save
 from functional.cuda_runtime import preload_cuda_nvrtc
 from functional.wandb_utils import (
-    flatten_wandb_metrics,
+    flatten_wandb_summary_metrics,
     initialize_wandb_run,
+    wandb_confusion_matrix,
     wandb_run_id,
 )
 from networks.classification_models import (
@@ -218,6 +219,9 @@ def main(args):
         is_sample=args.is_sample,
     )
     n_classes = train_loader.dataset.n_classes()
+    class_names = [f"class_{index}" for index in range(n_classes)]
+    for name, index in train_loader.dataset.classes.items():
+        class_names[int(index)] = str(name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_config = classification_model_config(args)
     use_constraints = classification_model_uses_constraints(model_config)
@@ -292,6 +296,7 @@ def main(args):
             "model_config": model_config,
             "parameter_count": parameter_count,
             "num_classes": n_classes,
+            "class_names": class_names,
             "data_root": data_root,
             "constraint_storage": "point_file_fields",
             "device": str(device),
@@ -382,8 +387,22 @@ def main(args):
             ),
             "train/optimization/gradient_norm_max": gradient_norm_max,
         }
-        wandb_payload.update(flatten_wandb_metrics("train/metric", train_metrics))
-        wandb_payload.update(flatten_wandb_metrics("test/metric", test_metrics))
+        wandb_payload.update(
+            flatten_wandb_summary_metrics("train/metric", train_metrics)
+        )
+        wandb_payload.update(
+            flatten_wandb_summary_metrics("test/metric", test_metrics)
+        )
+        wandb_payload["train/confusion_matrix"] = wandb_confusion_matrix(
+            train_metrics["confusion_matrix"],
+            class_names,
+            title="Train Classification Confusion Matrix",
+        )
+        wandb_payload["test/confusion_matrix"] = wandb_confusion_matrix(
+            test_metrics["confusion_matrix"],
+            class_names,
+            title="Test Classification Confusion Matrix",
+        )
         wandb_run.log(wandb_payload, step=epoch)
 
         print(

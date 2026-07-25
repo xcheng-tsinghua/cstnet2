@@ -19,8 +19,11 @@ except ImportError:  # pragma: no cover - progress bars are optional
 
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
-from functional.wandb_utils import flatten_wandb_metrics
-from functional.wandb_utils import wandb_run_id
+from functional.wandb_utils import (
+    flatten_wandb_summary_metrics,
+    wandb_confusion_matrix,
+    wandb_run_id,
+)
 from functional.checkpoint_io import (
     CHECKPOINT_SAVE_ATTEMPTS,
     CHECKPOINT_RETRY_SECONDS,
@@ -119,6 +122,14 @@ class Stage2SegmentationTrainer:
         self.gradient_clip_norm = float(gradient_clip_norm)
         self.label_map = label_map
         self.num_classes = len(label_map["labels"])
+        self.class_names = [
+            str(
+                label.get("display_name")
+                or label.get("name")
+                or f"class_{label.get('id', index)}"
+            )
+            for index, label in enumerate(label_map["labels"])
+        ]
         self.output_dir = Path(output_dir)
         self.checkpoint_args = dict(checkpoint_args or {})
         self.wandb_run = wandb_run
@@ -386,8 +397,27 @@ class Stage2SegmentationTrainer:
                         "checkpoint/best_saved": int(best_checkpoint_saved),
                     }
                     payload.update(
-                        flatten_wandb_metrics("train/metric", train_metrics)
+                        flatten_wandb_summary_metrics(
+                            "train/metric", train_metrics
+                        )
                     )
-                    payload.update(flatten_wandb_metrics("val/metric", val_metrics))
+                    payload.update(
+                        flatten_wandb_summary_metrics("val/metric", val_metrics)
+                    )
+                    for split, metrics in (
+                        ("train", train_metrics),
+                        ("val", val_metrics),
+                    ):
+                        for level in ("point", "face"):
+                            payload[f"{split}/confusion_matrix/{level}"] = (
+                                wandb_confusion_matrix(
+                                    metrics[f"{level}_confusion_matrix"],
+                                    self.class_names,
+                                    title=(
+                                        f"{split.title()} "
+                                        f"{level.title()} Confusion Matrix"
+                                    ),
+                                )
+                            )
                     self.wandb_run.log(payload, step=epoch)
         return latest_metrics

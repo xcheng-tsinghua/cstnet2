@@ -12,10 +12,12 @@ import numpy as np
 
 from functional.wandb_utils import (
     flatten_wandb_metrics,
+    flatten_wandb_summary_metrics,
     initialize_wandb_run,
     read_wandb_run_id_from_checkpoint,
     read_env_file,
     require_wandb_api_key,
+    wandb_confusion_matrix,
 )
 from networks.utils import all_metric_cls
 
@@ -105,6 +107,60 @@ class WandBLoggingTest(unittest.TestCase):
         self.assertEqual(flattened["val/metric/mean_iou"], 0.5)
         self.assertEqual(flattened["val/metric/per_class_iou/1"], 0.75)
         self.assertEqual(flattened["val/metric/confusion_matrix/1/0"], 2.0)
+
+    def test_summary_metrics_skip_vectors_and_matrices(self):
+        summaries = flatten_wandb_summary_metrics(
+            "val/metric",
+            {
+                "mean_iou": 0.5,
+                "optimization": {"gradient_norm": 1.25},
+                "per_class_iou": [0.25, 0.75],
+                "confusion_matrix": [[3, 1], [2, 4]],
+                "tensor_vector": np.asarray([1.0, 2.0]),
+            },
+        )
+        self.assertEqual(
+            summaries,
+            {
+                "val/metric/mean_iou": 0.5,
+                "val/metric/optimization/gradient_norm": 1.25,
+            },
+        )
+
+    def test_confusion_matrix_is_logged_as_one_native_panel(self):
+        table = object()
+        chart = object()
+        fake_wandb = SimpleNamespace(
+            Table=Mock(return_value=table),
+            plot_table=Mock(return_value=chart),
+        )
+        with patch.dict(sys.modules, {"wandb": fake_wandb}):
+            result = wandb_confusion_matrix(
+                [[3, 1], [2, 4]],
+                ["plane", "cylinder"],
+                title="Primitive Confusion Matrix",
+            )
+
+        self.assertIs(result, chart)
+        fake_wandb.Table.assert_called_once_with(
+            columns=["Actual", "Predicted", "nPredictions"],
+            data=[
+                ["plane", "plane", 3],
+                ["plane", "cylinder", 1],
+                ["cylinder", "plane", 2],
+                ["cylinder", "cylinder", 4],
+            ],
+        )
+        fake_wandb.plot_table.assert_called_once_with(
+            "wandb/confusion_matrix/v1",
+            table,
+            {
+                "Actual": "Actual",
+                "Predicted": "Predicted",
+                "nPredictions": "nPredictions",
+            },
+            {"title": "Primitive Confusion Matrix"},
+        )
 
     def test_initializer_authenticates_from_env_and_forces_online_mode(self):
         with tempfile.TemporaryDirectory() as directory:
