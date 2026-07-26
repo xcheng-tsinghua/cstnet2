@@ -62,15 +62,15 @@ git branch
 
 2. 基于当前分支创建新分支
 
-git branch v2026.7.6
+git branch v2026-07-26
 
 3. 切换到新分支
 
-git switch v2026.7.6
+git switch v2026-07-26
 
 4. 将本地分支关联到远程分支，并推送新分支到远程仓库
 
-git push -u origin v2026.7.6
+git push -u origin v2026-07-26
 
 5. 备份完成后切换回主分支
 
