@@ -8,13 +8,13 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from tqdm import tqdm
 
 
 # 删除前的数据列数
@@ -285,21 +285,18 @@ def remove_norm_(
             for file_path in txt_files
         }
 
-        for index, future in enumerate(
-            as_completed(future_to_path),
-            start=1,
-        ):
+        for index, future in tqdm(enumerate(as_completed(future_to_path), start=1), total=len(txt_files)):
             result = future.result()
 
             if result.status == "converted":
                 converted_count += 1
                 total_point_count += result.point_count
-                action = "将处理" if dry_run else "已处理"
-                print(
-                    f"[{index}/{len(txt_files)}] "
-                    f"[{action}] {result.file_path} "
-                    f"({result.point_count} points)"
-                )
+                # action = "将处理" if dry_run else "已处理"
+                # print(
+                #     f"[{index}/{len(txt_files)}] "
+                #     f"[{action}] {result.file_path} "
+                #     f"({result.point_count} points)"
+                # )
 
             elif result.status == "already_processed":
                 already_processed_count += 1
