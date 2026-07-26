@@ -238,23 +238,54 @@ def collect_txt_files(
 
 
 def remove_norm_(
-        root_path: Path,  # 数据集根目录或单个 TXT 文件
-        no_recursive: bool = False, # 只处理根目录下的 TXT 文件，不递归处理子目录
-        workers: int = 0, # 并行线程数。默认 0 表示自动使用 CPU 逻辑核心数减 1
-        dry_run: bool = False, # 仅检查和统计，不修改文件
-        backup: bool=False, # 修改前创建同目录 .bak 备份
+        root_path: Path,
+        no_recursive: bool = False,
+        workers: int = 0,
+        dry_run: bool = False,
+        backup: bool = False,
         ) -> int:
+    """
+    就地删除点云 TXT 文件中索引为 8、9、10 的法线字段。
 
+    支持：
+        分类数据：15 列 -> 12 列
+        分割数据：17 列 -> 14 列
+
+    Args:
+        root_path:
+            数据集根目录或单个 TXT 文件。
+        no_recursive:
+            是否仅处理根目录下的 TXT 文件。
+        workers:
+            并行线程数。小于等于 0 时使用 CPU 逻辑核心数减 1。
+        dry_run:
+            是否仅检查文件而不实际修改。
+        backup:
+            是否在修改前创建 .bak 备份。
+
+    Returns:
+        0:
+            全部处理成功。
+        1:
+            存在错误文件或输入路径无效。
+    """
     root_path = Path(root_path).expanduser().resolve()
 
     recursive = not no_recursive
     backup_suffix = ".bak" if backup else None
 
     cpu_count = os.cpu_count() or 1
-    worker_count = workers if workers > 0 else max(1, cpu_count - 1)
+    worker_count = (
+        workers
+        if workers > 0
+        else max(1, cpu_count - 1)
+    )
 
     try:
-        txt_files = collect_txt_files(root_path, recursive)
+        txt_files = collect_txt_files(
+            root_path=root_path,
+            recursive=recursive,
+        )
     except Exception as exception:
         print(f"[ERROR] {exception}")
         return 1
@@ -263,6 +294,7 @@ def remove_norm_(
         print(f"未找到 TXT 文件：{root_path}")
         return 0
 
+    print(f"数据集路径：{root_path}")
     print(f"找到文件数：{len(txt_files)}")
     print(f"线程数：{worker_count}")
     print(f"模式：{'试运行，不修改文件' if dry_run else '就地修改'}")
@@ -275,55 +307,66 @@ def remove_norm_(
     total_point_count = 0
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_path = {
+        futures = [
             executor.submit(
                 process_file,
                 file_path,
                 dry_run,
                 backup_suffix,
-            ): file_path
+            )
             for file_path in txt_files
-        }
+        ]
 
-        for index, future in tqdm(enumerate(as_completed(future_to_path), start=1), total=len(txt_files)):
-            result = future.result()
+        with tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="删除法线属性",
+            unit="file",
+            dynamic_ncols=True,
+            mininterval=0.2,
+        ) as progress_bar:
+            for future in progress_bar:
+                result = future.result()
 
-            if result.status == "converted":
-                converted_count += 1
-                total_point_count += result.point_count
-                # action = "将处理" if dry_run else "已处理"
-                # print(
-                #     f"[{index}/{len(txt_files)}] "
-                #     f"[{action}] {result.file_path} "
-                #     f"({result.point_count} points)"
-                # )
+                if result.status == "converted":
+                    converted_count += 1
+                    total_point_count += result.point_count
 
-            elif result.status == "already_processed":
-                already_processed_count += 1
+                elif result.status == "already_processed":
+                    already_processed_count += 1
 
-            elif result.status == "empty":
-                empty_count += 1
-                print(
-                    f"[{index}/{len(txt_files)}] "
-                    f"[空文件] {result.file_path}"
-                )
+                elif result.status == "empty":
+                    empty_count += 1
 
-            else:
-                error_count += 1
-                print(
-                    f"[{index}/{len(txt_files)}] "
-                    f"[ERROR] {result.file_path}: {result.message}"
+                else:
+                    error_count += 1
+                    tqdm.write(
+                        f"[ERROR] {result.file_path}: "
+                        f"{result.message}"
+                    )
+
+                progress_bar.set_postfix(
+                    {
+                        "converted": converted_count,
+                        "skipped": already_processed_count,
+                        "empty": empty_count,
+                        "errors": error_count,
+                        "points": total_point_count,
+                    },
+                    refresh=False,
                 )
 
     print()
     print("处理完成：")
-    print(f"  {'待处理' if dry_run else '已处理'}文件：{converted_count}")
+    print(
+        f"  {'待处理' if dry_run else '已处理'}文件："
+        f"{converted_count}"
+    )
     print(f"  已是新格式文件：{already_processed_count}")
     print(f"  空文件：{empty_count}")
     print(f"  错误文件：{error_count}")
-    print(f"  涉及点数：{total_point_count}")
+    print(f"  已转换点数：{total_point_count}")
 
     return 1 if error_count > 0 else 0
-
 
 
