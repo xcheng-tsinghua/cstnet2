@@ -70,6 +70,8 @@ tail -f pointnet2.log
 
 nohup python train_seg.py --model pointnet --batch_size=100 && python train_seg.py --model dgcnn --batch_size=100 && python train_seg.py --model attn3dgcn --batch_size=100 &
 
+训练无约束版本的baseline
+
 nohup bash -c '
   python train_seg.py --model pointnet --batch_size=100 --epochs=70 --not_resume 2>&1 | tee pointnet.log
   python train_seg.py --model pointnet2 --batch_size=100 --epochs=70 --not_resume 2>&1 | tee pointnet2.log
@@ -84,6 +86,7 @@ nohup bash -c '
   python train_seg.py --model pointmlp --batch_size=100 --epochs=70 --not_resume 2>&1 | tee pointmlp.log
 ' > /dev/null 2>&1 &
 
+训练有约束版本的baseline
 
 nohup bash -c '
   python train_seg.py --model pointnet --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointnet_cst_gt.log
