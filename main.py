@@ -1,5 +1,6 @@
 import json
 import matplotlib.pyplot as plt
+from functional.remove_norm import remove_norm_
 
 
 def main(log_path):
@@ -16,5 +17,7 @@ def main(log_path):
 
 
 if __name__ == '__main__':
-    main(r'C:\Users\xcheng\Desktop\attn_3dgcn_multitask_pmt_prim_cluster_2026-07-09_04-11-11.json')
+    # main(r'C:\Users\xcheng\Desktop\attn_3dgcn_multitask_pmt_prim_cluster_2026-07-09_04-11-11.json')
+    remove_norm_(r'D:\document\DataSet\pcd_cstnet2')
+
 
