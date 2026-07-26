@@ -39,7 +39,6 @@ constraint = {
     primitive_type,
     direction,
     dimension,
-    continuity,
     location
 }
 ```
@@ -133,21 +132,7 @@ free-form surface/other: -1.0, indicating no valid main dimension
 
 ---
 
-### 2.4 Continuity
-
-`continuity` represents local surface continuity information at the point.
-
-In this project, it is represented by the normal vector of the point on the mechanical part:
-
-```text
-continuity = point normal
-```
-
-It is represented as a 3D vector.
-
----
-
-### 2.5 Location
+### 2.4 Location
 
 `location` represents the position parameter of the primitive on which the point is located. It is represented as a 3D vector.
 
@@ -261,9 +246,6 @@ mad:
 dim:
     Main primitive dimension.
 
-nor:
-    Point normal.
-
 loc:
     Primitive location.
 
@@ -289,7 +271,6 @@ After obtaining the per-point primitive type and per-point clustering feature, t
    * `primitive_type`
    * `direction`
    * `dimension`
-   * `continuity`
    * `location`
 
 The final output of Stage 1 is the per-point constraint representation for the entire point cloud.
@@ -325,7 +306,6 @@ constraint components:
     primitive_type
     direction
     dimension
-    continuity
     location
 ```
 
@@ -335,7 +315,6 @@ The model should separately extract features from the five constraint components
 xyz + primitive_type -> primitive_type feature
 xyz + direction -> direction feature
 xyz + dimension -> dimension feature
-xyz + continuity -> continuity feature
 xyz + location -> location feature
 ```
 
