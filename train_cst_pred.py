@@ -30,13 +30,12 @@ def parse_args(argv=None):
 
     parser.add_argument('--local', action='store_true', default=False)
     parser.add_argument('--root_sever', type=str, default=r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
-    parser.add_argument('--root_local', type=str, default=r'D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_pcd')
+    parser.add_argument('--root_local', type=str, default=r'D:\document\DataSet\pcd_cstnet2\Param20K_pcd')
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
     parser.add_argument('--use_extra_features', action='store_true', default=False)
-    parser.add_argument('--normal_source', default='none', choices=['gt', 'pca', 'none'], type=str)
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
@@ -48,7 +47,6 @@ def parse_args(argv=None):
     parser.add_argument('--w_cluster', default=0.5, type=float)
     parser.add_argument('--w_mad', default=0.02, type=float)
     parser.add_argument('--w_dim', default=0.05, type=float)
-    parser.add_argument('--w_nor', default=0.1, type=float)
     parser.add_argument('--w_loc', default=0.02, type=float)
     parser.add_argument('--w_geom', default=0.02, type=float)
     parser.add_argument('--w_inst', default=0.005, type=float)
@@ -56,7 +54,6 @@ def parse_args(argv=None):
     parser.add_argument('--geom_ramp_epochs', default=20, type=int)
     parser.add_argument('--disable_mad_loss', dest='enable_mad_loss', action='store_false', default=True)
     parser.add_argument('--disable_dim_loss', dest='enable_dim_loss', action='store_false', default=True)
-    parser.add_argument('--disable_nor_loss', dest='enable_nor_loss', action='store_false', default=True)
     parser.add_argument('--disable_loc_loss', dest='enable_loc_loss', action='store_false', default=True)
     parser.add_argument('--disable_geom_loss', dest='enable_geom_loss', action='store_false', default=True)
     parser.add_argument('--disable_inst_loss', dest='enable_inst_loss', action='store_false', default=True)
@@ -95,13 +92,12 @@ def main(args):
     # trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     use_extra_features = args.use_extra_features
-    channel_fea = stage1_feature_dim(use_extra_features, args.normal_source)
+    channel_fea = stage1_feature_dim(use_extra_features)
     loss_weights = {
         'w_pmt': args.w_pmt,
         'w_cluster': args.w_cluster,
         'w_mad': args.w_mad,
         'w_dim': args.w_dim,
-        'w_nor': args.w_nor,
         'w_loc': args.w_loc,
         'w_geom': args.w_geom,
         'w_inst': args.w_inst,
@@ -109,7 +105,6 @@ def main(args):
     enabled_losses = {
         'mad': args.enable_mad_loss,
         'dim': args.enable_dim_loss,
-        'nor': args.enable_nor_loss,
         'loc': args.enable_loc_loss,
         'geom': args.enable_geom_loss,
         'inst': args.enable_inst_loss,
@@ -153,7 +148,6 @@ def main(args):
         geom_start_epoch=args.geom_start_epoch,
         geom_ramp_epochs=args.geom_ramp_epochs,
         use_extra_features=use_extra_features,
-        normal_source=args.normal_source,
         feature_k=args.feature_k,
         cluster_bandwidth=args.cluster_bandwidth,
         overfit_one_batch=args.overfit_one_batch,

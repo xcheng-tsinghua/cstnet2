@@ -56,7 +56,7 @@ def parse_args(argv: list[str] | None = None):
         "--baseline_use_constraints",
         action="store_true",
         default=False,
-        help="Use the 15D per-point constraint as baseline point features",
+        help="Use the 12D per-point constraint as baseline point features",
     )
     parser.add_argument("--stage2_norm", choices=["ln", "bn"], default="ln")
     parser.add_argument("--label_smoothing", type=float, default=0.05)
@@ -87,8 +87,7 @@ def constraints_from_dataset_batch(data, device: torch.device) -> torch.Tensor:
         pmt=data[2].to(device, non_blocking=True),
         direction=data[3].float().to(device, non_blocking=True),
         dimension=data[4].float().to(device, non_blocking=True),
-        continuity=data[5].float().to(device, non_blocking=True),
-        location=data[6].float().to(device, non_blocking=True),
+        location=data[5].float().to(device, non_blocking=True),
     )
 
 

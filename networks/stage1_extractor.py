@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from functional.constraints import assemble_constraints_from_stage1, constraints_to_tensor
+from functional.point_features import build_stage1_input_features, stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
@@ -27,13 +28,20 @@ class FrozenStage1ConstraintExtractor(nn.Module):
         normal_k: int = 16,
         channel_mid: int = 128,
         cluster_dim: int = 32,
+        use_extra_features: bool = False,
+        feature_k: int = 16,
+        use_pca_normals_for_fitting: bool = True,
     ):
         super().__init__()
         self.model_name = model_name
         self.cluster_bandwidth = cluster_bandwidth
         self.normal_k = normal_k
+        self.use_extra_features = bool(use_extra_features)
+        self.feature_k = int(feature_k)
+        self.use_pca_normals_for_fitting = bool(use_pca_normals_for_fitting)
         self.model = CstPredWrapper(
             embedding_model_name=model_name,
+            channel_fea=stage1_feature_dim(self.use_extra_features),
             channel_mid=channel_mid,
             channel_out=cluster_dim,
             n_prim_type=5,
@@ -82,25 +90,32 @@ class FrozenStage1ConstraintExtractor(nn.Module):
             param.requires_grad_(False)
 
     @torch.no_grad()
-    def predict_raw(self, xyz: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def predict_raw(self, xyz: torch.Tensor) -> Dict[str, torch.Tensor]:
         self.model.eval()
-        return self.model(xyz)
+        features = None
+        if self.use_extra_features:
+            features = build_stage1_input_features(
+                xyz,
+                use_curvature=True,
+                use_density=True,
+                k=self.feature_k,
+            )
+        return self.model(xyz, features)
 
     @torch.no_grad()
     def forward(
         self,
         xyz: torch.Tensor,
-        normals: Optional[torch.Tensor] = None,
         return_dict: bool = False,
     ) -> torch.Tensor | Dict[str, torch.Tensor]:
-        cluster_embedding, log_primitive = self.predict_raw(xyz)
+        prediction = self.predict_raw(xyz)
         constraints = assemble_constraints_from_stage1(
             xyz=xyz,
-            cluster_embedding=cluster_embedding,
-            log_primitive=log_primitive,
-            normals=normals,
+            cluster_embedding=prediction["embedding"],
+            log_primitive=prediction["log_pmt"],
             cluster_bandwidth=self.cluster_bandwidth,
             normal_k=self.normal_k,
+            use_pca_normals_for_fitting=self.use_pca_normals_for_fitting,
         )
         if return_dict:
             return constraints

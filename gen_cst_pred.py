@@ -3,10 +3,10 @@
 Only the first three columns of every input point are used for inference.  The
 output core follows ``CstNet2Dataset`` exactly:
 
-    xyz, pmt, mad, dim, nor, loc, affiliate_idx
+    xyz, pmt, mad, dim, loc, affiliate_idx
 
 Unknown input columns are treated as opaque task attributes and are preserved
-after that 15-column core.  Relative paths below the input directory are kept.
+after that 12-column core. Relative paths below the input directory are kept.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from networks.cst_pred_wrapper import CstPredWrapper
 
 
 MODEL_NAMES = ("pointnet2", "pointnet", "attn_3dgcn")
-GT_CORE_COLUMNS = 15
+GT_CORE_COLUMNS = 12
 
 
 def parse_args(argv=None):
@@ -51,6 +51,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--cluster_bandwidth", default=None, type=float)
     parser.add_argument("--normal_k", default=16, type=int)
+    parser.add_argument(
+        "--disable_pca_normals_for_fitting",
+        action="store_true",
+        default=False,
+        help="Fit plane/cylinder clusters from coordinates without PCA-normal assistance.",
+    )
     parser.add_argument(
         "--extensions", default=".txt", type=str,
         help="Comma-separated extensions, for example .txt,.xyz,.npy.",
@@ -125,6 +131,7 @@ class Stage1Predictor:
         model_name: str = "auto",
         cluster_bandwidth: float | None = None,
         normal_k: int = 16,
+        use_pca_normals_for_fitting: bool = True,
     ):
         self.checkpoint_path = resolve_checkpoint(checkpoint_path)
         checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
@@ -147,16 +154,8 @@ class Stage1Predictor:
         self.use_extra_features = _as_bool(
             checkpoint_args.get("use_extra_features", False)
         )
-        self.normal_source = str(checkpoint_args.get("normal_source", "none"))
         self.feature_k = int(checkpoint_args.get("feature_k", 16))
-        if self.use_extra_features and self.normal_source == "gt":
-            raise ValueError(
-                "this checkpoint was trained with GT normals, but gen_cst_pred.py "
-                "is intentionally XYZ-only; use an XYZ/PCA checkpoint"
-            )
-        channel_fea = stage1_feature_dim(
-            self.use_extra_features, self.normal_source
-        )
+        channel_fea = stage1_feature_dim(self.use_extra_features)
         self.model = CstPredWrapper(
             self.model_name,
             channel_fea=channel_fea,
@@ -176,15 +175,15 @@ class Stage1Predictor:
         self.normal_k = int(normal_k)
         if self.normal_k < 2:
             raise ValueError("normal_k must be at least 2")
+        self.use_pca_normals_for_fitting = bool(use_pca_normals_for_fitting)
 
     def _extra_features(self, xyz: torch.Tensor) -> torch.Tensor | None:
         if not self.use_extra_features:
             return None
         return build_stage1_input_features(
             xyz,
-            normals=None,
-            use_normals=self.normal_source == "pca",
             use_curvature=True,
+            use_density=True,
             k=self.feature_k,
         )
 
@@ -203,15 +202,14 @@ class Stage1Predictor:
             xyz=xyz,
             cluster_embedding=embedding,
             log_primitive=log_pmt,
-            normals=None,
             cluster_bandwidth=self.cluster_bandwidth,
             normal_k=self.normal_k,
+            use_pca_normals_for_fitting=self.use_pca_normals_for_fitting,
         )
         return {
             "pmt": constraints["primitive_type"].argmax(dim=-1)[0].cpu().numpy(),
             "mad": constraints["direction"][0].cpu().numpy(),
             "dim": constraints["dimension"][0].cpu().numpy(),
-            "nor": constraints["continuity"][0].cpu().numpy(),
             "loc": constraints["location"][0].cpu().numpy(),
             "affiliate_idx": constraints["affiliate_idx"][0].cpu().numpy(),
         }
@@ -221,7 +219,7 @@ def _looks_like_gt_layout(array: np.ndarray) -> bool:
     if array.shape[1] < GT_CORE_COLUMNS:
         return False
     pmt = array[:, 3]
-    affiliate = array[:, 14]
+    affiliate = array[:, 11]
     return bool(
         np.isfinite(pmt).all()
         and np.isfinite(affiliate).all()
@@ -236,7 +234,7 @@ def build_output_array(
     input_layout: str = "auto",
 ) -> np.ndarray:
     count = input_array.shape[0]
-    for name in ("pmt", "mad", "dim", "nor", "loc", "affiliate_idx"):
+    for name in ("pmt", "mad", "dim", "loc", "affiliate_idx"):
         if len(prediction[name]) != count:
             raise ValueError(f"prediction {name} has {len(prediction[name])} rows, expected {count}")
 
@@ -255,7 +253,6 @@ def build_output_array(
             np.asarray(prediction["pmt"]).reshape(count, 1),
             np.asarray(prediction["mad"]).reshape(count, 3),
             np.asarray(prediction["dim"]).reshape(count, 1),
-            np.asarray(prediction["nor"]).reshape(count, 3),
             np.asarray(prediction["loc"]).reshape(count, 3),
             np.asarray(prediction["affiliate_idx"]).reshape(count, 1),
         ],
@@ -303,7 +300,7 @@ def save_point_file(path: Path, array: np.ndarray, delimiter: str) -> None:
             else:
                 formats = ["%.9g"] * array.shape[1]
                 formats[3] = "%d"
-                formats[14] = "%d"
+                formats[11] = "%d"
                 np.savetxt(temporary, array, fmt=formats, delimiter=delimiter)
         os.replace(temporary_path, path)
     finally:
@@ -365,12 +362,14 @@ def generate_dataset(args) -> None:
         model_name=args.model,
         cluster_bandwidth=args.cluster_bandwidth,
         normal_k=args.normal_k,
+        use_pca_normals_for_fitting=not args.disable_pca_normals_for_fitting,
     )
     print(
         "Stage 1 predictor: "
         f"checkpoint={predictor.checkpoint_path}; model={predictor.model_name}; "
         f"device={device}; "
-        f"cluster_bandwidth={predictor.cluster_bandwidth}"
+        f"cluster_bandwidth={predictor.cluster_bandwidth}; "
+        f"pca_normals_for_fitting={predictor.use_pca_normals_for_fitting}"
     )
     print(f"input files: {len(files)}; input={input_dir}; output={output_dir}")
 

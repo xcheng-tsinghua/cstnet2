@@ -192,8 +192,8 @@ class Stage2SegmentationTest(unittest.TestCase):
                 ):
                     model = build_segmentation_model(num_classes=5, config=config).eval()
                     xyz = torch.randn(1, n_points, 3)
-                    constraints = torch.randn(1, n_points, 15)
-                    masks = torch.ones(1, n_points, 5, dtype=torch.bool)
+                    constraints = torch.randn(1, n_points, 12)
+                    masks = torch.ones(1, n_points, 4, dtype=torch.bool)
                     with torch.no_grad():
                         logits = model(xyz, constraints, masks)
                     self.assertEqual(tuple(logits.shape), (1, n_points, 5))
@@ -396,8 +396,8 @@ class Stage2SegmentationTest(unittest.TestCase):
             n_neighbors=(8, 4, 4),
         ).eval()
         xyz = torch.randn(1, 24, 3)
-        constraints = torch.randn(1, 24, 15)
-        masks = torch.ones(1, 24, 5, dtype=torch.bool)
+        constraints = torch.randn(1, 24, 12)
+        masks = torch.ones(1, 24, 4, dtype=torch.bool)
         with torch.no_grad():
             logits = model(xyz, constraints, masks)
         self.assertEqual(tuple(logits.shape), (1, 24, 5))

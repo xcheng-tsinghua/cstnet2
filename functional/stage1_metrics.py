@@ -15,11 +15,6 @@ CONSTRAINT_ATTRIBUTE_METRIC_SPECS = {
         "_constraint_attribute_count/direction",
         "direction_valid_points",
     ),
-    "continuity_mean_angular_error_deg": (
-        "_constraint_attribute_sum/continuity_angular_error_deg",
-        "_constraint_attribute_count/continuity",
-        "continuity_valid_points",
-    ),
     "dimension_mean_absolute_error": (
         "_constraint_attribute_sum/dimension_absolute_error",
         "_constraint_attribute_count/dimension",
@@ -92,12 +87,10 @@ def _angular_error_sum_and_count(
 def evaluate_constraint_attribute_metrics(
     mad_pred: torch.Tensor,
     dim_pred: torch.Tensor,
-    nor_pred: torch.Tensor,
     loc_pred: torch.Tensor,
     pmt_gt: torch.Tensor,
     mad_gt: torch.Tensor,
     dim_gt: torch.Tensor,
-    nor_gt: torch.Tensor,
     loc_gt: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     """Return additive accumulators for exact epoch-level constraint errors."""
@@ -107,13 +100,6 @@ def evaluate_constraint_attribute_metrics(
         _primitive_mask(pmt_gt, (0, 1, 2)),
         canonicalize=True,
     )
-    continuity_sum, continuity_count = _angular_error_sum_and_count(
-        nor_pred,
-        nor_gt,
-        _primitive_mask(pmt_gt, (0, 1, 2, 3, 4)),
-        canonicalize=False,
-    )
-
     dimension_mask = (
         _primitive_mask(pmt_gt, (1, 2, 3))
         & torch.isfinite(dim_pred)
@@ -143,8 +129,6 @@ def evaluate_constraint_attribute_metrics(
     return {
         "_constraint_attribute_sum/direction_angular_error_deg": direction_sum,
         "_constraint_attribute_count/direction": direction_count,
-        "_constraint_attribute_sum/continuity_angular_error_deg": continuity_sum,
-        "_constraint_attribute_count/continuity": continuity_count,
         "_constraint_attribute_sum/dimension_absolute_error": dimension_sum,
         "_constraint_attribute_count/dimension": dimension_count,
         "_constraint_attribute_sum/location_distance_error": location_sum,

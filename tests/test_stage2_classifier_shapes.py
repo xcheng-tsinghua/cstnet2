@@ -138,11 +138,10 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
             torch.randn(batch_size, n_points, 3),
             torch.randn(batch_size, n_points),
             torch.randn(batch_size, n_points, 3),
-            torch.randn(batch_size, n_points, 3),
             torch.zeros(batch_size, n_points, dtype=torch.long),
         )
         expected = ground_truth_constraints_to_tensor(
-            data[2], data[3], data[4], data[5], data[6]
+            data[2], data[3], data[4], data[5]
         )
         actual = train_cls.constraints_from_dataset_batch(
             data, torch.device("cpu")
@@ -251,7 +250,7 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
                     ).to(self.device).eval()
                     xyz = torch.randn(2, n_points, 3, device=self.device)
                     constraints = torch.randn(
-                        2, n_points, 15, device=self.device
+                        2, n_points, self.constraints.shape[-1], device=self.device
                     )
                     with torch.no_grad():
                         output = model(xyz, constraints)
@@ -269,7 +268,9 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
             {"model": "pointmlp"},
         )
         xyz = torch.randn(2, 16, 3, device=self.device)
-        constraints = torch.randn(2, 16, 15, device=self.device)
+        constraints = torch.randn(
+            2, 16, self.constraints.shape[-1], device=self.device
+        )
         for base_config in configs:
             config = {**base_config, "baseline_use_constraints": True}
             with self.subTest(model=config["model"]):

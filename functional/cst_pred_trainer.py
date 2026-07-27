@@ -32,7 +32,7 @@ from functional.wandb_utils import (
 )
 
 
-LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "nor", "loc", "geom", "inst")
+LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "loc", "geom", "inst")
 PRIMITIVE_CLASS_NAMES = ("plane", "cylinder", "cone", "sphere", "other")
 BEST_FILE_NAMES = {
     "pmt_miou": "best_pmt_miou.pth",
@@ -60,7 +60,6 @@ class CstPredTrainer(object):
         geom_start_epoch=20,
         geom_ramp_epochs=20,
         use_extra_features=False,
-        normal_source="gt",
         feature_k=16,
         cluster_bandwidth=0.35,
         overfit_one_batch=False,
@@ -90,7 +89,6 @@ class CstPredTrainer(object):
         self.geom_start_epoch = int(geom_start_epoch)
         self.geom_ramp_epochs = int(geom_ramp_epochs)
         self.use_extra_features = bool(use_extra_features)
-        self.normal_source = normal_source
         self.feature_k = int(feature_k)
         self.cluster_bandwidth = cluster_bandwidth
         self.overfit_one_batch = overfit_one_batch
@@ -155,7 +153,7 @@ class CstPredTrainer(object):
             self._validate_checkpoint_mode(init_state, self.init_from_checkpoint)
             self._load_model_state(
                 _extract_model_state(init_state),
-                require_complete=False,
+                require_complete=True,
                 source=self.init_from_checkpoint,
             )
         else:
@@ -514,8 +512,6 @@ class CstPredTrainer(object):
             print(
                 f"{split}: direction_angle_error="
                 f"{metric_summary['direction_mean_angular_error_deg']:.4f} deg, "
-                f"continuity_angle_error="
-                f"{metric_summary['continuity_mean_angular_error_deg']:.4f} deg, "
                 f"dimension_mae="
                 f"{metric_summary['dimension_mean_absolute_error']:.6f}, "
                 f"location_distance_error="
@@ -577,21 +573,14 @@ class CstPredTrainer(object):
         warn_if_primitive_collapsed(metric_summary, split="train" if is_train else "test", epoch=global_epoch)
         return loss_summary, metric_summary
 
-    def _build_features(self, xyz, nor_gt):
+    def _build_features(self, xyz):
         if not self.use_extra_features:
             return None
-        if self.normal_source == "gt":
-            normals, use_normals = nor_gt, True
-        elif self.normal_source == "pca":
-            normals, use_normals = None, True
-        else:
-            normals, use_normals = None, False
         with torch.no_grad():
             features = build_stage1_input_features(
                 xyz,
-                normals=normals,
-                use_normals=use_normals,
                 use_curvature=True,
+                use_density=True,
                 k=self.feature_k,
             )
         return features.detach()
@@ -600,7 +589,7 @@ class CstPredTrainer(object):
     def _unpack_model_output(model_output):
         if not isinstance(model_output, dict):
             raise TypeError("Stage 1 model must return the multitask prediction dictionary")
-        required = {"embedding", "log_pmt", "mad", "dim", "nor", "loc"}
+        required = {"embedding", "log_pmt", "mad", "dim", "loc"}
         missing = sorted(required.difference(model_output))
         if missing:
             raise ValueError(f"Stage 1 model output is missing fields: {missing}")
@@ -611,10 +600,8 @@ class CstPredTrainer(object):
         if self.train_phase in ("semantic", "joint"):
             active["pmt"] = True
             active["cluster"] = True
-        for name in ("mad", "dim", "nor", "loc", "geom", "inst"):
+        for name in ("mad", "dim", "loc", "geom", "inst"):
             phase_allows = self.train_phase in ("geometry", "joint")
-            if name == "nor":
-                phase_allows = self.train_phase in ("semantic", "geometry", "joint")
             active[name] = phase_allows and bool(self.enabled_losses.get(name, True))
         return active
 
@@ -625,7 +612,7 @@ class CstPredTrainer(object):
         is_train,
         diagnose_gradients=False,
     ):
-        """CstNet2Dataset order: xyz, cls, pmt, mad, dim, nor, loc, affiliate_idx."""
+        """CstNet2Dataset order: xyz, cls, pmt, mad, dim, loc, affiliate_idx."""
         with torch.set_grad_enabled(is_train):
             if is_train:
                 try:
@@ -637,10 +624,9 @@ class CstPredTrainer(object):
             pmt_gt = data_batch[2].long().to(self.device, non_blocking=True)
             mad_gt = data_batch[3].float().to(self.device, non_blocking=True)
             dim_gt = data_batch[4].float().to(self.device, non_blocking=True)
-            nor_gt = data_batch[5].float().to(self.device, non_blocking=True)
-            loc_gt = data_batch[6].float().to(self.device, non_blocking=True)
+            loc_gt = data_batch[5].float().to(self.device, non_blocking=True)
             affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
-            extra_fea = self._build_features(xyz, nor_gt)
+            extra_fea = self._build_features(xyz)
             amp_context = (
                 torch.cuda.amp.autocast(dtype=self.amp_dtype)
                 if self.use_amp
@@ -655,12 +641,10 @@ class CstPredTrainer(object):
                     log_pmt_pred=outputs["log_pmt"].float(),
                     mad_pred=outputs["mad"].float(),
                     dim_pred=outputs["dim"].float(),
-                    nor_pred=outputs["nor"].float(),
                     loc_pred=outputs["loc"].float(),
                     pmt_gt=pmt_gt,
                     mad_gt=mad_gt,
                     dim_gt=dim_gt,
-                    nor_gt=nor_gt,
                     loc_gt=loc_gt,
                     affil_idx=affiliate_idx,
                     point_emb=outputs["embedding"].float(),
@@ -710,12 +694,10 @@ class CstPredTrainer(object):
                 attribute_metrics = evaluate_constraint_attribute_metrics(
                     mad_pred=outputs["mad"],
                     dim_pred=outputs["dim"],
-                    nor_pred=outputs["nor"],
                     loc_pred=outputs["loc"],
                     pmt_gt=pmt_gt,
                     mad_gt=mad_gt,
                     dim_gt=dim_gt,
-                    nor_gt=nor_gt,
                     loc_gt=loc_gt,
                 )
 
@@ -863,12 +845,12 @@ def _critical_checkpoint_config(args):
         name: _normalize_config_value(args.get(name, "<missing>"))
         for name in (
             "w_pmt", "w_cluster", "w_mad", "w_dim",
-            "w_nor", "w_loc", "w_geom", "w_inst",
+            "w_loc", "w_geom", "w_inst",
         )
     }
     enabled = {
         name: _normalize_config_value(args.get(f"enable_{name}_loss", "<missing>"))
-        for name in ("mad", "dim", "nor", "loc", "geom", "inst")
+        for name in ("mad", "dim", "loc", "geom", "inst")
     }
     return {
         "model": _normalize_config_value(args.get("model", "<missing>")),
@@ -876,7 +858,6 @@ def _critical_checkpoint_config(args):
         "use_extra_features": _normalize_config_value(
             args.get("use_extra_features", "<missing>")
         ),
-        "normal_source": _normalize_config_value(args.get("normal_source", "<missing>")),
         "feature_k": _normalize_config_value(args.get("feature_k", "<missing>")),
         "point_count": _normalize_config_value(args.get("n_points", "<missing>")),
         "loss_weights": weights,

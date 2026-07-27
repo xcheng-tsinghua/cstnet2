@@ -586,201 +586,6 @@ def unit_len_loss_with_pmt_considered(attr_pred, pmt_gt, valid_pmt):
         return 0.0
 
 
-def perpendicular_loss(vec1, vec2, eps=1e-6):
-    """
-    计算对应位置向量垂直的 Loss
-    :param vec1: [..., X]
-    :param vec2: [..., X]
-    :param eps: [..., X]
-    """
-    # 归一化（防止除零）
-    a_norm = vec1 / (vec1.norm(dim=-1, keepdim=True) + eps)
-    b_norm = vec2 / (vec2.norm(dim=-1, keepdim=True) + eps)
-
-    # 点积
-    dot = (a_norm * b_norm).sum(dim=-1)  # [bs, point]
-
-    # loss: 点积平方的平均值
-    loss = (dot ** 2).mean()
-    return loss
-
-
-def parallel_loss(vec1, vec2, eps=1e-6):
-    # 归一化（防止除零）
-    a_norm = vec1 / (vec1.norm(dim=-1, keepdim=True) + eps)
-    b_norm = vec2 / (vec2.norm(dim=-1, keepdim=True) + eps)
-
-    # 计算余弦相似度
-    cos_sim = (a_norm * b_norm).sum(dim=-1)  # [-1, 1]
-
-    # 平行时 |cos|=1
-    loss = ((1 - cos_sim.abs()) ** 2).mean()
-    return loss
-
-
-def geom_loss_plane(xyz, mad_pred, nor_pred, loc_pred, pmt_gt):
-    """
-    :param xyz: [bs, point, 3]
-    :param mad_pred: [bs, point, 3]
-    :param nor_pred: [bs, point, 3]
-    :param loc_pred: [bs, point, 3]
-    :param pmt_gt: [bs, point] (int, index)
-    """
-    # 找到全部平面类型的点
-    mask = (pmt_gt == 0)  # [bs, point]
-
-    if mask.sum() > 0:
-
-        xyz = xyz[mask]  # [n_item, 3]
-        mad_pred = mad_pred[mask]  # [n_item, 3]
-        nor_pred = nor_pred[mask]  # [n_item, 3]
-        loc_pred = loc_pred[mask]  # [n_item, 3]
-
-        # 点到预测平面的距离为 0，主要
-        foot_to_xyz = xyz - loc_pred  # [bs, n, 3]
-        nor_pred = nor_pred / (nor_pred.norm(dim=-1, keepdim=True) + 1e-8)
-        dist = (foot_to_xyz * nor_pred).sum(dim=-1)
-        on_plane_loss = (dist ** 2).mean()
-
-        # 原点到垂足的向量与主方向平行，次要
-        foot_pall_mad = parallel_loss(loc_pred, mad_pred)
-
-        # 主方向和法线平行，次要
-        mad_pall_nor = parallel_loss(mad_pred, nor_pred)
-
-        return on_plane_loss + 0.2 * foot_pall_mad + 0.2 * mad_pall_nor
-
-    else:
-        return 0.0
-
-
-def geom_loss_cylinder(xyz, mad_pred, nor_pred, dim_pred, loc_pred, pmt_gt):
-    """
-    :param xyz: [bs, point, 3]
-    :param mad_pred: [bs, point, 3]
-    :param nor_pred: [bs, point, 3]
-    :param dim_pred: [bs, point]
-    :param loc_pred: [bs, point, 3]
-    :param pmt_gt: [bs, point] (int, index)
-    """
-    # 找到全部圆柱类型的点
-    mask = (pmt_gt == 1)  # [bs, point]
-
-    if mask.sum() > 0:
-
-        xyz = xyz[mask]  # [n_item, 3]
-        mad_pred = mad_pred[mask]  # [n_item, 3]
-        nor_pred = nor_pred[mask]  # [n_item, 3]
-        dim_pred = dim_pred[mask]  # [n_item, 3]
-        loc_pred = loc_pred[mask]  # [n_item, 3]
-
-        # 半径与预测主尺寸相等，即点在圆柱上
-        radius = torch.cross(xyz - loc_pred, mad_pred, dim=1)
-        radius = radius.norm(dim=1)
-        xyz_on_cylin = (radius - dim_pred).abs().mean()
-
-        # 原点到垂足的向量与主方向垂直
-        foot_prep_mad_loss = perpendicular_loss(loc_pred, mad_pred)
-        # dot_product = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
-
-        # 法线与主方向垂直
-        mad_prep_nor = perpendicular_loss(mad_pred, nor_pred)
-
-        return xyz_on_cylin + 0.2 * foot_prep_mad_loss + 0.2 * mad_prep_nor
-
-    else:
-        return 0.0
-
-
-# def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
-#     """
-#     点在圆锥上
-#     :param xyz: [bs, point, 3]
-#     :param mad_pred: [bs, point, 3]
-#     :param dim_pred: [bs, point]
-#     :param loc_pred: [bs, point, 3]
-#     :param pmt_gt: [bs, point] (int, index)
-#     """
-#     # 找到全部圆锥类型的点
-#     mask = (pmt_gt == 2)  # [bs, point]
-#
-#     if mask.sum() > 0:
-#
-#         xyz = xyz[mask]  # [n_item, 3]
-#         mad_pred = mad_pred[mask]  # [n_item, 3]
-#         dim_pred = dim_pred[mask]  # [n_item, ]
-#         loc_pred = loc_pred[mask]  # [n_item, 3]
-#
-#         # 从锥角到圆锥面上的点构成的向量与主方向之间的夹角等于主尺寸
-#         apex_to_xyz = xyz - loc_pred
-#         dot1 = torch.einsum('ij, ij -> i', mad_pred, apex_to_xyz)
-#         dot2 = mad_pred * apex_to_xyz.norm(dim=1) * torch.cos(dim_pred)
-#         semi_angle = (dot1 - dot2).abs().mean()
-#
-#         return semi_angle
-#
-#     else:
-#         return 0.0
-
-
-def geom_loss_cone(xyz, mad_pred, dim_pred, loc_pred, pmt_gt):
-    """
-    点在圆锥上
-    :param xyz: [bs, point, 3]
-    :param mad_pred: [bs, point, 3]
-    :param dim_pred: [bs, point]
-    :param loc_pred: [bs, point, 3]
-    :param pmt_gt: [bs, point] (int, index)
-    """
-    # 找到全部圆锥类型的点
-    mask = (pmt_gt == 2)  # [bs, point]
-
-    if mask.sum() > 0:
-
-        mad_pred = mad_pred[mask]  # [n_item, 3]
-        loc_pred = loc_pred[mask]  # [n_item, 3]
-
-        # 原点到垂足的向量与主方向垂直
-        foot_perp_mad = perpendicular_loss(loc_pred, mad_pred)
-        # foot_perp_mad = torch.einsum('ij, ij -> i', loc_pred, mad_pred).abs().mean()
-
-        return foot_perp_mad
-
-    else:
-        return 0.0
-
-
-def geom_loss_sphere(xyz, dim_pred, nor_pred, loc_pred, pmt_gt):
-    """
-    :param xyz: [bs, point, 3]
-    :param dim_pred: [bs, point]
-    :param nor_pred: [bs, point, 3]
-    :param loc_pred: [bs, point, 3]
-    :param pmt_gt: [bs, point] (int, index)
-    """
-    # 找到全部球类型的点
-    mask = (pmt_gt == 3)  # [bs, point]
-
-    if mask.sum() > 0:
-
-        xyz = xyz[mask]  # [n_item, 3]
-        dim_pred = dim_pred[mask]  # [n_item, ]
-        nor_pred = nor_pred[mask]  # [n_item, 3]
-        loc_pred = loc_pred[mask]  # [n_item, 3]
-
-        # 球面上的点到主位置的距离等于主尺寸
-        center_to_xyz = xyz - loc_pred
-        xyz_on_sphere_loss = (center_to_xyz.norm(dim=1) - dim_pred).abs().mean()
-
-        # 球心到 xyz 的向量与 nor 垂直
-        center_to_xyz_pall_nor_loss = parallel_loss(center_to_xyz, nor_pred)
-
-        return xyz_on_sphere_loss + 0.2 * center_to_xyz_pall_nor_loss
-
-    else:
-        return 0.0
-
-
 def _zero_loss(reference: torch.Tensor) -> torch.Tensor:
     return reference.sum() * 0.0
 
@@ -846,12 +651,10 @@ def _stage1_geometry_losses(
     xyz: torch.Tensor,
     mad_pred: torch.Tensor,
     dim_pred: torch.Tensor,
-    nor_pred: torch.Tensor,
     loc_pred: torch.Tensor,
     pmt_gt: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     mad_pred = F.normalize(mad_pred, dim=-1, eps=1e-6)
-    nor_pred = F.normalize(nor_pred, dim=-1, eps=1e-6)
     dim_pred = dim_pred.clamp_min(0.0)
 
     plane_mask = pmt_gt == 0
@@ -861,8 +664,7 @@ def _stage1_geometry_losses(
         on_plane = _masked_mean(plane_dist, plane_mask, xyz)
         loc_nonzero = plane_mask & (loc_pred.norm(dim=-1) > 1e-4)
         loc_parallel = _masked_parallel_loss(loc_pred, mad_pred, loc_nonzero)
-        mad_nor_parallel = _masked_parallel_loss(mad_pred, nor_pred, plane_mask)
-        loss_plane = on_plane + 0.2 * loc_parallel + 0.2 * mad_nor_parallel
+        loss_plane = on_plane + 0.2 * loc_parallel
     else:
         loss_plane = _zero_loss(xyz)
 
@@ -875,8 +677,7 @@ def _stage1_geometry_losses(
         radius_residual = (radial - dim_pred).pow(2)
         on_cylinder = _masked_mean(radius_residual, cylinder_mask, xyz)
         loc_perp_axis = _masked_perpendicular_loss(loc_pred, mad_pred, cylinder_mask)
-        nor_perp_axis = _masked_perpendicular_loss(nor_pred, mad_pred, cylinder_mask)
-        loss_cylinder = on_cylinder + 0.2 * loc_perp_axis + 0.2 * nor_perp_axis
+        loss_cylinder = on_cylinder + 0.2 * loc_perp_axis
     else:
         loss_cylinder = _zero_loss(xyz)
 
@@ -898,9 +699,7 @@ def _stage1_geometry_losses(
     if sphere_mask.any():
         center_to_xyz = xyz - loc_pred
         radius_residual = (center_to_xyz.norm(dim=-1) - dim_pred).pow(2)
-        on_sphere = _masked_mean(radius_residual, sphere_mask, xyz)
-        normal_parallel = _masked_parallel_loss(center_to_xyz, nor_pred, sphere_mask)
-        loss_sphere = on_sphere + 0.2 * normal_parallel
+        loss_sphere = _masked_mean(radius_residual, sphere_mask, xyz)
     else:
         loss_sphere = _zero_loss(xyz)
 
@@ -979,8 +778,8 @@ def linear_ramp(global_epoch, start_epoch, ramp_epochs):
     return max(0.0, min(1.0, progress))
 
 
-def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
-                    pmt_gt, mad_gt, dim_gt, nor_gt, loc_gt, affil_idx,
+def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, loc_pred,
+                    pmt_gt, mad_gt, dim_gt, loc_gt, affil_idx,
                     point_emb=None, weights=None, global_epoch=None,
                     geom_start_epoch=20, geom_ramp_epochs=20,
                     enabled_losses=None, eps=1e-6):
@@ -994,14 +793,12 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     :param log_pmt_pred: [bs, point, 5]
     :param mad_pred: [bs, point, 3]
     :param dim_pred: [bs, point]
-    :param nor_pred: [bs, point, 3]
     :param loc_pred: [bs, point, 3]
 
     标签数据
     :param pmt_gt: [bs, point] (int, index)
     :param mad_gt: [bs, point, 3]
     :param dim_gt: [bs, point]
-    :param nor_gt: [bs, point, 3]
     :param loc_gt: [bs, point, 3]
     :param affil_idx: [bs, point]
 
@@ -1017,7 +814,6 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     w_cluster = float(weights.get("w_cluster", 0.5))
     w_mad = float(weights.get("w_mad", 0.02))
     w_dim = float(weights.get("w_dim", 0.05))
-    w_nor = float(weights.get("w_nor", 0.1))
     w_loc = float(weights.get("w_loc", 0.02))
     w_geom = float(weights.get("w_geom", 0.02))
     w_inst = float(weights.get("w_inst", 0.005))
@@ -1026,21 +822,17 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
     cluster_loss = discriminative_loss(point_emb, affil_idx) if point_emb is not None else _zero_loss(log_pmt_pred)
 
     mad_pred = F.normalize(mad_pred, dim=-1, eps=eps)
-    nor_pred = F.normalize(nor_pred, dim=-1, eps=eps)
     mad_gt = F.normalize(mad_gt, dim=-1, eps=eps)
-    nor_gt = F.normalize(nor_gt, dim=-1, eps=eps)
 
     mad_mask = _primitive_mask(pmt_gt, (0, 1, 2))
     dim_mask = _primitive_mask(pmt_gt, (1, 2, 3))
-    nor_mask = _primitive_mask(pmt_gt, (0, 1, 2, 3, 4))
     loc_mask = _primitive_mask(pmt_gt, (0, 1, 2, 3))
 
     mad_loss = _masked_vector_mse(mad_pred, mad_gt, mad_mask, sign_invariant=False, canonicalize=True)
     dim_loss = _masked_scalar_mse(dim_pred, dim_gt, dim_mask)
-    nor_loss = _masked_vector_mse(nor_pred, nor_gt, nor_mask, sign_invariant=False, canonicalize=False)
     loc_loss = _masked_scalar_mse(loc_pred, loc_gt, loc_mask)
 
-    geom_losses = _stage1_geometry_losses(xyz, mad_pred, dim_pred, nor_pred, loc_pred, pmt_gt)
+    geom_losses = _stage1_geometry_losses(xyz, mad_pred, dim_pred, loc_pred, pmt_gt)
     inst_loss = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt)
 
     aux_factor = linear_ramp(global_epoch, geom_start_epoch, geom_ramp_epochs)
@@ -1049,7 +841,6 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         "cluster": cluster_loss,
         "mad": mad_loss,
         "dim": dim_loss,
-        "nor": nor_loss,
         "loc": loc_loss,
         "geom": geom_losses["geom_loss"],
         "inst": inst_loss,
@@ -1059,12 +850,11 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         "cluster": w_cluster,
         "mad": w_mad,
         "dim": w_dim,
-        "nor": w_nor,
         "loc": w_loc,
         "geom": w_geom,
         "inst": w_inst,
     }
-    ramped_names = {"mad", "dim", "loc", "geom", "inst"}
+    ramped_names = {"geom", "inst"}
     weighted_losses = {}
     effective_weights = {}
     for name, raw_loss in raw_losses.items():
@@ -1082,7 +872,6 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, nor_pred, loc_pred,
         "cluster_loss": cluster_loss,
         "mad_loss": mad_loss,
         "dim_loss": dim_loss,
-        "nor_loss": nor_loss,
         "loc_loss": loc_loss,
         "geom_loss": geom_losses["geom_loss"],
         "inst_loss": inst_loss,

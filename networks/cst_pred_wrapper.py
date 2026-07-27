@@ -63,7 +63,6 @@ class CstPredWrapper(nn.Module):
         )
         self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
         self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
-        self.nor_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
         self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
 
     def forward(self, xyz, fea=None):
@@ -94,7 +93,6 @@ class CstPredWrapper(nn.Module):
         geometry_fea = self.geometry_decoder(embedding)
         mad_pred = F.normalize(self.mad_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
         dim_pred = F.softplus(self.dim_head(geometry_fea)).squeeze(1)
-        nor_pred = F.normalize(self.nor_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
         loc_pred = self.loc_head(geometry_fea).permute(0, 2, 1)
 
         return {
@@ -102,7 +100,6 @@ class CstPredWrapper(nn.Module):
             "log_pmt": pmt_log_softmax,
             "mad": mad_pred,
             "dim": dim_pred,
-            "nor": nor_pred,
             "loc": loc_pred,
         }
 
@@ -115,17 +112,15 @@ class CstPredWrapper(nn.Module):
             param.requires_grad_(False)
 
         if phase == "semantic":
-            trainable_prefixes = [
-                "embedding", "emb_head", "cls_head", "geometry_decoder", "nor_head"
-            ]
+            trainable_prefixes = ["embedding", "emb_head", "cls_head"]
         elif phase == "geometry":
             trainable_prefixes = [
-                "geometry_decoder", "mad_head", "dim_head", "nor_head", "loc_head"
+                "geometry_decoder", "mad_head", "dim_head", "loc_head"
             ]
         else:
             trainable_prefixes = [
                 "emb_head", "cls_head", "geometry_decoder",
-                "mad_head", "dim_head", "nor_head", "loc_head",
+                "mad_head", "dim_head", "loc_head",
             ]
             trainable_prefixes.extend(self._joint_backbone_prefixes())
 

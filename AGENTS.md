@@ -32,7 +32,7 @@ The constraint of a point cloud is represented in a per-point format. Each point
 (x, y, z, constraint)
 ```
 
-where `constraint` contains five components:
+where `constraint` contains four components:
 
 ```text
 constraint = {
@@ -309,7 +309,7 @@ constraint components:
     location
 ```
 
-The model should separately extract features from the five constraint components:
+The model should separately extract features from the four constraint components:
 
 ```text
 xyz + primitive_type -> primitive_type feature
@@ -318,7 +318,7 @@ xyz + dimension -> dimension feature
 xyz + location -> location feature
 ```
 
-When merging the five constraint features, an attention mechanism should be used so that different points can adaptively focus on different constraint components.
+When merging the four constraint features, an attention mechanism should be used so that different points can adaptively focus on different constraint components.
 
 ---
 

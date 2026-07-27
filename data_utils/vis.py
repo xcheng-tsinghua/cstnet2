@@ -46,9 +46,8 @@ def vis_pcd(pcd_file):
     pmt = pnts_all[:, 3].astype(np.int32)
     mad = pnts_all[:, 4:7]
     dim = pnts_all[:, 7]
-    nor = pnts_all[:, 8:11]
-    loc = pnts_all[:, 11:14]
-    affil_idx = pnts_all[:, 14].astype(np.int32)
+    loc = pnts_all[:, 8:11]
+    affil_idx = pnts_all[:, 11].astype(np.int32)
 
     print(f'xmax {xyz[:, 0].max()}, xmin {xyz[:, 0].min()}, ymax {xyz[:, 1].max()}, ymin {xyz[:, 1].min()}, zmax {xyz[:, 2].max()}, zmin {xyz[:, 2].min()}')
 

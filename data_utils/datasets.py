@@ -7,32 +7,6 @@ from colorama import Fore
 from networks import utils
 
 
-def txt_to_npy_path(txt_path: str) -> str:
-    return txt_path + '.npy'
-
-
-def load_npy_or_convert(txt_path: str, allow_auto_convert: bool = True):
-    """
-    默认读取同名 .npy；若不存在且允许自动转换，则从 txt 读取并落盘 .npy。
-    """
-    npy_path = txt_to_npy_path(txt_path)
-    if os.path.exists(npy_path):
-        return np.load(npy_path, mmap_mode='r')
-
-    if not allow_auto_convert:
-        raise FileNotFoundError(f'missing npy cache: {npy_path}')
-
-    point_set = np.loadtxt(txt_path)
-    tmp_path = f'{npy_path}.tmp.{os.getpid()}.npy'
-    try:
-        np.save(tmp_path, point_set)
-        os.replace(tmp_path, npy_path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-    return point_set
-
-
 class CstPntDataset(Dataset):
     def __init__(self,
                  root,
@@ -49,7 +23,7 @@ class CstPntDataset(Dataset):
 
     def __getitem__(self, index):
         fn = self.datapath[index].strip()
-        point_set = load_npy_or_convert(fn)  # [x, y, z, ex, ey, ez, adj, pt]
+        point_set = np.loadtxt(fn)  # [x, y, z, ex, ey, ez, adj, pt]
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=True)
@@ -146,7 +120,7 @@ class Param20KDataset(Dataset):
     def __getitem__(self, index):
         fn = self.datapath[index]
         cls = self.classes[fn[0]]
-        point_set = load_npy_or_convert(fn[1])  # (x, y, z, mad, adj, pt)
+        point_set = np.loadtxt(fn[1])  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -208,7 +182,7 @@ class RegressionDataset(Dataset):
     def __getitem__(self, index):
 
         c_perpendicular, c_file = self.path_label[index]
-        point_set = load_npy_or_convert(c_file)  # (x, y, z, mad, adj, pt)
+        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -251,7 +225,7 @@ class ConeDataset(Dataset):
 
     def __getitem__(self, index):
         c_coefficient, c_file = self.path_label[index]
-        point_set = load_npy_or_convert(c_file)  # (x, y, z, mad, adj, pt)
+        point_set = np.loadtxt(c_file)  # (x, y, z, mad, adj, pt)
 
         try:
             choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
@@ -269,7 +243,10 @@ class ConeDataset(Dataset):
 
 class CstNet2Dataset(Dataset):
     """
-    CstNet2 具备五个属性的数据集读取
+    Read the normal-free 12-column Stage 1 dataset directly from text files.
+
+    Column layout:
+        xyz[0:3], pmt[3], mad[4:7], dim[7], loc[8:11], affiliate_idx[11]
     """
     def __init__(self,
                  root,
@@ -338,7 +315,16 @@ class CstNet2Dataset(Dataset):
     def __getitem__(self, index):
         fn = self.datapath[index]
         cls = self.classes[fn[0]]
-        point_set = load_npy_or_convert(fn[1])
+        point_set = np.loadtxt(fn[1])
+        if point_set.ndim == 1:
+            point_set = point_set.reshape(1, -1)
+        if point_set.ndim != 2 or point_set.shape[1] != 12:
+            raise ValueError(
+                f'expected 12 columns in Stage 1 text sample {fn[1]}, '
+                f'got shape {point_set.shape}'
+            )
+        if not np.isfinite(point_set).all():
+            raise ValueError(f'non-finite value found in Stage 1 sample: {fn[1]}')
 
         # 随机选出指定数量的点
         try:
@@ -351,9 +337,8 @@ class CstNet2Dataset(Dataset):
         pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]. plane 0, cylinder 1, cone 2, sphere 3, freeform 4
         mad = point_set[:, 4:7]  # 主方向 [n, 3]
         dim = point_set[:, 7]  # 主尺寸 [n, ]
-        nor = point_set[:, 8:11]  # 法线 [n, 3]
-        loc = point_set[:, 11:14]  # 主位置 [n, 3]
-        affiliate_idx = point_set[:, 14].astype(np.int32)  # 从属索引 [n, ]
+        loc = point_set[:, 8:11]  # 主位置 [n, 3]
+        affiliate_idx = point_set[:, 11].astype(np.int32)  # 从属索引 [n, ]
 
         # 已弃用在加载时调整点云，改为在数据预处理阶段归一化三维模型，使其处于 [-1, 1]^3
         # # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
@@ -362,7 +347,7 @@ class CstNet2Dataset(Dataset):
         # scale = 1.0 / np.max(np.sqrt(np.sum(xyz ** 2, axis=1)), 0)
         # xyz = xyz * scale
         #
-        # # 平移缩放后，pmt, mad, nor 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
+        # # 平移缩放后，pmt, mad 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
         # dim = update_dim(pmt, dim, scale)
         # loc = update_loc(pmt, loc, mad, move_dir)
         # loc = loc * scale
@@ -382,7 +367,7 @@ class CstNet2Dataset(Dataset):
         if self.data_augmentation:
             xyz += np.random.normal(0, 0.02, size=xyz.shape)
 
-        return xyz, cls, pmt, mad, dim, nor, loc, affiliate_idx
+        return xyz, cls, pmt, mad, dim, loc, affiliate_idx
 
     def __len__(self):
         return len(self.datapath)
@@ -523,15 +508,21 @@ def update_loc(pmt, loc, mad, trans):
 
 
 def single_load(pcd_file):
-    point_set = load_npy_or_convert(pcd_file)
+    point_set = np.loadtxt(pcd_file)
+    if point_set.ndim == 1:
+        point_set = point_set.reshape(1, -1)
+    if point_set.ndim != 2 or point_set.shape[1] != 12:
+        raise ValueError(
+            f'expected 12 columns in Stage 1 text sample {pcd_file}, '
+            f'got shape {point_set.shape}'
+        )
 
     xyz = point_set[:, :3]  # [n, 3]
     pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]
     mad = point_set[:, 4:7]  # 主方向 [n, 3]
     dim = point_set[:, 7]  # 主尺寸 [n, ]
-    nor = point_set[:, 8:11]  # 法线 [n, 3]
-    loc = point_set[:, 11:14]  # 主位置 [n, 3]
-    affil_idx = point_set[:, 14]  # 从属索引 [n, ]
+    loc = point_set[:, 8:11]  # 主位置 [n, 3]
+    affil_idx = point_set[:, 11]  # 从属索引 [n, ]
 
     # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
     move_dir = -np.mean(xyz, axis=0)
@@ -539,17 +530,17 @@ def single_load(pcd_file):
     scale = 1.0 / np.max(np.sqrt(np.sum(xyz ** 2, axis=1)), 0)
     xyz = xyz * scale
 
-    # 平移缩放后，pmt, mad, nor 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
+    # 平移缩放后，pmt, mad 不变，dim 除圆锥外与原本进行相同比例缩放，loc 先平移，再缩放
     dim = update_dim(pmt, dim, scale)
     loc = update_loc(pmt, loc, mad, move_dir)
     loc = loc * scale
 
-    return xyz, pmt, mad, dim, nor, loc, affil_idx
+    return xyz, pmt, mad, dim, loc, affil_idx
 
 
 def test():
     afile = r'C:\Users\ChengXi\Desktop\cstnet2\comb.txt'
-    xyz, pmt, mad, dim, nor, loc, affil_idx = single_load(afile)
+    xyz, pmt, mad, dim, loc, affil_idx = single_load(afile)
 
 
 

@@ -92,7 +92,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--baseline_use_constraints",
         action="store_true",
         default=False,
-        help="Concatenate the full 15D constraint vector with XYZ for baseline models",
+        help="Concatenate the full 12D constraint vector with XYZ for baseline models",
     )
     parser.add_argument("--batch_size", type=int, default=20, help="Samples per batch")
     parser.add_argument("--n_points", type=int, default=2048, help="Points sampled per part")

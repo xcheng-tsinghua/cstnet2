@@ -20,7 +20,7 @@ from functional.stage1_metrics import evaluate_constraint_attribute_metrics
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
-LOSS_NAMES = ("mad", "dim", "nor", "loc", "geom", "inst")
+LOSS_NAMES = ("mad", "dim", "loc", "geom", "inst")
 
 
 def synthetic_batch(batch_size=2, n_points=20):
@@ -31,13 +31,10 @@ def synthetic_batch(batch_size=2, n_points=20):
         torch.randn(batch_size, n_points, 3), dim=-1
     )
     dimension = torch.rand(batch_size, n_points) + 0.2
-    normal = torch.nn.functional.normalize(
-        torch.randn(batch_size, n_points, 3), dim=-1
-    )
     location = torch.randn(batch_size, n_points, 3) * 0.1
     affiliate = (torch.arange(n_points) // 4).view(1, -1).repeat(batch_size, 1)
     category = torch.zeros(batch_size, dtype=torch.long)
-    return xyz, category, primitive, direction, dimension, normal, location, affiliate
+    return xyz, category, primitive, direction, dimension, location, affiliate
 
 
 def checkpoint_args(phase, n_points=20):
@@ -45,20 +42,17 @@ def checkpoint_args(phase, n_points=20):
         "model": "pointnet",
         "train_phase": phase,
         "use_extra_features": False,
-        "normal_source": "none",
         "feature_k": 16,
         "n_points": n_points,
         "w_pmt": 1.0,
         "w_cluster": 0.5,
         "w_mad": 0.02,
         "w_dim": 0.05,
-        "w_nor": 0.1,
         "w_loc": 0.02,
         "w_geom": 0.02,
         "w_inst": 0.005,
         "enable_mad_loss": True,
         "enable_dim_loss": True,
-        "enable_nor_loss": True,
         "enable_loc_loss": True,
         "enable_geom_loss": True,
         "enable_inst_loss": True,
@@ -106,12 +100,6 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
         direction_pred[0, 1] = torch.tensor([0.0, 1.0, 0.0])
         direction_pred[0, 2] = torch.tensor([-1.0, 0.0, 0.0])
 
-        continuity_gt = torch.tensor(
-            [[[0.0, 0.0, 1.0]] * 5],
-        )
-        continuity_pred = continuity_gt.clone()
-        continuity_pred[0, 4] = torch.tensor([0.0, 0.0, -1.0])
-
         dimension_gt = torch.zeros(1, 5)
         dimension_pred = torch.tensor([[100.0, 1.0, 2.0, 3.0, 100.0]])
         location_gt = torch.zeros(1, 5, 3)
@@ -122,12 +110,10 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
         batch_metrics = evaluate_constraint_attribute_metrics(
             direction_pred,
             dimension_pred,
-            continuity_pred,
             location_pred,
             primitive,
             direction_gt,
             dimension_gt,
-            continuity_gt,
             location_gt,
         )
         metrics = _aggregate_metric_dicts([batch_metrics])
@@ -136,16 +122,12 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             metrics["direction_mean_angular_error_deg"], 30.0, places=4
         )
         self.assertAlmostEqual(
-            metrics["continuity_mean_angular_error_deg"], 36.0, places=4
-        )
-        self.assertAlmostEqual(
             metrics["dimension_mean_absolute_error"], 2.0, places=6
         )
         self.assertAlmostEqual(
             metrics["location_mean_distance_error"], 2.5, places=6
         )
         self.assertEqual(metrics["direction_valid_points"], 3.0)
-        self.assertEqual(metrics["continuity_valid_points"], 5.0)
         self.assertEqual(metrics["dimension_valid_points"], 3.0)
         self.assertEqual(metrics["location_valid_points"], 4.0)
 
@@ -187,6 +169,12 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                         "_constraint_attribute_sum/direction_angular_error_deg",
                         metrics,
                     )
+                    self.assertNotIn("raw/nor", loss)
+                    if phase == "geometry":
+                        self.assertGreater(float(loss["weighted/mad"]), 0.0)
+                        self.assertAlmostEqual(
+                            float(loss["effective_weight/mad"]), 0.02
+                        )
                     if phase == "semantic":
                         self.assertIn("grad_norm/pmt", metrics)
                         self.assertIn("grad_cosine/pmt_vs_geom", metrics)

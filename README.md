@@ -23,13 +23,12 @@ Each point is represented as:
 (x, y, z, constraint)
 ```
 
-The constraint vector has 15 dimensions:
+The constraint vector has 12 dimensions:
 
 ```text
 primitive_type: 5D one-hot
 direction:      3D vector
 dimension:      1D scalar
-continuity:     3D point normal
 location:       3D vector
 ```
 
@@ -43,7 +42,7 @@ Primitive types:
 4: free-form surface / other
 ```
 
-Direction, dimension, continuity, and location follow the definitions in
+Direction, dimension, and location follow the definitions in
 `AGENTS.md`. For plane, cylinder, and cone directions, opposite directions are
 canonicalized so equivalent axes map to a unique representation.
 
@@ -60,18 +59,20 @@ It predicts:
 ```text
 per-point primitive type
 per-point clustering embedding
+per-point direction, dimension, and location auxiliary attributes
 ```
 
 The primitive type is trained with per-point classification loss. The clustering
 embedding is trained with a discriminative instance loss using `affiliate_idx` as
-the primitive-instance label.
+the primitive-instance label. Geometry attributes provide auxiliary supervision
+and geometric consistency losses; Stage 1 does not consume or predict point normals.
 
 During inference, Stage 1 post-processing performs:
 
 1. Cluster points in Stage 1 embedding space.
 2. Assign each cluster a primitive type by majority vote.
 3. Fit a primitive to each cluster.
-4. Convert fitted primitives into the 15D per-point constraint tensor.
+4. Convert fitted primitives into the 12D per-point constraint tensor.
 
 The reusable implementation is used by the offline dataset-preprocessing step:
 
@@ -89,11 +90,10 @@ It extracts separate features for each constraint component:
 xyz + primitive_type
 xyz + direction
 xyz + dimension
-xyz + continuity
 xyz + location
 ```
 
-These five feature streams are fused with attention so each point can adaptively
+These four feature streams are fused with attention so each point can adaptively
 focus on different geometric constraints.
 
 Implemented Stage 2 models:
@@ -130,7 +130,6 @@ cstnet2/
 |   |-- datasets.py                Dataset loaders and constraint utilities
 |   |-- mfcad_seg_dataset.py       MFCAD++ segmentation dataset loader
 |   |-- mfcad_label_map.json       MFCAD++ label names and colors
-|   |-- convert_txt_to_npy.py       TXT-to-NPY cache helper
 |   |-- cone_gen.py                Synthetic cone data helper
 |   |-- vis.py                     Visualization helpers
 |-- functional/
@@ -171,14 +170,13 @@ dataset_root/
 |   |-- class_name_b/
 ```
 
-Each point file should contain one point per row with 15 columns:
+Each point file should contain one point per row with 12 columns:
 
 ```text
 x y z
 pmt
 mad_x mad_y mad_z
 dim
-nor_x nor_y nor_z
 loc_x loc_y loc_z
 affiliate_idx
 ```
@@ -190,13 +188,12 @@ xyz            point coordinates
 pmt            primitive type index, 0-4
 mad            main axis direction / main direction
 dim            main primitive dimension
-nor            point normal
 loc            primitive location
 affiliate_idx  primitive instance label for clustering supervision
 ```
 
-The dataset loader automatically caches `*.txt` files as `*.txt.npy` for faster
-future loading.
+The Stage 1 dataset loader reads `*.txt` directly. It never reads, writes, or
+refreshes adjacent NumPy cache files.
 
 ## Deployment Method
 
@@ -319,8 +316,8 @@ This includes all losses, learning rates, aggregate metrics, per-class metrics,
 class histograms, and confusion matrices produced by each task.
 
 Stage 1 reports constraint-property errors using GT
-primitive validity masks: Direction and Continuity mean angular error in
-degrees, Dimension mean absolute error, and Location mean Euclidean distance.
+primitive validity masks: Direction mean angular error in degrees, Dimension
+mean absolute error, and Location mean Euclidean distance.
 Classification reports Top-1 and Top-5 accuracy (Top-5 is clipped to the
 available class count). Segmentation reports per-class and macro F1/Dice at
 both point and Face levels.
@@ -346,16 +343,16 @@ model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/
 directory. Only the first three values in every row are used as model input. The
 relative directory and file paths are reproduced below the output directory.
 
-The first 15 output columns always use the same layout as ground truth:
+The first 12 output columns always use the same layout as ground truth:
 
 ```text
-xyz(3), pmt(1), mad(3), dim(1), nor(3), loc(3), affiliate_idx(1)
+xyz(3), pmt(1), mad(3), dim(1), loc(3), affiliate_idx(1)
 ```
 
 Any unknown input columns after `xyz` are not read by Stage 1. They are copied
-unchanged after the predicted 15-column core so task-specific fields such as
+unchanged after the predicted 12-column core so task-specific fields such as
 MFCAD++ face ids and segmentation labels are retained. With the default
-`--input_layout auto`, existing 15-column GT constraints are replaced instead
+`--input_layout auto`, existing 12-column GT constraints are replaced instead
 of duplicated. Use `--input_layout raw` if a raw file happens to resemble the
 GT column layout, or `--input_layout gt` to force replacement.
 
@@ -370,14 +367,15 @@ The checkpoint argument can also be its containing directory. The generator
 then selects `best_constraint_score.pth`, `best_pmt_miou.pth`,
 `best_cluster_ari.pth`, or `last.pth`, in that order. Model name, feature
 settings, and clustering bandwidth are read from current checkpoint metadata.
-For a legacy weights-only checkpoint, specify `--model` explicitly. Existing
-outputs are skipped unless `--overwrite` is supplied. TXT is processed by default; use for example
+Existing outputs are skipped unless `--overwrite` is supplied. TXT is processed by default; use for example
 `--extensions .txt,.npy` when required.
+Plane and cylinder fitting uses transient XYZ-PCA normals by default; add
+`--disable_pca_normals_for_fitting` to use coordinate-only fitting.
 
 ### Train Stage 2 Classification
 
 Stage 1 must first traverse the classification point-cloud dataset and write
-its predicted `pmt/mad/dim/nor/loc` values into the point files using the same
+its predicted `pmt/mad/dim/loc` values into the point files using the same
 columns and data types as the ground-truth fields. Classification never loads
 or invokes a Stage 1 model. Select predicted or ground-truth constraints by
 pointing the classification loader at the corresponding dataset root.
@@ -427,7 +425,7 @@ classification variant switch. Its run and weight name retains the
 separate from incompatible checkpoints produced by the removed architectures.
 
 Baselines use XYZ only by default. Add `--baseline_use_constraints` to feed
-the 15D per-point constraint stored in the selected dataset as an additional
+the 12D per-point constraint stored in the selected dataset as an additional
 point feature:
 
 ```bash
@@ -444,7 +442,7 @@ the `_constraints` suffix. Training starts fresh unless `--resume` is set.
 
 ### Train Stage 2 MFCAD++ Segmentation
 
-The MFCAD++ point files must use the 17-column format documented in
+The MFCAD++ point files must use the 14-column format documented in
 `data_utils/mfcad_seg_dataset.py`. Constraints are assumed to have already been
 written into those files by offline Stage 1 preprocessing. The class count and
 stable colors are read from `data_utils/mfcad_label_map.json`; they are not
@@ -485,8 +483,8 @@ Architecture references are the Point Transformer
 [pointMLP](https://github.com/ma-xu/pointMLP-pytorch) repositories.
 
 Each baseline uses XYZ only by default. Add `--baseline_use_constraints` to
-concatenate the full 15D constraint vector as point attributes, producing an
-18-channel `XYZ + constraints` input:
+concatenate the full 12D constraint vector as point attributes, producing a
+15-channel `XYZ + constraints` input:
 
 ```bash
 python train_seg.py --model pointnet2 --baseline_use_constraints
@@ -589,7 +587,6 @@ Training creates:
 ```text
 model_trained/    model checkpoints
 log/              Stage 1 local JSON training-history files
-*.txt.npy         dataset cache files next to source TXT files
 ```
 
 These generated files are intentionally ignored by Git.

@@ -10,7 +10,7 @@ from functional.constraints import CONSTRAINT_DIM, split_constraint_tensor
 from networks import utils
 
 
-COMPONENT_STREAM_NAMES = ("primitive_type", "direction", "dimension", "continuity", "location")
+COMPONENT_STREAM_NAMES = ("primitive_type", "direction", "dimension", "location")
 STREAM_NAMES = (*COMPONENT_STREAM_NAMES, "xyz")
 
 
@@ -51,12 +51,12 @@ class PointwiseLNMLP(nn.Module):
 
 class ConstraintStreamInitializer(nn.Module):
     """
-    Initialize six independent feature streams from xyz and constraint tensor.
+    Initialize five independent feature streams from xyz and constraint tensor.
 
-    Five component streams: primitive_type, direction, dimension, continuity, location.
+    Four component streams: primitive_type, direction, dimension, location.
     One main constraint stream: initialized from xyz only.
 
-    Output: Six feature tensors [B, N, feature_dim]
+    Output: Five feature tensors [B, N, feature_dim]
     """
 
     def __init__(self, feature_dim: int = 96, norm_type: str = "ln"):
@@ -73,7 +73,6 @@ class ConstraintStreamInitializer(nn.Module):
                 "primitive_type": mlp_cls((3 + 5, feature_dim, feature_dim)),
                 "direction": mlp_cls((3 + 3, feature_dim, feature_dim)),
                 "dimension": mlp_cls((3 + 1, feature_dim, feature_dim)),
-                "continuity": mlp_cls((3 + 3, feature_dim, feature_dim)),
                 "location": mlp_cls((3 + 3, feature_dim, feature_dim)),
                 "xyz": mlp_cls((3, feature_dim, feature_dim)),
             }
@@ -87,7 +86,7 @@ class ConstraintStreamInitializer(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         # xyz: [B, N, 3]
         # constraints: [B, N, CONSTRAINT_DIM]
-        # Output: dict with keys ["primitive_type", "direction", "dimension", "continuity", "location", "xyz"]
+        # Output: primitive_type, direction, dimension, location, and xyz streams.
         # Each value: [B, N, feature_dim]
 
         parts = split_constraint_tensor(constraints)
@@ -96,7 +95,7 @@ class ConstraintStreamInitializer(nn.Module):
         if component_masks is not None:
             if component_masks.shape != (*xyz.shape[:2], len(COMPONENT_STREAM_NAMES)):
                 raise ValueError(
-                    "expected component masks [B, N, 5], got "
+                    f"expected component masks [B, N, {len(COMPONENT_STREAM_NAMES)}], got "
                     f"{tuple(component_masks.shape)}"
                 )
 
@@ -119,7 +118,7 @@ class SharedNeighborhoodSampler(nn.Module):
     """
     Performs FPS and KNN once per hierarchy level, returns shared indices and relative coordinates.
 
-    Used by all six feature streams to ensure they operate on the same spatial neighborhoods.
+    Used by all five feature streams to ensure they operate on the same spatial neighborhoods.
     """
 
     def __init__(self, n_center: int, n_near: int):
@@ -257,7 +256,7 @@ class MultiStreamSetAbstractionLayer(nn.Module):
     """
     Applies shared neighborhood sampling and independent vector attention for each stream.
 
-    Ensures all six streams use identical spatial grouping but independent aggregation.
+    Ensures all five streams use identical spatial grouping but independent aggregation.
     """
 
     def __init__(self, n_center: int, n_near: int, channel_in: int, channel_out: int):
@@ -270,7 +269,6 @@ class MultiStreamSetAbstractionLayer(nn.Module):
                 "primitive_type": LocalVectorAttentionAggregator(channel_in, channel_out),
                 "direction": LocalVectorAttentionAggregator(channel_in, channel_out),
                 "dimension": LocalVectorAttentionAggregator(channel_in, channel_out),
-                "continuity": LocalVectorAttentionAggregator(channel_in, channel_out),
                 "location": LocalVectorAttentionAggregator(channel_in, channel_out),
                 "xyz": LocalVectorAttentionAggregator(channel_in, channel_out),
             }
@@ -285,7 +283,7 @@ class MultiStreamSetAbstractionLayer(nn.Module):
         torch.Tensor, Dict[str, torch.Tensor], torch.Tensor
     ]:
         # xyz: [B, N, 3]
-        # streams: dict with 6 features [B, N, C_in]
+        # streams: dict with 5 features [B, N, C_in]
         # Output: (center_xyz [B, S, 3], updated_streams dict [B, S, C_out])
 
         # Shared sampling: call once
@@ -309,17 +307,19 @@ class MultiStreamSetAbstractionLayer(nn.Module):
 
 class ComponentToConstraintCrossAttention(nn.Module):
     """
-    Updates only the main constraint stream using the five component streams as context.
+    Updates only the main constraint stream using the four component streams as context.
 
     Component streams remain unchanged (no feedback).
-    Performs point-wise attention over the 5 components.
+    Performs point-wise attention over the 4 components.
     """
 
     def __init__(self, channel_dim: int, n_heads: int = 4):
         super().__init__()
         self.channel_dim = channel_dim
         self.n_heads = n_heads
-        self.component_type_embedding = nn.Parameter(torch.randn(5, channel_dim) * 0.02)
+        self.component_type_embedding = nn.Parameter(
+            torch.randn(len(COMPONENT_STREAM_NAMES), channel_dim) * 0.02
+        )
 
         # Multi-head cross-attention
         self.attention = nn.MultiheadAttention(
@@ -344,7 +344,6 @@ class ComponentToConstraintCrossAttention(nn.Module):
         primitive_feature: torch.Tensor,
         direction_feature: torch.Tensor,
         dimension_feature: torch.Tensor,
-        continuity_feature: torch.Tensor,
         location_feature: torch.Tensor,
         component_validity: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -354,24 +353,27 @@ class ComponentToConstraintCrossAttention(nn.Module):
 
         B, S, C = constraint_feature.shape
 
-        # Stack components into context [B, S, 5, C]
+        n_components = len(COMPONENT_STREAM_NAMES)
+        # Stack components into context [B, S, 4, C]
         component_context = torch.stack(
-            [primitive_feature, direction_feature, dimension_feature, continuity_feature, location_feature],
+            [primitive_feature, direction_feature, dimension_feature, location_feature],
             dim=2,
         )
-        component_context = component_context + self.component_type_embedding.view(1, 1, 5, C)
+        component_context = component_context + self.component_type_embedding.view(
+            1, 1, n_components, C
+        )
 
         # Reshape for point-wise attention: treat each point independently
         # query: [B, S, 1, C] -> [B*S, 1, C]
-        # context: [B, S, 5, C] -> [B*S, 5, C]
+        # context: [B, S, 4, C] -> [B*S, 4, C]
         query = constraint_feature.unsqueeze(2).reshape(B * S, 1, C)
-        context = component_context.reshape(B * S, 5, C)
+        context = component_context.reshape(B * S, n_components, C)
 
         key_padding_mask = None
         if component_validity is not None:
             if component_validity.shape != (B, S, len(COMPONENT_STREAM_NAMES)):
                 raise ValueError(
-                    "expected component validity [B, S, 5], got "
+                    f"expected component validity [B, S, {n_components}], got "
                     f"{tuple(component_validity.shape)}"
                 )
             valid = component_validity.to(dtype=torch.bool)
@@ -404,7 +406,7 @@ class MultiStreamConstraintEncoder(nn.Module):
     Hierarchical encoder applying shared sampling and one-way cross-attention.
 
     The two-level default is the original Stage 2 classification encoder. Dense
-    tasks may request a third level without duplicating the six-stream design.
+    tasks may request a third level without duplicating the five-stream design.
     """
 
     def __init__(
@@ -477,7 +479,6 @@ class MultiStreamConstraintEncoder(nn.Module):
             streams["primitive_type"],
             streams["direction"],
             streams["dimension"],
-            streams["continuity"],
             streams["location"],
             component_validity=component_masks,
         )
@@ -544,7 +545,7 @@ class MultiStreamConstraintEncoder(nn.Module):
 
 
 class Stage2ConstraintBackbone(nn.Module):
-    """Reusable six-stream Stage 2 backbone for global and dense tasks."""
+    """Reusable five-stream Stage 2 backbone for global and dense tasks."""
 
     def __init__(
         self,

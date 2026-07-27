@@ -8,7 +8,11 @@ import numpy as np
 import torch
 
 import gen_cst_pred
-from functional.constraints import assemble_constraints_from_stage1
+from data_utils.datasets import CstNet2Dataset
+from functional.constraints import (
+    assemble_constraints_from_stage1,
+    constraints_to_tensor,
+)
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
@@ -17,7 +21,6 @@ def prediction(count: int) -> dict[str, np.ndarray]:
         "pmt": np.arange(count) % 5,
         "mad": np.full((count, 3), 0.25, dtype=np.float32),
         "dim": np.arange(count, dtype=np.float32),
-        "nor": np.full((count, 3), 0.5, dtype=np.float32),
         "loc": np.full((count, 3), -0.5, dtype=np.float32),
         "affiliate_idx": np.arange(count) // 2,
     }
@@ -30,23 +33,23 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             source, prediction(4), input_layout="raw"
         )
 
-        self.assertEqual(output.shape, (4, 17))
+        self.assertEqual(output.shape, (4, 14))
         np.testing.assert_array_equal(output[:, :3], source[:, :3])
-        np.testing.assert_array_equal(output[:, 15:], source[:, 3:])
+        np.testing.assert_array_equal(output[:, 12:], source[:, 3:])
         np.testing.assert_array_equal(output[:, 3], prediction(4)["pmt"])
-        np.testing.assert_array_equal(output[:, 14], prediction(4)["affiliate_idx"])
+        np.testing.assert_array_equal(output[:, 11], prediction(4)["affiliate_idx"])
 
     def test_auto_layout_replaces_gt_constraints_and_keeps_task_columns(self):
-        source = np.zeros((4, 17), dtype=np.float64)
+        source = np.zeros((4, 14), dtype=np.float64)
         source[:, :3] = np.arange(12).reshape(4, 3)
         source[:, 3] = (np.arange(4) + 1) % 5
-        source[:, 14] = np.arange(4) // 2
-        source[:, 15:] = np.array([[10, 20], [10, 20], [11, 21], [11, 21]])
+        source[:, 11] = np.arange(4) // 2
+        source[:, 12:] = np.array([[10, 20], [10, 20], [11, 21], [11, 21]])
 
         output = gen_cst_pred.build_output_array(source, prediction(4))
 
-        self.assertEqual(output.shape, (4, 17))
-        np.testing.assert_array_equal(output[:, 15:], source[:, 15:])
+        self.assertEqual(output.shape, (4, 14))
+        np.testing.assert_array_equal(output[:, 12:], source[:, 12:])
         np.testing.assert_array_equal(output[:, 3], prediction(4)["pmt"])
 
     def test_text_and_npy_round_trip(self):
@@ -76,12 +79,51 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         log_pmt = torch.zeros(1, 4, 5)
         log_pmt[..., 0] = 1.0
 
-        constraints = assemble_constraints_from_stage1(
-            xyz, embedding, log_pmt, cluster_bandwidth=0.1, normal_k=2
-        )
+        for use_pca_normals in (False, True):
+            with self.subTest(use_pca_normals=use_pca_normals):
+                constraints = assemble_constraints_from_stage1(
+                    xyz,
+                    embedding,
+                    log_pmt,
+                    cluster_bandwidth=0.1,
+                    normal_k=2,
+                    use_pca_normals_for_fitting=use_pca_normals,
+                )
+                self.assertEqual(
+                    set(constraints),
+                    {
+                        "primitive_type",
+                        "direction",
+                        "dimension",
+                        "location",
+                        "affiliate_idx",
+                    },
+                )
+                self.assertEqual(tuple(constraints_to_tensor(constraints).shape), (1, 4, 12))
+                self.assertEqual(tuple(constraints["affiliate_idx"].shape), (1, 4))
+                self.assertEqual(constraints["affiliate_idx"].unique().numel(), 2)
 
-        self.assertEqual(tuple(constraints["affiliate_idx"].shape), (1, 4))
-        self.assertEqual(constraints["affiliate_idx"].unique().numel(), 2)
+    def test_stage1_dataset_reads_12_column_txt_and_ignores_stale_npy(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            sample_dir = Path(temporary) / "train" / "part"
+            sample_dir.mkdir(parents=True)
+            sample = np.zeros((8, 12), dtype=np.float64)
+            sample[:, 0:3] = np.arange(24, dtype=np.float64).reshape(8, 3)
+            sample[:, 3] = np.arange(8) % 5
+            sample[:, 4] = 1.0
+            sample[:, 7] = 0.5
+            sample[:, 8:11] = 7.0
+            sample[:, 11] = np.arange(8) // 2
+            txt_path = sample_dir / "sample.txt"
+            np.savetxt(txt_path, sample)
+            np.save(str(txt_path) + ".npy", np.zeros((8, 15), dtype=np.float64))
+
+            dataset = CstNet2Dataset(temporary, is_train=True, n_points=4)
+            fields = dataset[0]
+
+        self.assertEqual(len(fields), 7)
+        self.assertEqual(fields[0].shape, (4, 3))
+        np.testing.assert_array_equal(fields[5], np.full((4, 3), 7.0))
 
     def test_cli_defaults_to_checkpoint_metadata_and_xyz_text_files(self):
         args = gen_cst_pred.parse_args(
@@ -91,6 +133,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         self.assertFalse(hasattr(args, "stage1_mode"))
         self.assertEqual(args.extensions, ".txt")
         self.assertEqual(args.input_layout, "auto")
+        self.assertFalse(args.disable_pca_normals_for_fitting)
         self.assertFalse(args.overwrite)
 
     def test_real_stage1_checkpoint_xyz_inference_smoke(self):
@@ -104,7 +147,6 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
                         "model": "pointnet",
                         "stage1_mode": "multitask",
                         "use_extra_features": False,
-                        "normal_source": "none",
                         "feature_k": 16,
                         "cluster_bandwidth": 0.35,
                     },

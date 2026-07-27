@@ -12,8 +12,8 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 DEFAULT_LABEL_MAP = Path(__file__).with_name("mfcad_label_map.json")
-COMPONENT_NAMES = ("primitive_type", "direction", "dimension", "continuity", "location")
-EXPECTED_COLUMNS = 17
+COMPONENT_NAMES = ("primitive_type", "direction", "dimension", "location")
+EXPECTED_COLUMNS = 14
 
 
 def load_label_map(path: str | os.PathLike[str] = DEFAULT_LABEL_MAP) -> dict[str, Any]:
@@ -72,7 +72,7 @@ class DistributedEvalSampler(Sampler[int]):
 
 
 class MFCADSegmentationDataset(Dataset):
-    """Read normalized 17-column MFCAD++ point clouds with Stage 1 constraints."""
+    """Read normalized 14-column MFCAD++ point clouds with Stage 1 constraints."""
 
     def __init__(
         self,
@@ -149,10 +149,9 @@ class MFCADSegmentationDataset(Dataset):
 
         direction = point_set[:, 4:7].copy()
         dimension = point_set[:, 7:8].copy()
-        continuity = point_set[:, 8:11].copy()
-        location = point_set[:, 11:14].copy()
-        raw_face_ids = point_set[:, 15]
-        raw_labels = point_set[:, 16]
+        location = point_set[:, 8:11].copy()
+        raw_face_ids = point_set[:, 12]
+        raw_labels = point_set[:, 13]
         face_ids = raw_face_ids.astype(np.int64)
         labels = raw_labels.astype(np.int64)
         if not np.array_equal(raw_face_ids, face_ids.astype(raw_face_ids.dtype)):
@@ -169,10 +168,9 @@ class MFCADSegmentationDataset(Dataset):
         primitive_valid = np.ones_like(pmt, dtype=bool)
         direction_valid = np.isin(pmt, (0, 1, 2))
         dimension_valid = np.isin(pmt, (1, 2, 3))
-        continuity_valid = np.ones_like(pmt, dtype=bool)
         location_valid = np.isin(pmt, (0, 1, 2, 3))
         constraint_masks = np.stack(
-            [primitive_valid, direction_valid, dimension_valid, continuity_valid, location_valid],
+            [primitive_valid, direction_valid, dimension_valid, location_valid],
             axis=-1,
         )
 
@@ -183,7 +181,7 @@ class MFCADSegmentationDataset(Dataset):
         location[~location_valid] = 0.0
         primitive_one_hot = np.eye(5, dtype=np.float32)[pmt]
         constraints = np.concatenate(
-            [primitive_one_hot, direction, dimension, continuity, location],
+            [primitive_one_hot, direction, dimension, location],
             axis=-1,
         ).astype(np.float32, copy=False)
 

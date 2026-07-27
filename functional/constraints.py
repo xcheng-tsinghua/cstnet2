@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 
 N_PRIMITIVES = 5
-CONSTRAINT_DIM = 15  # 5 (primitive_type) + 3 (Direction) + 1 (Dimension) + 3 (Continuity) + 3 (Location)
+CONSTRAINT_DIM = 12  # 5 (primitive_type) + 3 (direction) + 1 (dimension) + 3 (location)
 INVALID_DIRECTION = (0.0, 0.0, -1.0)
 
 
@@ -211,10 +211,10 @@ def assemble_constraints_from_stage1(
     xyz: torch.Tensor,
     cluster_embedding: torch.Tensor,
     log_primitive: torch.Tensor,
-    normals: Optional[torch.Tensor] = None,
     cluster_bandwidth: float = 0.35,
     normal_k: int = 16,
     use_robust_fitting: bool = True,
+    use_pca_normals_for_fitting: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """
     Convert Stage 1 primitive logits and clustering embeddings to constraints.
@@ -222,7 +222,9 @@ def assemble_constraints_from_stage1(
     xyz: [B, N, 3]
     cluster_embedding: [B, N, D]
     log_primitive: [B, N, 5]
-    normals: optional [B, N, 3]
+
+    PCA normals are an optional fitting-only intermediate for plane and
+    cylinder clusters. They are never returned as a constraint component.
     """
     bsz, n_points, _ = xyz.shape
     device = xyz.device
@@ -237,25 +239,28 @@ def assemble_constraints_from_stage1(
         (bsz, n_points), -1, device=device, dtype=torch.long
     )
 
-    if normals is None:
-        continuity = estimate_normals_pca(xyz, k=normal_k).to(dtype=dtype)
-    else:
-        continuity = F.normalize(normals.to(device=device, dtype=dtype), dim=-1, eps=1e-6)
-
     for b in range(bsz):
         labels = cluster_embeddings_radius(cluster_embedding[b], bandwidth=cluster_bandwidth).to(device)
         affiliate_idx[b] = labels
         for cluster_id in labels.unique(sorted=True):
             mask = labels == cluster_id
             points = xyz[b, mask]
-            cluster_normals = continuity[b, mask] if normals is not None else None
             prim = _majority(pmt_idx[b, mask])
             primitive_type[b, mask, prim] = 1.0
+            cluster_normals = None
+            if (
+                use_robust_fitting
+                and use_pca_normals_for_fitting
+                and prim in (0, 1)
+            ):
+                cluster_normals = estimate_normals_pca(
+                    points.unsqueeze(0), k=normal_k
+                )[0].to(dtype=dtype)
 
             if prim == 0:
-                fit_dir, fit_dim, fit_loc = _fit_plane(points, cluster_normals if use_robust_fitting else None)
+                fit_dir, fit_dim, fit_loc = _fit_plane(points, cluster_normals)
             elif prim == 1:
-                fit_dir, fit_dim, fit_loc = _fit_cylinder(points, cluster_normals if use_robust_fitting else None)
+                fit_dir, fit_dim, fit_loc = _fit_cylinder(points, cluster_normals)
             elif prim == 2:
                 fit_dir, fit_dim, fit_loc = _fit_cone(points)
             elif prim == 3:
@@ -271,7 +276,6 @@ def assemble_constraints_from_stage1(
         "primitive_type": primitive_type,
         "direction": direction,
         "dimension": dimension,
-        "continuity": continuity,
         "location": location,
         "affiliate_idx": affiliate_idx,
     }
@@ -283,7 +287,6 @@ def constraints_to_tensor(constraints: Dict[str, torch.Tensor]) -> torch.Tensor:
             constraints["primitive_type"],
             constraints["direction"],
             constraints["dimension"].unsqueeze(-1),
-            constraints["continuity"],
             constraints["location"],
         ],
         dim=-1,
@@ -294,7 +297,6 @@ def ground_truth_constraints_to_tensor(
     pmt: torch.Tensor,
     direction: torch.Tensor,
     dimension: torch.Tensor,
-    continuity: torch.Tensor,
     location: torch.Tensor,
     n_primitives: int = N_PRIMITIVES,
 ) -> torch.Tensor:
@@ -304,7 +306,6 @@ def ground_truth_constraints_to_tensor(
             pmt_one_hot,
             direction,
             dimension.unsqueeze(-1) if dimension.dim() == pmt.dim() else dimension,
-            continuity,
             location,
         ],
         dim=-1,
@@ -318,6 +319,5 @@ def split_constraint_tensor(constraints: torch.Tensor) -> Dict[str, torch.Tensor
         "primitive_type": constraints[..., 0:5],
         "direction": constraints[..., 5:8],
         "dimension": constraints[..., 8:9],
-        "continuity": constraints[..., 9:12],
-        "location": constraints[..., 12:15],
+        "location": constraints[..., 9:12],
     }
