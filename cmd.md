@@ -121,7 +121,7 @@ tail -f out_s1.log
 python train_cst_pred.py --local --epoch 1 --bs 2 --n_points 512 --workers 0 --is_sample --train_phase semantic --use_extra_features
 
 
------- 新 stage1 训练
+------------------------------- 新 stage1 训练
 1. Semantic 阶段
 nohup python train_cst_pred.py --epoch 100 --bs 30 --model attn_3dgcn --train_phase semantic --use_extra_features > out_s1s.log 2>&1 &
 
@@ -141,8 +141,10 @@ python train_cst_pred.py --epoch 200 --bs 20 --model attn_3dgcn --train_phase jo
 One-batch overfit
 python train_cst_pred.py --epoch 20 --bs 20 --train_phase joint --overfit_one_batch --geom_start_epoch 0 --geom_ramp_epochs 5
 
+------------------------------- stage 2
+
 -- stage2 seg
-nohup python train_seg.py > out_s2seg.log 2>&1 &
+nohup python train_seg.py --not_resume > out_s2seg.log 2>&1 &
 tail -f out_s2seg.log
 
 
