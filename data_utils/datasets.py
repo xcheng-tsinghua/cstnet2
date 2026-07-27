@@ -252,7 +252,9 @@ class CstNet2Dataset(Dataset):
                  root,
                  is_train=True,
                  n_points=2000,
-                 data_augmentation=False
+                 data_augmentation=False,
+                 recursive_all=False,
+                 sample_seed=None,
                  ):
         """
         定位文件的路径如下：
@@ -289,19 +291,30 @@ class CstNet2Dataset(Dataset):
 
         self.n_points = n_points
         self.data_augmentation = data_augmentation
+        self.sample_seed = sample_seed
 
-        if is_train:
-            inner_root = os.path.join(root, 'train')
+        if recursive_all:
+            if not os.path.isdir(root):
+                raise FileNotFoundError(f'Stage 1 dataset directory not found: {root}')
+            file_path_all = sorted(utils.get_allfiles(root, suffix='txt'))
+            if not file_path_all:
+                raise FileNotFoundError(
+                    f'no Stage 1 .txt samples found recursively below: {root}'
+                )
+            category_path = {'all': file_path_all}
         else:
-            inner_root = os.path.join(root, 'test')
+            if is_train:
+                inner_root = os.path.join(root, 'train')
+            else:
+                inner_root = os.path.join(root, 'test')
 
-        category_all = utils.get_subdirs(inner_root)
-        category_path = {}  # {'plane': [Path1,Path2,...], 'car': [Path1,Path2,...]}
+            category_all = utils.get_subdirs(inner_root)
+            category_path = {}  # {'plane': [Path1,Path2,...], 'car': [Path1,Path2,...]}
 
-        for c_class in category_all:
-            class_root = os.path.join(inner_root, c_class)
-            file_path_all = utils.get_allfiles(class_root)
-            category_path[c_class] = file_path_all
+            for c_class in category_all:
+                class_root = os.path.join(inner_root, c_class)
+                file_path_all = utils.get_allfiles(class_root)
+                category_path[c_class] = file_path_all
 
         self.datapath = []
         for item in category_path:
@@ -326,12 +339,25 @@ class CstNet2Dataset(Dataset):
         if not np.isfinite(point_set).all():
             raise ValueError(f'non-finite value found in Stage 1 sample: {fn[1]}')
 
-        # 随机选出指定数量的点
-        try:
-            choice = np.random.choice(point_set.shape[0], self.n_points, replace=False)
-            point_set = point_set[choice, :]
-        except:
-            exit(f'insufficient points, current: {point_set.shape[0]}, required: {self.n_points}')
+        if point_set.shape[0] < self.n_points:
+            raise ValueError(
+                f'insufficient points in Stage 1 sample {fn[1]}: '
+                f'current={point_set.shape[0]}, required={self.n_points}'
+            )
+        if self.sample_seed is None:
+            choice = np.random.choice(
+                point_set.shape[0],
+                self.n_points,
+                replace=False,
+            )
+        else:
+            rng = np.random.default_rng(int(self.sample_seed) + int(index))
+            choice = rng.choice(
+                point_set.shape[0],
+                self.n_points,
+                replace=False,
+            )
+        point_set = point_set[choice, :]
 
         xyz = point_set[:, :3]  # [n, 3]
         pmt = point_set[:, 3].astype(np.int32)  # 基元类型 [n, ]. plane 0, cylinder 1, cone 2, sphere 3, freeform 4
@@ -374,6 +400,64 @@ class CstNet2Dataset(Dataset):
 
     def n_classes(self):
         return len(self.classes)
+
+    @staticmethod
+    def create_directory_dataloader(
+        root,
+        bs,
+        n_points,
+        num_workers,
+        shuffle,
+        is_sample=False,
+        sample_seed=None,
+    ):
+        """Recursively load every Stage 1 TXT sample below one directory."""
+        dataset = CstNet2Dataset(
+            root=root,
+            n_points=n_points,
+            recursive_all=True,
+            sample_seed=sample_seed,
+        )
+        loader_kwargs = {
+            'batch_size': bs,
+            'num_workers': num_workers,
+            'pin_memory': True,
+            'drop_last': False,
+        }
+        if num_workers > 0:
+            loader_kwargs.update({
+                'persistent_workers': True,
+                'prefetch_factor': 4,
+            })
+
+        if is_sample:
+            sample_batches = 4 if shuffle else 2
+            sample_count = min(len(dataset), bs * sample_batches)
+            print(
+                Fore.RED
+                + f'-> sample {sample_count}/{len(dataset)} files for Stage 1 debug'
+            )
+            sampler = torch.utils.data.RandomSampler(
+                dataset,
+                num_samples=sample_count,
+                replacement=False,
+            )
+            return torch.utils.data.DataLoader(
+                dataset,
+                sampler=sampler,
+                **loader_kwargs,
+            )
+
+        print(
+            Fore.GREEN
+            + f'-> create full Stage 1 dataloader: files={len(dataset)}, '
+            f'shuffle={shuffle}'
+        )
+        return torch.utils.data.DataLoader(
+            dataset,
+            shuffle=shuffle,
+            **loader_kwargs,
+        )
 
     @staticmethod
     def create_dataloader(root, bs, n_points, num_workers, is_sample):

@@ -118,6 +118,7 @@ cstnet2/
 |-- README.md                      This file
 |-- .env.example                   WandB API-key template (copy to .env)
 |-- train_cst_pred.py              Stage 1 training entry point
+|-- eval_cst_pred.py               Standalone Stage 1 evaluation entry point
 |-- gen_cst_pred.py                Offline Stage 1 constraint generation
 |-- train_cls.py                   Stage 2 classification training
 |-- train_seg.py                   Stage 2 MFCAD++ segmentation training
@@ -135,7 +136,8 @@ cstnet2/
 |-- functional/
 |   |-- checkpoint_io.py           Shared fault-tolerant checkpoint saving
 |   |-- constraints.py             Constraint assembly and primitive fitting
-|   |-- cst_pred_trainer.py        Stage 1 training loop
+|   |-- cst_pred_trainer.py        Train-only Stage 1 loop
+|   |-- cst_pred_evaluator.py      Full-dataset Stage 1 evaluator
 |   |-- loss.py                    Stage 1 and geometry losses
 |-- networks/
 |   |-- cst_pred_wrapper.py        Stage 1 model wrapper
@@ -254,23 +256,26 @@ with an error if `.env`, the key, or the `wandb` package is missing.
 
 ### 2. Prepare the Dataset
 
-Place the dataset under a path such as:
+Stage 1 training and evaluation accept independent directories. Every `.txt`
+file below the supplied directory is discovered recursively, so neither
+directory needs a `train/test` layout:
 
 ```text
-data/pcd_cstnet2/Param20K_Extend
+data/stage1_train/
+data/stage1_eval/
 ```
 
-or use the local Windows path configured in the scripts:
-
-```text
-D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend
-```
-
-Use `--local` to select the local Windows path, or override the root
-directly:
+Pass the training directory explicitly:
 
 ```bash
-python train_cst_pred.py --root_sever data/pcd_cstnet2/Param20K_Extend
+python train_cst_pred.py --data_root /path/to/stage1_train
+```
+
+Stage 2 classification retains its existing `--root_local`, `--root_sever`,
+and `--local` options because its precomputed dataset still has task-specific
+train/test splits:
+
+```bash
 python train_cls.py --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend --local
 ```
 
@@ -292,26 +297,37 @@ limited, reduce:
 Train Stage 1 first:
 
 ```bash
-python train_cst_pred.py --model pointnet2 --bs 128 --n_points 2000
+python train_cst_pred.py \
+  --data_root /path/to/large_stage1_train \
+  --model pointnet2 \
+  --bs 128 \
+  --n_points 2000
 ```
 
 Useful options:
 
 ```text
 --model pointnet2|pointnet|attn_3dgcn
+--data_root PATH         recursively use every TXT file for training
 --train_phase semantic|geometry|joint
 --is_sample              run a small sampled dataloader for debugging
 --resume_checkpoint PATH resume model, optimizer, scheduler, and epoch state
 --init_from_checkpoint PATH load model weights only for a new training run
 ```
 
-All training boolean options are value-less flags. For example, use `--local`,
-`--is_sample`, `--resume`, or `--use_amp` to enable an option; do not append
+All training boolean options are value-less flags. For example, use
+`--is_sample`, `--overfit_one_batch`, or `--use_amp` to enable an option; do not append
 `True` or `False`. Stage 1 losses and gradient diagnostics are enabled by
 default and can be turned off with flags such as `--disable_mad_loss` and
 `--disable_grad_diagnostics`.
 
-Stage 1, classification, and segmentation always log every epoch to WandB.
+Stage 1 does not create or consume a test loader during training. At the end
+of each epoch it records aggregate metrics from all training batches to WandB
+and the local JSON history. Consequently, Stage 1 `best_pmt_miou.pth`,
+`best_cluster_ari.pth`, and `best_constraint_score.pth` are selected from
+training metrics and carry `best_metrics_source: "train"` in the checkpoint.
+
+Stage 1, classification, and segmentation log every training epoch to WandB.
 This includes all losses, learning rates, aggregate metrics, per-class metrics,
 class histograms, and confusion matrices produced by each task.
 
@@ -336,6 +352,29 @@ model_trained/attn_3dgcn_multitask_semantic_pmt_prim_cluster/
 model_trained/attn_3dgcn_multitask_geometry_pmt_prim_cluster/
 model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/
 ```
+
+### Evaluate Stage 1
+
+Evaluate a checkpoint on every `.txt` file below a separate dataset directory:
+
+```bash
+python eval_cst_pred.py \
+  --data_root /path/to/stage1_eval \
+  --checkpoint model_trained/pointnet2_multitask_joint_pmt_prim_cluster/last.pth \
+  --bs 32 \
+  --seed 0 \
+  --workers 8
+```
+
+The evaluator restores model architecture, feature settings, loss weights,
+loss switches, and geometry ramp settings from the checkpoint. It does not
+restore optimizer state and does not initialize WandB. The generated JSON
+contains dataset metadata, aggregate raw and weighted losses, primitive
+confusion metrics, real radius-clustering ARI/NMI, oracle clustering diagnostics,
+and direction/dimension/location errors.
+Every file is evaluated once. If a file contains more than `--n_points`, the
+evaluator uses a deterministic per-file subset controlled by `--seed`;
+`--n_points` defaults to the checkpoint value.
 
 ### Generate Offline Stage 1 Constraints
 
@@ -544,13 +583,13 @@ python vis_cstpred.py --root_dataset path/to/pointclouds --num_point 2500
 Run compile checks:
 
 ```bash
-python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py train_seg.py eval_seg.py vis_cstpred.py
+python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py eval_cst_pred.py train_seg.py eval_seg.py vis_cstpred.py
 ```
 
 Run import checks:
 
 ```bash
-python -B -c "import train_cst_pred; import train_cls; import train_seg; import eval_seg; import vis_cstpred; print('imports ok')"
+python -B -c "import train_cst_pred; import eval_cst_pred; import train_cls; import train_seg; import eval_seg; import vis_cstpred; print('imports ok')"
 ```
 
 ### 2. Tiny Forward Smoke Test
@@ -573,7 +612,8 @@ classification: [2, 6]
 Use sampled dataloaders before long training:
 
 ```bash
-python train_cst_pred.py --is_sample --epoch 1 --bs 2 --n_points 128 --workers 0
+python train_cst_pred.py --data_root /path/to/stage1_train --is_sample --epoch 1 --bs 2 --n_points 128 --workers 0
+python eval_cst_pred.py --data_root /path/to/stage1_eval --checkpoint /path/to/last.pth --bs 2 --workers 0
 python train_cls.py --root_sever /path/to/precomputed_dataset --is_sample --epoch 1 --bs 2 --n_points 128 --workers 0
 ```
 

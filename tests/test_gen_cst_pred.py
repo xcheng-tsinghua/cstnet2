@@ -125,6 +125,43 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         self.assertEqual(fields[0].shape, (4, 3))
         np.testing.assert_array_equal(fields[5], np.full((4, 3), 7.0))
 
+    def test_stage1_directory_loader_recursively_reads_every_txt(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            sample = np.zeros((8, 12), dtype=np.float64)
+            sample[:, 0:3] = np.arange(24, dtype=np.float64).reshape(8, 3)
+            sample[:, 3] = np.arange(8) % 5
+            sample[:, 4] = 1.0
+            sample[:, 7] = 0.5
+            sample[:, 11] = np.arange(8) // 2
+            paths = [
+                root / "one.txt",
+                root / "category" / "two.txt",
+                root / "any" / "depth" / "three.txt",
+            ]
+            for index, path in enumerate(paths):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                current = sample.copy()
+                current[:, 0] = index
+                np.savetxt(path, current)
+            np.save(root / "ignored.npy", np.zeros((8, 12), dtype=np.float64))
+
+            loader = CstNet2Dataset.create_directory_dataloader(
+                root=temporary,
+                bs=2,
+                n_points=4,
+                num_workers=0,
+                shuffle=False,
+                sample_seed=7,
+            )
+            batches = list(loader)
+            first_read = loader.dataset[0][0]
+            second_read = loader.dataset[0][0]
+
+        self.assertEqual(len(loader.dataset), 3)
+        self.assertEqual(sum(batch[0].shape[0] for batch in batches), 3)
+        np.testing.assert_array_equal(first_read, second_read)
+
     def test_cli_defaults_to_checkpoint_metadata_and_xyz_text_files(self):
         args = gen_cst_pred.parse_args(
             ["--input_dir", "input", "--output_dir", "output", "--checkpoint", "weights.pth"]

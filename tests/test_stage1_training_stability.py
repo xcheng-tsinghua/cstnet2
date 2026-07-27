@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+import json
 from unittest import mock
 from types import SimpleNamespace
 
@@ -70,7 +71,6 @@ def make_trainer(
     return CstPredTrainer(
         model=CstPredWrapper("pointnet"),
         train_loader=[batch],
-        test_loader=[batch],
         checkpoint_dir=os.path.join(root, "checkpoints"),
         log_savepth=os.path.join(root, "log.json"),
         max_epoch=max_epoch,
@@ -214,6 +214,15 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             first.start()
             last_path = os.path.join(root, "checkpoints", "last.pth")
             first_state = torch.load(last_path, map_location="cpu")
+            with open(os.path.join(root, "log.json"), encoding="utf-8") as file:
+                training_log = json.load(file)
+            self.assertIn("train", training_log)
+            self.assertNotIn("test", training_log)
+            self.assertEqual(
+                training_log["run"]["best_metrics_source"],
+                "train",
+            )
+            self.assertEqual(first_state["best_metrics_source"], "train")
             first_lrs = [group["lr"] for group in first_state["optimizer"]["param_groups"]]
             for initial_lr, saved_lr in zip(initial_lrs, first_lrs):
                 self.assertAlmostEqual(saved_lr, initial_lr * 0.9)

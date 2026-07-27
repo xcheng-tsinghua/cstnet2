@@ -28,9 +28,12 @@ def parse_args(argv=None):
     parser.add_argument('--model', default='attn_3dgcn', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
     parser.add_argument('--is_sample', action='store_true', default=False)
 
-    parser.add_argument('--local', action='store_true', default=False)
-    parser.add_argument('--root_sever', type=str, default=r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
-    parser.add_argument('--root_local', type=str, default=r'D:\document\DataSet\pcd_cstnet2\Param20K_pcd')
+    parser.add_argument(
+        '--data_root',
+        type=str,
+        required=True,
+        help='directory recursively containing every Stage 1 training .txt sample',
+    )
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
@@ -73,6 +76,8 @@ def parse_args(argv=None):
 def main(args):
     if args.resume_checkpoint and args.init_from_checkpoint:
         raise ValueError('--resume_checkpoint and --init_from_checkpoint are mutually exclusive')
+    if not args.data_root:
+        raise ValueError('--data_root must point to the Stage 1 training dataset directory')
     save_str = f'{args.model}_multitask_{args.train_phase}_pmt_prim_cluster'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
@@ -80,13 +85,13 @@ def main(args):
     os.makedirs('model_trained', exist_ok=True)
 
     # data
-    data_root = args.root_local if args.local else args.root_sever
-    train_loader, test_loader = CstNet2Dataset.create_dataloader(
-        root=data_root,
+    train_loader = CstNet2Dataset.create_directory_dataloader(
+        root=args.data_root,
         bs=args.bs,
         n_points=args.n_points,
         num_workers=args.workers,
-        is_sample=args.is_sample
+        shuffle=True,
+        is_sample=args.is_sample,
     )
 
     # trainer
@@ -131,12 +136,12 @@ def main(args):
             'parameter_count': parameter_count,
             'input_feature_dim': channel_fea,
             'device': str(device),
+            'dataset_file_count': len(train_loader.dataset),
         },
     )
     trainer = CstPredTrainer(
         model=stage1_model,
         train_loader = train_loader,
-        test_loader = test_loader,
         checkpoint_dir=os.path.join('model_trained', save_str),
         log_savepth = os.path.join('log', save_str + f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json'),
         max_epoch = args.epoch,

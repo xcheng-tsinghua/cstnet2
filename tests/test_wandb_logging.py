@@ -30,7 +30,7 @@ class WandBLoggingTest(unittest.TestCase):
         import eval_seg
 
         for args in (
-            train_cst_pred.parse_args([]),
+            train_cst_pred.parse_args(["--data_root", "dataset"]),
             train_cls.parse_args([]),
             train_seg.parse_args([]),
             eval_seg.parse_args(["checkpoint.pth"]),
@@ -41,10 +41,13 @@ class WandBLoggingTest(unittest.TestCase):
     def test_stage1_boolean_options_are_flag_based(self):
         import train_cst_pred
 
-        defaults = train_cst_pred.parse_args([])
+        defaults = train_cst_pred.parse_args(["--data_root", "dataset"])
         self.assertFalse(hasattr(defaults, "stage1_mode"))
         self.assertFalse(defaults.is_sample)
-        self.assertFalse(defaults.local)
+        self.assertEqual(defaults.data_root, "dataset")
+        self.assertFalse(hasattr(defaults, "local"))
+        self.assertFalse(hasattr(defaults, "root_local"))
+        self.assertFalse(hasattr(defaults, "root_sever"))
         self.assertFalse(defaults.use_extra_features)
         self.assertFalse(defaults.overfit_one_batch)
         self.assertFalse(defaults.use_amp)
@@ -53,7 +56,8 @@ class WandBLoggingTest(unittest.TestCase):
 
         enabled = train_cst_pred.parse_args([
             "--is_sample",
-            "--local",
+            "--data_root",
+            "dataset",
             "--use_extra_features",
             "--overfit_one_batch",
             "--use_amp",
@@ -61,7 +65,7 @@ class WandBLoggingTest(unittest.TestCase):
             "--disable_grad_diagnostics",
         ])
         self.assertTrue(enabled.is_sample)
-        self.assertTrue(enabled.local)
+        self.assertEqual(enabled.data_root, "dataset")
         self.assertTrue(enabled.use_extra_features)
         self.assertTrue(enabled.overfit_one_batch)
         self.assertTrue(enabled.use_amp)

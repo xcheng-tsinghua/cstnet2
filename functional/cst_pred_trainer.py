@@ -48,7 +48,6 @@ class CstPredTrainer(object):
         self,
         model,
         train_loader,
-        test_loader,
         checkpoint_dir,
         log_savepth,
         max_epoch,
@@ -79,7 +78,6 @@ class CstPredTrainer(object):
         self.model = model
         self.device = next(self.model.parameters()).device
         self.train_loader = train_loader
-        self.test_loader = test_loader
         self.log_savepth = log_savepth
         self.max_epoch = int(max_epoch)
         self.save_str = save_str
@@ -118,7 +116,6 @@ class CstPredTrainer(object):
             "constraint_score": {"value": float("-inf"), "epoch": -1},
         }
         self.save_dict_train = self._new_save_dict()
-        self.save_dict_test = self._new_save_dict()
 
         if not self.checkpoint_dir:
             raise ValueError("checkpoint_dir must be provided")
@@ -240,43 +237,12 @@ class CstPredTrainer(object):
         print(Fore.GREEN + "resume checkpoint configuration: exact match")
 
     def _load_model_state(self, incoming_state, require_complete, source):
-        if not isinstance(incoming_state, dict):
-            raise ValueError(f"model state in {source} is not a state_dict")
-        current_state = self.model.state_dict()
-        missing_keys = sorted(key for key in current_state if key not in incoming_state)
-        unexpected_keys = sorted(key for key in incoming_state if key not in current_state)
-        shape_mismatch = {}
-        for key in sorted(set(current_state).intersection(incoming_state)):
-            incoming_value = incoming_state[key]
-            if not torch.is_tensor(incoming_value):
-                shape_mismatch[key] = ("not-a-tensor", tuple(current_state[key].shape))
-            elif tuple(incoming_value.shape) != tuple(current_state[key].shape):
-                shape_mismatch[key] = (
-                    tuple(incoming_value.shape), tuple(current_state[key].shape)
-                )
-
-        complete = not missing_keys and not unexpected_keys and not shape_mismatch
-        print(f"loading model from: {source}")
-        print(f"missing_keys: {missing_keys}")
-        print(f"unexpected_keys: {unexpected_keys}")
-        print(f"shape_mismatch: {shape_mismatch}")
-        print(f"model load complete: {complete}")
-        if require_complete and not complete:
-            raise RuntimeError(f"resume requires an exact model state match: {source}")
-
-        compatible = {
-            key: value
-            for key, value in incoming_state.items()
-            if key in current_state and key not in shape_mismatch
-        }
-        load_result = self.model.load_state_dict(compatible, strict=False)
-        result_missing = sorted(load_result.missing_keys)
-        result_unexpected = sorted(load_result.unexpected_keys)
-        if require_complete and (result_missing or result_unexpected):
-            raise RuntimeError(
-                f"model load failed after preflight; missing={result_missing}, "
-                f"unexpected={result_unexpected}"
-            )
+        load_model_state_with_diagnostics(
+            self.model,
+            incoming_state,
+            require_complete=require_complete,
+            source=source,
+        )
 
     def _configure_train_phase(self):
         if hasattr(self.model, "set_train_phase"):
@@ -346,29 +312,20 @@ class CstPredTrainer(object):
         for global_epoch in range(self.start_epoch, self.max_epoch):
             epoch_lrs = self.current_lrs()
             start_time = time()
-            train_loss, train_metrics = self.process_epoch(global_epoch, True)
-            self.append_save_dict(train_loss, train_metrics, True)
+            train_loss, train_metrics = self.process_epoch(global_epoch)
+            train_metrics["constraint_score"] = 0.5 * (
+                float(train_metrics.get("pmt_miou", 0.0))
+                + max(0.0, float(train_metrics.get("cluster_ari_real", 0.0)))
+            )
+            self.append_save_dict(train_loss, train_metrics)
             train_time = time() - start_time
             print(Fore.BLUE + f"training time: {train_time:.4f} sec")
-
-            start_time = time()
-            test_loss, test_metrics = self.process_epoch(global_epoch, False)
-            self.append_save_dict(test_loss, test_metrics, False)
-            test_time = time() - start_time
-            print(Fore.BLUE + f"evaluation time: {test_time:.4f} sec")
-
-            constraint_score = 0.5 * (
-                float(test_metrics.get("pmt_miou", 0.0))
-                + max(0.0, float(test_metrics.get("cluster_ari_real", 0.0)))
-            )
-            test_metrics["constraint_score"] = constraint_score
-            improved = self._update_best_metrics(global_epoch, test_metrics)
+            improved = self._update_best_metrics(global_epoch, train_metrics)
 
             wandb_payload = {
-                    "epoch": global_epoch,
-                    "global_step": self.global_step,
-                    "time/train_sec": train_time,
-                    "time/test_sec": test_time,
+                "epoch": global_epoch,
+                "global_step": self.global_step,
+                "time/train_sec": train_time,
             }
             for name, value in epoch_lrs.items():
                 wandb_payload[f"lr/{name}"] = value
@@ -379,13 +336,7 @@ class CstPredTrainer(object):
                 flatten_wandb_summary_metrics("train/metric", train_metrics)
             )
             wandb_payload.update(
-                flatten_wandb_summary_metrics("test/loss", test_loss)
-            )
-            wandb_payload.update(
-                flatten_wandb_summary_metrics("test/metric", test_metrics)
-            )
-            wandb_payload.update(
-                flatten_wandb_summary_metrics("best", self.best_metrics)
+                flatten_wandb_summary_metrics("best_train", self.best_metrics)
             )
 
             # The checkpoint contains the LR that will be used by the next epoch.
@@ -401,20 +352,13 @@ class CstPredTrainer(object):
                         title="Train Primitive Confusion Matrix",
                     )
                 )
-                wandb_payload["test/confusion_matrix/primitive"] = (
-                    wandb_confusion_matrix(
-                        test_metrics["pmt_confusion_matrix"],
-                        PRIMITIVE_CLASS_NAMES,
-                        title="Test Primitive Confusion Matrix",
-                    )
-                )
                 self.wandb_run.log(wandb_payload, step=global_epoch)
 
-    def _update_best_metrics(self, epoch, test_metrics):
+    def _update_best_metrics(self, epoch, train_metrics):
         candidates = {
-            "pmt_miou": float(test_metrics.get("pmt_miou", float("-inf"))),
-            "cluster_ari": float(test_metrics.get("cluster_ari_real", float("-inf"))),
-            "constraint_score": float(test_metrics.get("constraint_score", float("-inf"))),
+            "pmt_miou": float(train_metrics.get("pmt_miou", float("-inf"))),
+            "cluster_ari": float(train_metrics.get("cluster_ari_real", float("-inf"))),
+            "constraint_score": float(train_metrics.get("constraint_score", float("-inf"))),
         }
         improved = []
         for name, value in candidates.items():
@@ -442,12 +386,16 @@ class CstPredTrainer(object):
                 "last_epoch": int(epoch),
                 "global_step": self.global_step,
                 "best_metrics": self.best_metrics,
+                "best_metrics_source": "train",
                 "checkpoint_dir": self.checkpoint_dir,
+                "data_root": self.checkpoint_args.get("data_root", ""),
+                "dataset_file_count": len(self.train_loader.dataset)
+                if hasattr(self.train_loader, "dataset")
+                else None,
             },
             "train": self.save_dict_train,
-            "test": self.save_dict_test,
         }
-        with open(self.log_savepth, "w") as file:
+        with open(self.log_savepth, "w", encoding="utf-8") as file:
             json.dump(log_payload, file, ensure_ascii=False, indent=4)
         return status
 
@@ -460,6 +408,7 @@ class CstPredTrainer(object):
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
             "best_metrics": self.best_metrics,
+            "best_metrics_source": "train",
             "args": self.checkpoint_args,
             "checkpoint_config": checkpoint_config,
             "wandb_run_id": wandb_run_id(self.wandb_run),
@@ -478,9 +427,9 @@ class CstPredTrainer(object):
             payload["scaler"] = self.scaler.state_dict()
         return payload
 
-    def append_save_dict(self, loss_summary, metric_summary, is_train):
-        target = self.save_dict_train if is_train else self.save_dict_test
-        split = "train" if is_train else "test"
+    def append_save_dict(self, loss_summary, metric_summary):
+        target = self.save_dict_train
+        split = "train"
         target["loss"].append(loss_summary)
         target["metrics"].append(metric_summary)
         target["prim_loss"].append(float(loss_summary.get("raw/pmt", 0.0)))
@@ -524,27 +473,23 @@ class CstPredTrainer(object):
         print(f"{split}: per-class precision={metric_summary.get('pmt_per_class_precision', [])}")
         print(f"{split}: per-class IoU={metric_summary.get('pmt_per_class_iou', [])}")
 
-    def _epoch_iterable(self, is_train):
+    def _epoch_iterable(self):
         if not self.overfit_one_batch:
-            return self.train_loader if is_train else self.test_loader, None
+            return self.train_loader, None
         if self.overfit_batch is None:
             self.overfit_batch = next(iter(self.train_loader))
             print(Fore.YELLOW + "overfit_one_batch=True: reuse one train batch every epoch")
         return [self.overfit_batch], 1
 
-    def process_epoch(self, global_epoch, is_train):
+    def process_epoch(self, global_epoch):
         loss_batches = []
         metric_batches = []
-        if is_train:
-            print(f"training global epoch {global_epoch}")
-            self.model.train()
-            if hasattr(self.model, "apply_train_phase_mode"):
-                self.model.apply_train_phase_mode()
-        else:
-            print(f"testing global epoch {global_epoch}")
-            self.model.eval()
+        print(f"training global epoch {global_epoch}")
+        self.model.train()
+        if hasattr(self.model, "apply_train_phase_mode"):
+            self.model.apply_train_phase_mode()
 
-        loader, total_override = self._epoch_iterable(is_train)
+        loader, total_override = self._epoch_iterable()
         total = total_override if total_override is not None else len(loader)
         progress_bar = tqdm(
             loader, total=total, desc=f"[{global_epoch}/{self.max_epoch}]{self.save_str}"
@@ -553,9 +498,9 @@ class CstPredTrainer(object):
             loss_dict, metric_dict = self.process_batch(
                 data,
                 global_epoch,
-                is_train,
+                True,
                 diagnose_gradients=(
-                    is_train and batch_index == 0 and self.enable_grad_diagnostics
+                    batch_index == 0 and self.enable_grad_diagnostics
                 ),
             )
             progress_bar.set_postfix({
@@ -570,7 +515,7 @@ class CstPredTrainer(object):
 
         loss_summary = _mean_dicts(loss_batches)
         metric_summary = _aggregate_metric_dicts(metric_batches)
-        warn_if_primitive_collapsed(metric_summary, split="train" if is_train else "test", epoch=global_epoch)
+        warn_if_primitive_collapsed(metric_summary, split="train", epoch=global_epoch)
         return loss_summary, metric_summary
 
     def _build_features(self, xyz):
@@ -596,14 +541,7 @@ class CstPredTrainer(object):
         return model_output
 
     def _active_losses(self):
-        active = {name: False for name in LOSS_NAMES}
-        if self.train_phase in ("semantic", "joint"):
-            active["pmt"] = True
-            active["cluster"] = True
-        for name in ("mad", "dim", "loc", "geom", "inst"):
-            phase_allows = self.train_phase in ("geometry", "joint")
-            active[name] = phase_allows and bool(self.enabled_losses.get(name, True))
-        return active
+        return stage1_active_losses(self.train_phase, self.enabled_losses)
 
     def process_batch(
         self,
@@ -711,6 +649,11 @@ class CstPredTrainer(object):
                 "cluster_ari_oracle_optional": oracle_ari,
             })
             metric_dict.update(gradient_metrics)
+            aggregation_weight = torch.tensor(
+                float(xyz.shape[0]), device=xyz.device, dtype=torch.float32
+            )
+            loss_dict["_aggregation_weight"] = aggregation_weight
+            metric_dict["_aggregation_weight"] = aggregation_weight
             return loss_dict, metric_dict
 
     def _gradient_diagnostics(self, loss_dict):
@@ -781,6 +724,72 @@ def warn_if_primitive_collapsed(metric_summary, split="unknown", epoch=-1, thres
         )
         return True
     return False
+
+
+def stage1_active_losses(train_phase, enabled_losses=None):
+    if train_phase not in ("semantic", "geometry", "joint"):
+        raise ValueError(f"unsupported Stage 1 train phase: {train_phase}")
+    enabled_losses = {} if enabled_losses is None else enabled_losses
+    active = {name: False for name in LOSS_NAMES}
+    if train_phase in ("semantic", "joint"):
+        active["pmt"] = True
+        active["cluster"] = True
+    for name in ("mad", "dim", "loc", "geom", "inst"):
+        phase_allows = train_phase in ("geometry", "joint")
+        active[name] = phase_allows and bool(enabled_losses.get(name, True))
+    return active
+
+
+def load_model_state_with_diagnostics(
+    model,
+    incoming_state,
+    *,
+    require_complete,
+    source,
+):
+    if not isinstance(incoming_state, dict):
+        raise ValueError(f"model state in {source} is not a state_dict")
+    current_state = model.state_dict()
+    missing_keys = sorted(key for key in current_state if key not in incoming_state)
+    unexpected_keys = sorted(key for key in incoming_state if key not in current_state)
+    shape_mismatch = {}
+    for key in sorted(set(current_state).intersection(incoming_state)):
+        incoming_value = incoming_state[key]
+        if not torch.is_tensor(incoming_value):
+            shape_mismatch[key] = ("not-a-tensor", tuple(current_state[key].shape))
+        elif tuple(incoming_value.shape) != tuple(current_state[key].shape):
+            shape_mismatch[key] = (
+                tuple(incoming_value.shape), tuple(current_state[key].shape)
+            )
+
+    complete = not missing_keys and not unexpected_keys and not shape_mismatch
+    print(f"loading model from: {source}")
+    print(f"missing_keys: {missing_keys}")
+    print(f"unexpected_keys: {unexpected_keys}")
+    print(f"shape_mismatch: {shape_mismatch}")
+    print(f"model load complete: {complete}")
+    if require_complete and not complete:
+        raise RuntimeError(f"exact model state match required: {source}")
+
+    compatible = {
+        key: value
+        for key, value in incoming_state.items()
+        if key in current_state and key not in shape_mismatch
+    }
+    load_result = model.load_state_dict(compatible, strict=False)
+    result_missing = sorted(load_result.missing_keys)
+    result_unexpected = sorted(load_result.unexpected_keys)
+    if require_complete and (result_missing or result_unexpected):
+        raise RuntimeError(
+            f"model load failed after preflight; missing={result_missing}, "
+            f"unexpected={result_unexpected}"
+        )
+    return {
+        "missing_keys": missing_keys,
+        "unexpected_keys": unexpected_keys,
+        "shape_mismatch": shape_mismatch,
+        "complete": complete,
+    }
 
 
 def _task_gradients(loss, parameters):
@@ -975,15 +984,37 @@ def _to_python(value):
 def _mean_dicts(dicts):
     if not dicts:
         return {}
+    weights = [
+        float(torch.as_tensor(item.get("_aggregation_weight", 1.0)).item())
+        for item in dicts
+    ]
     output = {}
-    keys = sorted({key for item in dicts for key in item})
+    keys = sorted({
+        key
+        for item in dicts
+        for key in item
+        if key != "_aggregation_weight"
+    })
     for key in keys:
-        values = [item[key] for item in dicts if key in item]
+        values_and_weights = [
+            (item[key], weight)
+            for item, weight in zip(dicts, weights)
+            if key in item
+        ]
+        values = [value for value, _ in values_and_weights]
+        available_weight = max(sum(weight for _, weight in values_and_weights), 1.0)
         first = values[0]
         if torch.is_tensor(first):
-            output[key] = _to_python(torch.stack([value.float() for value in values]).mean(dim=0))
+            weighted = sum(
+                value.float() * weight
+                for value, weight in values_and_weights
+            ) / available_weight
+            output[key] = _to_python(weighted)
         elif isinstance(first, (int, float)):
-            output[key] = float(sum(float(value) for value in values) / len(values))
+            output[key] = float(
+                sum(float(value) * weight for value, weight in values_and_weights)
+                / available_weight
+            )
         else:
             output[key] = _to_python(first)
     return output
