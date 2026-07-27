@@ -18,6 +18,7 @@ def main(log_path):
 
 if __name__ == '__main__':
     # main(r'C:\Users\xcheng\Desktop\attn_3dgcn_multitask_pmt_prim_cluster_2026-07-09_04-11-11.json')
-    remove_norm_(r'D:\document\DataSet\pcd_cstnet2')
+    remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd')
+    remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
 
 
