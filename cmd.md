@@ -123,16 +123,16 @@ python train_cst_pred.py --data_root D:\path\to\stage1_train --epoch 1 --bs 2 --
 
 ------------------------------- 新 stage1 训练
 1. Semantic 阶段
-nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 100 --bs 30 --model attn_3dgcn --train_phase semantic > out_s1s.log 2>&1 &
+nohup python train_cst_pred.py --train_phase semantic --epoch 100 > out_s1s.log 2>&1 &
+tail -f out_s1s.log
 
-2. Geometry 阶段
-自动从 semantic 最佳权重初始化，使用新 optimizer：
-nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 50 --bs 30 --model attn_3dgcn --train_phase geometry --geom_start_epoch 0 --geom_ramp_epochs 10 > out_s1g.log 2>&1 &
+2. Geometry 阶段, 训练 geometry，会自动加载同模型的 semantic checkpoint, 自动从 semantic 最佳权重初始化，使用新 optimizer：
+nohup python train_cst_pred.py --train_phase geometry --epoch 50 > out_s1g.log 2>&1 &
+tail -f out_s1g.log
 
-3. Joint 阶段
-自动从 geometry/last.pth 初始化：
-nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 100 --bs 30 --model attn_3dgcn --train_phase joint --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 > out_s1j.log 2>&1 &
-
+3. Joint 阶段, 训练 joint，会自动加载 geometry/last.pth：
+nohup python train_cst_pred.py --train_phase joint --epoch 100 > out_s1j.log 2>&1 &
+tail -f out_s1j.log
 
 中断后完整续训
 默认 auto 会自动读取当前阶段 last.pth，且必须保持点数、特征设置、loss 权重和 ramp 配置一致：

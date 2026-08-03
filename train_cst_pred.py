@@ -64,8 +64,8 @@ def parse_args(argv=None):
     parser.add_argument('--w_loc', default=0.02, type=float)
     parser.add_argument('--w_geom', default=0.02, type=float)
     parser.add_argument('--w_inst', default=0.005, type=float)
-    parser.add_argument('--geom_start_epoch', default=20, type=int)
-    parser.add_argument('--geom_ramp_epochs', default=20, type=int)
+    parser.add_argument('--geom_start_epoch', default=0, type=int)
+    parser.add_argument('--geom_ramp_epochs', default=10, type=int)
     parser.add_argument('--disable_mad_loss', dest='enable_mad_loss', action='store_false', default=True)
     parser.add_argument('--disable_dim_loss', dest='enable_dim_loss', action='store_false', default=True)
     parser.add_argument('--disable_loc_loss', dest='enable_loc_loss', action='store_false', default=True)
@@ -87,7 +87,7 @@ def parse_args(argv=None):
 def main(args):
     if not args.data_root:
         raise ValueError('--data_root must point to the Stage 1 training dataset directory')
-    save_str = f'{args.model}_multitask_{args.train_phase}_pmt_prim_cluster'
+    save_str = f'{args.model}_multitask_{args.train_phase}'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
     checkpoint_resolution = resolve_stage1_checkpoint(
