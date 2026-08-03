@@ -34,8 +34,7 @@ def synthetic_batch(batch_size=2, n_points=20):
     dimension = torch.rand(batch_size, n_points) + 0.2
     location = torch.randn(batch_size, n_points, 3) * 0.1
     affiliate = (torch.arange(n_points) // 4).view(1, -1).repeat(batch_size, 1)
-    category = torch.zeros(batch_size, dtype=torch.long)
-    return xyz, category, primitive, direction, dimension, location, affiliate
+    return xyz, primitive, direction, dimension, location, affiliate
 
 
 def checkpoint_args(phase, n_points=20):

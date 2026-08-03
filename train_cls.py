@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from colorama import init
 
-from data_utils.datasets import CstNet2Dataset
+from data_utils.classification_dataset import Stage2ClassificationDataset
 from functional.constraints import ground_truth_constraints_to_tensor
 from functional.checkpoint_io import safe_torch_save
 from functional.cuda_runtime import preload_cuda_nvrtc
@@ -210,7 +210,7 @@ def main(args):
     os.makedirs("model_trained", exist_ok=True)
 
     data_root = args.root_local if args.local else args.root_sever
-    train_loader, test_loader = CstNet2Dataset.create_dataloader(
+    train_loader, test_loader = Stage2ClassificationDataset.create_dataloaders(
         root=data_root,
         bs=args.bs,
         n_points=args.n_points,

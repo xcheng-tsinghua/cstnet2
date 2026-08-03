@@ -6,7 +6,7 @@ import argparse
 from datetime import datetime
 import torch
 
-from data_utils.datasets import CstNet2Dataset
+from data_utils.stage1_dataset import Stage1ConstraintDataset
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
 from functional.wandb_utils import (
@@ -85,7 +85,7 @@ def main(args):
     os.makedirs('model_trained', exist_ok=True)
 
     # data
-    train_loader = CstNet2Dataset.create_directory_dataloader(
+    train_loader = Stage1ConstraintDataset.create_dataloader(
         root=args.data_root,
         bs=args.bs,
         n_points=args.n_points,

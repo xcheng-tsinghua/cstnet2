@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import gen_cst_pred
-from data_utils.datasets import CstNet2Dataset
+from data_utils.stage1_dataset import Stage1ConstraintDataset
 from functional.constraints import (
     assemble_constraints_from_stage1,
     constraints_to_tensor,
@@ -118,12 +118,12 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             np.savetxt(txt_path, sample)
             np.save(str(txt_path) + ".npy", np.zeros((8, 15), dtype=np.float64))
 
-            dataset = CstNet2Dataset(temporary, is_train=True, n_points=4)
+            dataset = Stage1ConstraintDataset(temporary, n_points=4)
             fields = dataset[0]
 
-        self.assertEqual(len(fields), 7)
+        self.assertEqual(len(fields), 6)
         self.assertEqual(fields[0].shape, (4, 3))
-        np.testing.assert_array_equal(fields[5], np.full((4, 3), 7.0))
+        np.testing.assert_array_equal(fields[4], np.full((4, 3), 7.0))
 
     def test_stage1_directory_loader_recursively_reads_every_txt(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
@@ -146,7 +146,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
                 np.savetxt(path, current)
             np.save(root / "ignored.npy", np.zeros((8, 12), dtype=np.float64))
 
-            loader = CstNet2Dataset.create_directory_dataloader(
+            loader = Stage1ConstraintDataset.create_dataloader(
                 root=temporary,
                 bs=2,
                 n_points=4,

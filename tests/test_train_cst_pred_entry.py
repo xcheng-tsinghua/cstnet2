@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 import train_cst_pred
+from data_utils.stage1_dataset import Stage1ConstraintDataset
 
 
 class TrainStage1EntryTest(unittest.TestCase):
@@ -60,6 +61,10 @@ class TrainStage1EntryTest(unittest.TestCase):
         trainer_kwargs = trainer_class.call_args.kwargs
         self.assertNotIn("test_loader", trainer_kwargs)
         self.assertEqual(len(trainer_kwargs["train_loader"].dataset), 2)
+        self.assertIsInstance(
+            trainer_kwargs["train_loader"].dataset,
+            Stage1ConstraintDataset,
+        )
 
 
 if __name__ == "__main__":

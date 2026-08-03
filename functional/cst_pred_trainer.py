@@ -550,7 +550,7 @@ class CstPredTrainer(object):
         is_train,
         diagnose_gradients=False,
     ):
-        """CstNet2Dataset order: xyz, cls, pmt, mad, dim, loc, affiliate_idx."""
+        """Stage1ConstraintDataset order: xyz, pmt, mad, dim, loc, affiliate_idx."""
         with torch.set_grad_enabled(is_train):
             if is_train:
                 try:
@@ -559,10 +559,10 @@ class CstPredTrainer(object):
                     self.optimizer.zero_grad()
 
             xyz = data_batch[0].float().to(self.device, non_blocking=True)
-            pmt_gt = data_batch[2].long().to(self.device, non_blocking=True)
-            mad_gt = data_batch[3].float().to(self.device, non_blocking=True)
-            dim_gt = data_batch[4].float().to(self.device, non_blocking=True)
-            loc_gt = data_batch[5].float().to(self.device, non_blocking=True)
+            pmt_gt = data_batch[1].long().to(self.device, non_blocking=True)
+            mad_gt = data_batch[2].float().to(self.device, non_blocking=True)
+            dim_gt = data_batch[3].float().to(self.device, non_blocking=True)
+            loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
             affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
             extra_fea = self._build_features(xyz)
             amp_context = (

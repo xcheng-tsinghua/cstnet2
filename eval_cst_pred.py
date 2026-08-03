@@ -10,7 +10,7 @@ from datetime import datetime
 import torch
 from colorama import Fore, init
 
-from data_utils.datasets import CstNet2Dataset
+from data_utils.stage1_dataset import Stage1ConstraintDataset
 from functional.cst_pred_evaluator import CstPredEvaluator
 from functional.cst_pred_trainer import load_model_state_with_diagnostics
 from functional.point_features import stage1_feature_dim
@@ -158,7 +158,7 @@ def main(args):
         require_complete=True,
         source=args.checkpoint,
     )
-    data_loader = CstNet2Dataset.create_directory_dataloader(
+    data_loader = Stage1ConstraintDataset.create_dataloader(
         root=args.data_root,
         bs=args.bs,
         n_points=n_points,

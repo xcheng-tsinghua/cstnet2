@@ -1,7 +1,7 @@
 """Generate point-cloud files containing offline Stage 1 constraint predictions.
 
 Only the first three columns of every input point are used for inference.  The
-output core follows ``CstNet2Dataset`` exactly:
+output core follows the shared 12-column constraint point layout exactly:
 
     xyz, pmt, mad, dim, loc, affiliate_idx
 

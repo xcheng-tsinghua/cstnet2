@@ -71,7 +71,7 @@ class DistributedEvalSampler(Sampler[int]):
         return (len(self.dataset) - 1 - self.rank) // self.world_size + 1
 
 
-class MFCADSegmentationDataset(Dataset):
+class Stage2SegmentationDataset(Dataset):
     """Read normalized 14-column MFCAD++ point clouds with Stage 1 constraints."""
 
     def __init__(
@@ -221,14 +221,14 @@ class MFCADSegmentationDataset(Dataset):
             "label_map_path": label_map_path,
             "use_npy_cache": use_npy_cache,
         }
-        train_dataset = MFCADSegmentationDataset(split="train", **common)
-        val_dataset = MFCADSegmentationDataset(split="val", **common)
+        train_dataset = Stage2SegmentationDataset(split="train", **common)
+        val_dataset = Stage2SegmentationDataset(split="val", **common)
         try:
-            test_dataset = MFCADSegmentationDataset(split="test", **common)
+            test_dataset = Stage2SegmentationDataset(split="test", **common)
         except FileNotFoundError:
             test_dataset = None
 
-        def make_loader(dataset: MFCADSegmentationDataset, train: bool) -> DataLoader:
+        def make_loader(dataset: Stage2SegmentationDataset, train: bool) -> DataLoader:
             if distributed and train:
                 sampler = DistributedSampler(dataset, shuffle=True)
             elif distributed:
@@ -250,3 +250,7 @@ class MFCADSegmentationDataset(Dataset):
         val_loader = make_loader(val_dataset, train=False)
         test_loader = make_loader(test_dataset, train=False) if test_dataset is not None else None
         return train_loader, val_loader, test_loader
+
+
+# Compatibility for external scripts; project entry points use the task-specific name.
+MFCADSegmentationDataset = Stage2SegmentationDataset

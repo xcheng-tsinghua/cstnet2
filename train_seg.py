@@ -12,7 +12,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
-from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
+from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, Stage2SegmentationDataset
 from functional.cuda_runtime import preload_cuda_nvrtc
 from functional.segmentation_loss import compute_training_class_statistics
 from functional.stage2_seg_trainer import Stage2SegmentationTrainer
@@ -197,7 +197,7 @@ def main(args: argparse.Namespace) -> None:
         if nvrtc_library is not None:
             print(f"CUDA NVRTC: preloaded {nvrtc_library}")
 
-    train_loader, val_loader, test_loader = MFCADSegmentationDataset.create_dataloaders(
+    train_loader, val_loader, test_loader = Stage2SegmentationDataset.create_dataloaders(
         root=args.data_root,
         batch_size=args.batch_size,
         n_points=args.n_points,

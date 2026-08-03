@@ -222,10 +222,10 @@ The model outputs two types of data:
 
 ### 4.3 Dataset Fields for Stage 1
 
-The training dataset can provide the following fields. See the `CstNet2Dataset` class in:
+The training dataset can provide the following fields. See the `Stage1ConstraintDataset` class in:
 
 ```text
-data_utils/datasets.py
+data_utils/stage1_dataset.py
 ```
 
 Dataset fields:

@@ -128,8 +128,11 @@ cstnet2/
 |-- eval_model.py                  EvalScope helper script
 |-- cmd.txt                        Historical command notes
 |-- data_utils/
-|   |-- datasets.py                Dataset loaders and constraint utilities
-|   |-- mfcad_seg_dataset.py       MFCAD++ segmentation dataset loader
+|   |-- constraint_dataset_common.py Shared 12-column TXT parsing
+|   |-- stage1_dataset.py          Stage 1 constraint dataset
+|   |-- classification_dataset.py  Stage 2 classification dataset
+|   |-- mfcad_seg_dataset.py       Stage 2 segmentation dataset
+|   |-- datasets.py                Legacy geometry dataset utilities
 |   |-- mfcad_label_map.json       MFCAD++ label names and colors
 |   |-- cone_gen.py                Synthetic cone data helper
 |   |-- vis.py                     Visualization helpers
@@ -158,7 +161,26 @@ cstnet2/
 
 ## Data Format
 
-`CstNet2Dataset` expects this directory layout:
+The three tasks use separate public dataset classes:
+
+```text
+Stage1ConstraintDataset
+Stage2ClassificationDataset
+Stage2SegmentationDataset
+```
+
+Their task-specific sample contracts are:
+
+```text
+Stage 1:               xyz, pmt, direction, dimension, location, affiliate_idx
+Stage 2 classification: xyz, cls, pmt, direction, dimension, location
+Stage 2 segmentation:   dictionary with xyz, constraints, masks, labels, face ids
+```
+
+`Stage1ConstraintDataset` recursively reads every TXT file below the supplied
+training or evaluation directory. It does not require split or class folders.
+
+`Stage2ClassificationDataset` expects this directory layout:
 
 ```text
 dataset_root/

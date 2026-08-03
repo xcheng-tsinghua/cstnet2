@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - progress bars are optional
     def tqdm(iterable, **_kwargs):
         return iterable
 
-from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, MFCADSegmentationDataset
+from data_utils.mfcad_seg_dataset import DEFAULT_LABEL_MAP, Stage2SegmentationDataset
 from functional.segmentation_loss import WeightedSegmentationLoss
 from functional.segmentation_metrics import SegmentationMetrics
 from functional.wandb_utils import (
@@ -64,7 +64,7 @@ def main(args: argparse.Namespace) -> None:
     if missing:
         raise ValueError(f"incomplete segmentation checkpoint; missing: {missing}")
 
-    dataset = MFCADSegmentationDataset(
+    dataset = Stage2SegmentationDataset(
         root=args.data_root,
         split=args.split,
         n_points=args.n_points,
