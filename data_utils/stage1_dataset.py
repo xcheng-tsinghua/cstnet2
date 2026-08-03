@@ -48,7 +48,7 @@ class Stage1ConstraintDataset(Dataset):
             rng=rng,
         )
         xyz, pmt, direction, dimension, location, affiliate_idx = (
-            split_constraint_columns(point_set)
+            split_constraint_columns(point_set, True)
         )
         if self.data_augmentation:
             xyz = xyz + np.random.normal(0.0, 0.02, size=xyz.shape)
