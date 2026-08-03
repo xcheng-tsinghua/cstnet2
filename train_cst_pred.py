@@ -20,9 +20,9 @@ from colorama import init, Fore, Back
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=50, help='batch size in training')
-    parser.add_argument('--epoch', default=500, type=int, help='number of epoch in training')
+    parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=1e-4, type=float, help='learning rate in training')
-    parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
+    parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
     parser.add_argument('--model', default='attn_3dgcn', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
@@ -31,14 +31,14 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        required=True,
+        default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd',
         help='directory recursively containing every Stage 1 training .txt sample',
     )
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
-    parser.add_argument('--use_extra_features', action='store_true', default=False)
+    parser.add_argument('--disable_extra_features', action='store_true', default=False)
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
@@ -96,7 +96,7 @@ def main(args):
 
     # trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    use_extra_features = args.use_extra_features
+    use_extra_features = not args.disable_extra_features
     channel_fea = stage1_feature_dim(use_extra_features)
     loss_weights = {
         'w_pmt': args.w_pmt,
