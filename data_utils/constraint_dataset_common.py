@@ -57,21 +57,12 @@ def sample_without_replacement(
     return point_set[indices]
 
 
-def split_constraint_columns(point_set: np.ndarray, is_contain_normal=False):
-    """Split xyz, primitive attributes, and primitive-instance affiliation."""
-    if is_contain_normal:
-        xyz = point_set[:, 0:3]
-        pmt = point_set[:, 3].astype(np.int32)
-        direction = point_set[:, 4:7]
-        dimension = point_set[:, 7]
-        normal = point_set[:, 8:11]
-        location = point_set[:, 11:14]
-        affiliate_idx = point_set[:, 14].astype(np.int32)
-    else:
-        xyz = point_set[:, 0:3]
-        pmt = point_set[:, 3].astype(np.int32)
-        direction = point_set[:, 4:7]
-        dimension = point_set[:, 7]
-        location = point_set[:, 8:11]
-        affiliate_idx = point_set[:, 11].astype(np.int32)
+def split_constraint_columns(point_set: np.ndarray):
+    """Split the normal-free 12-column constraint layout."""
+    xyz = point_set[:, 0:3]
+    pmt = point_set[:, 3].astype(np.int32)
+    direction = point_set[:, 4:7]
+    dimension = point_set[:, 7]
+    location = point_set[:, 8:11]
+    affiliate_idx = point_set[:, 11].astype(np.int32)
     return xyz, pmt, direction, dimension, location, affiliate_idx

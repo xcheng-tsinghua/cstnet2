@@ -333,9 +333,15 @@ Useful options:
 --data_root PATH         recursively use every TXT file for training
 --train_phase semantic|geometry|joint
 --is_sample              run a small sampled dataloader for debugging
---resume_checkpoint PATH resume model, optimizer, scheduler, and epoch state
---init_from_checkpoint PATH load model weights only for a new training run
+--checkpoint_root PATH   checkpoint root, default model_trained/stage1
+--checkpoint_policy auto|restart|resume
 ```
+
+Stage 1 checkpoint paths are derived from `--model` and `--train_phase`.
+With the default `auto` policy, an existing current-phase `last.pth` is fully
+resumed. Otherwise semantic starts from scratch, geometry initializes from the
+semantic checkpoint, and joint initializes from `geometry/last.pth`. Use
+`restart` to ignore the current-phase checkpoint or `resume` to require it.
 
 All training boolean options are value-less flags. For example, use
 `--is_sample`, `--overfit_one_batch`, or `--use_amp` to enable an option; do not append
@@ -370,9 +376,9 @@ Stage 1 uses the multitask model exclusively. Its three training phases write
 to separate, compatible checkpoint directories. For example:
 
 ```text
-model_trained/attn_3dgcn_multitask_semantic_pmt_prim_cluster/
-model_trained/attn_3dgcn_multitask_geometry_pmt_prim_cluster/
-model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/
+model_trained/stage1/attn_3dgcn/semantic/
+model_trained/stage1/attn_3dgcn/geometry/
+model_trained/stage1/attn_3dgcn/joint/
 ```
 
 ### Evaluate Stage 1
@@ -382,7 +388,7 @@ Evaluate a checkpoint on every `.txt` file below a separate dataset directory:
 ```bash
 python eval_cst_pred.py \
   --data_root /path/to/stage1_eval \
-  --checkpoint model_trained/pointnet2_multitask_joint_pmt_prim_cluster/last.pth \
+  --checkpoint model_trained/stage1/pointnet2/joint/last.pth \
   --bs 32 \
   --seed 0 \
   --workers 8

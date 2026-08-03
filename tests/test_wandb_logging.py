@@ -48,17 +48,20 @@ class WandBLoggingTest(unittest.TestCase):
         self.assertFalse(hasattr(defaults, "local"))
         self.assertFalse(hasattr(defaults, "root_local"))
         self.assertFalse(hasattr(defaults, "root_sever"))
-        self.assertFalse(defaults.use_extra_features)
+        self.assertFalse(defaults.disable_extra_features)
         self.assertFalse(defaults.overfit_one_batch)
         self.assertFalse(defaults.use_amp)
         self.assertTrue(defaults.enable_mad_loss)
         self.assertTrue(defaults.enable_grad_diagnostics)
+        self.assertEqual(defaults.checkpoint_policy, "auto")
+        self.assertFalse(hasattr(defaults, "resume_checkpoint"))
+        self.assertFalse(hasattr(defaults, "init_from_checkpoint"))
 
         enabled = train_cst_pred.parse_args([
             "--is_sample",
             "--data_root",
             "dataset",
-            "--use_extra_features",
+            "--disable_extra_features",
             "--overfit_one_batch",
             "--use_amp",
             "--disable_mad_loss",
@@ -66,7 +69,7 @@ class WandBLoggingTest(unittest.TestCase):
         ])
         self.assertTrue(enabled.is_sample)
         self.assertEqual(enabled.data_root, "dataset")
-        self.assertTrue(enabled.use_extra_features)
+        self.assertTrue(enabled.disable_extra_features)
         self.assertTrue(enabled.overfit_one_batch)
         self.assertTrue(enabled.use_amp)
         self.assertFalse(enabled.enable_mad_loss)

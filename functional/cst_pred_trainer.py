@@ -65,16 +65,20 @@ class CstPredTrainer(object):
         grad_clip=1.0,
         train_phase="semantic",
         enabled_losses=None,
-        resume_checkpoint="",
-        init_from_checkpoint="",
+        checkpoint_action="scratch",
+        checkpoint_source="",
         checkpoint_args=None,
         joint_backbone_lr_scale=0.1,
         use_amp=False,
         enable_grad_diagnostics=True,
     ):
         super().__init__()
-        if resume_checkpoint and init_from_checkpoint:
-            raise ValueError("--resume_checkpoint and --init_from_checkpoint are mutually exclusive")
+        if checkpoint_action not in ("scratch", "resume", "init"):
+            raise ValueError(f"unsupported checkpoint action: {checkpoint_action}")
+        if checkpoint_action in ("resume", "init") and not checkpoint_source:
+            raise ValueError(
+                f"checkpoint action {checkpoint_action!r} requires a checkpoint source"
+            )
         self.model = model
         self.device = next(self.model.parameters()).device
         self.train_loader = train_loader
@@ -94,8 +98,8 @@ class CstPredTrainer(object):
         self.grad_clip = grad_clip
         self.train_phase = train_phase
         self.enabled_losses = {} if enabled_losses is None else dict(enabled_losses)
-        self.resume_checkpoint = resume_checkpoint
-        self.init_from_checkpoint = init_from_checkpoint
+        self.checkpoint_action = checkpoint_action
+        self.checkpoint_source = str(checkpoint_source) if checkpoint_source else ""
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_args = {} if checkpoint_args is None else dict(checkpoint_args)
         self.joint_backbone_lr_scale = float(joint_backbone_lr_scale)
@@ -137,21 +141,21 @@ class CstPredTrainer(object):
 
     def _initialize_training(self, lr):
         resume_state = None
-        if self.resume_checkpoint:
-            resume_state = self._load_checkpoint_file(self.resume_checkpoint)
-            self._validate_checkpoint_mode(resume_state, self.resume_checkpoint)
-            self._validate_full_checkpoint(resume_state, self.resume_checkpoint)
+        if self.checkpoint_action == "resume":
+            resume_state = self._load_checkpoint_file(self.checkpoint_source)
+            self._validate_checkpoint_mode(resume_state, self.checkpoint_source)
+            self._validate_full_checkpoint(resume_state, self.checkpoint_source)
             self._validate_resume_config(resume_state)
             self._load_model_state(
-                resume_state["model"], require_complete=True, source=self.resume_checkpoint
+                resume_state["model"], require_complete=True, source=self.checkpoint_source
             )
-        elif self.init_from_checkpoint:
-            init_state = self._load_checkpoint_file(self.init_from_checkpoint)
-            self._validate_checkpoint_mode(init_state, self.init_from_checkpoint)
+        elif self.checkpoint_action == "init":
+            init_state = self._load_checkpoint_file(self.checkpoint_source)
+            self._validate_checkpoint_mode(init_state, self.checkpoint_source)
             self._load_model_state(
                 _extract_model_state(init_state),
                 require_complete=True,
-                source=self.init_from_checkpoint,
+                source=self.checkpoint_source,
             )
         else:
             print(Fore.BLACK + Back.CYAN + "training Stage 1 from scratch")
@@ -179,14 +183,14 @@ class CstPredTrainer(object):
             print(
                 Fore.WHITE
                 + Back.CYAN
-                + f"resumed from {self.resume_checkpoint}: next_epoch={self.start_epoch}, "
+                + f"resumed from {self.checkpoint_source}: next_epoch={self.start_epoch}, "
                 f"global_step={self.global_step}, lr={self.current_lrs()}"
             )
-        elif self.init_from_checkpoint:
+        elif self.checkpoint_action == "init":
             print(
                 Fore.WHITE
                 + Back.CYAN
-                + f"initialized model only from {self.init_from_checkpoint}; optimizer is new"
+                + f"initialized model only from {self.checkpoint_source}; optimizer is new"
             )
 
     @staticmethod
@@ -207,7 +211,7 @@ class CstPredTrainer(object):
         if missing:
             raise ValueError(
                 f"resume checkpoint is incomplete ({source}); missing fields: {missing}. "
-                "Use --init_from_checkpoint for model-only/legacy weights."
+                "Automatic resume requires a complete Stage 1 training checkpoint."
             )
 
     @staticmethod

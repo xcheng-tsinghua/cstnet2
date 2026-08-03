@@ -64,7 +64,12 @@ def checkpoint_args(phase, n_points=20):
 
 
 def make_trainer(
-    root, phase, max_epoch=1, resume="", init_from="", args_override=None
+    root,
+    phase,
+    max_epoch=1,
+    checkpoint_action="scratch",
+    checkpoint_source="",
+    args_override=None,
 ):
     batch = synthetic_batch()
     return CstPredTrainer(
@@ -83,8 +88,8 @@ def make_trainer(
         geom_start_epoch=0,
         geom_ramp_epochs=4,
         joint_backbone_lr_scale=0.1,
-        resume_checkpoint=resume,
-        init_from_checkpoint=init_from,
+        checkpoint_action=checkpoint_action,
+        checkpoint_source=checkpoint_source,
         enable_grad_diagnostics=False,
     )
 
@@ -205,7 +210,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             ]
             self.assertTrue(frozen_backbone)
 
-    def test_checkpoint_resume_and_model_only_init(self):
+    def test_checkpoint_resume_and_previous_phase_init(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
             first = make_trainer(root, "joint", max_epoch=1)
             initial_lrs = [group["lr"] for group in first.optimizer.param_groups]
@@ -241,12 +246,20 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             first_state["checkpoint_config"]["stage1_mode"] = "multitask"
             torch.save(first_state, legacy_multitask_path)
             legacy_resumed = make_trainer(
-                root, "joint", max_epoch=2, resume=legacy_multitask_path
+                root,
+                "joint",
+                max_epoch=2,
+                checkpoint_action="resume",
+                checkpoint_source=legacy_multitask_path,
             )
             self.assertEqual(legacy_resumed.start_epoch, 1)
 
             resumed = make_trainer(
-                root, "joint", max_epoch=2, resume=last_path
+                root,
+                "joint",
+                max_epoch=2,
+                checkpoint_action="resume",
+                checkpoint_source=last_path,
             )
             self.assertEqual(resumed.start_epoch, 1)
             self.assertEqual(resumed.global_step, 1)
@@ -269,12 +282,17 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                     root,
                     "joint",
                     max_epoch=2,
-                    resume=last_path,
+                    checkpoint_action="resume",
+                    checkpoint_source=last_path,
                     args_override=mismatched_args,
                 )
 
             initialized = make_trainer(
-                root, "joint", max_epoch=1, init_from=last_path
+                root,
+                "joint",
+                max_epoch=1,
+                checkpoint_action="init",
+                checkpoint_source=last_path,
             )
             self.assertEqual(initialized.start_epoch, 0)
             self.assertEqual(initialized.global_step, 0)

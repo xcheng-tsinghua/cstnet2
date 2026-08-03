@@ -115,28 +115,32 @@ nohup python train_cls.py --bs=20 --epoch=500 --model=constraint_aware --save_na
 nohup python train_cls.py --bs=20 --epoch=500 > out.log 2>&1 &
 
 
-nohup python train_cst_pred.py --bs=40 > out_s1.log 2>&1 &
+nohup python train_cst_pred.py --data_root /path/to/stage1_train --bs=40 > out_s1.log 2>&1 &
 tail -f out_s1.log
 
-python train_cst_pred.py --local --epoch 1 --bs 2 --n_points 512 --workers 0 --is_sample --train_phase semantic --use_extra_features
+python train_cst_pred.py --data_root D:\path\to\stage1_train --epoch 1 --bs 2 --n_points 512 --workers 0 --is_sample --train_phase semantic
 
 
 ------------------------------- 新 stage1 训练
 1. Semantic 阶段
-nohup python train_cst_pred.py --epoch 100 --bs 30 --model attn_3dgcn --train_phase semantic --use_extra_features > out_s1s.log 2>&1 &
+nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 100 --bs 30 --model attn_3dgcn --train_phase semantic > out_s1s.log 2>&1 &
 
 2. Geometry 阶段
-从 semantic 最佳权重初始化，使用新 optimizer：
-nohup python train_cst_pred.py --epoch 50 --bs 30 --model attn_3dgcn --train_phase geometry --use_extra_features --geom_start_epoch 0 --geom_ramp_epochs 10 --init_from_checkpoint model_trained/attn_3dgcn_multitask_semantic_pmt_prim_cluster/best_pmt_miou.pth > out_s1g.log 2>&1 &
+自动从 semantic 最佳权重初始化，使用新 optimizer：
+nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 50 --bs 30 --model attn_3dgcn --train_phase geometry --geom_start_epoch 0 --geom_ramp_epochs 10 > out_s1g.log 2>&1 &
 
 3. Joint 阶段
-nohup python train_cst_pred.py --epoch 100 --bs 30 --model attn_3dgcn --train_phase joint --use_extra_features --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 --init_from_checkpoint model_trained/attn_3dgcn_multitask_geometry_pmt_prim_cluster/best_constraint_score.pth > out_s1j.log 2>&1 &
+自动从 geometry/last.pth 初始化：
+nohup python train_cst_pred.py --data_root /path/to/stage1_train --epoch 100 --bs 30 --model attn_3dgcn --train_phase joint --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 > out_s1j.log 2>&1 &
 
 
 中断后完整续训
-必须保持 phase、点数、特征设置、loss 权重和 ramp 配置一致：
-python train_cst_pred.py --epoch 200 --bs 20 --model attn_3dgcn --train_phase joint --use_extra_features --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1 --resume_checkpoint model_trained/attn_3dgcn_multitask_joint_pmt_prim_cluster/last.pth
-其中 resume 的 --epoch 200 表示训练到 global epoch 200，不是额外训练 200 轮。
+默认 auto 会自动读取当前阶段 last.pth，且必须保持点数、特征设置、loss 权重和 ramp 配置一致：
+python train_cst_pred.py --data_root /path/to/stage1_train --epoch 200 --bs 20 --model attn_3dgcn --train_phase joint --geom_start_epoch 0 --geom_ramp_epochs 10 --joint_backbone_lr_scale 0.1
+其中 --epoch 200 表示训练到 global epoch 200，不是额外训练 200 轮。
+
+强制重新开始当前阶段：添加 --checkpoint_policy restart
+强制要求续训当前阶段：添加 --checkpoint_policy resume
 
 One-batch overfit
 python train_cst_pred.py --epoch 20 --bs 20 --train_phase joint --overfit_one_batch --geom_start_epoch 0 --geom_ramp_epochs 5

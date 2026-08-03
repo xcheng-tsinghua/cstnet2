@@ -9,6 +9,10 @@ import torch
 from data_utils.stage1_dataset import Stage1ConstraintDataset
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
+from functional.stage1_checkpoint_policy import (
+    CHECKPOINT_POLICIES,
+    resolve_stage1_checkpoint,
+)
 from functional.wandb_utils import (
     initialize_wandb_run,
     read_wandb_run_id_from_checkpoint,
@@ -42,10 +46,17 @@ def parse_args(argv=None):
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
-    parser.add_argument('--resume_checkpoint', default='', type=str,
-                        help='resume model, optimizer, scheduler, epoch and all training state')
-    parser.add_argument('--init_from_checkpoint', default='', type=str,
-                        help='load model weights only and create a new optimizer')
+    parser.add_argument(
+        '--checkpoint_root',
+        default=os.path.join('model_trained', 'stage1'),
+        type=str,
+    )
+    parser.add_argument(
+        '--checkpoint_policy',
+        default='auto',
+        choices=CHECKPOINT_POLICIES,
+        help='auto-resume, restart the selected phase, or require a resume checkpoint',
+    )
     parser.add_argument('--w_pmt', default=1.0, type=float)
     parser.add_argument('--w_cluster', default=0.5, type=float)
     parser.add_argument('--w_mad', default=0.02, type=float)
@@ -74,12 +85,22 @@ def parse_args(argv=None):
 
 
 def main(args):
-    if args.resume_checkpoint and args.init_from_checkpoint:
-        raise ValueError('--resume_checkpoint and --init_from_checkpoint are mutually exclusive')
     if not args.data_root:
         raise ValueError('--data_root must point to the Stage 1 training dataset directory')
     save_str = f'{args.model}_multitask_{args.train_phase}_pmt_prim_cluster'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
+
+    checkpoint_resolution = resolve_stage1_checkpoint(
+        checkpoint_root=args.checkpoint_root,
+        model=args.model,
+        phase=args.train_phase,
+        policy=args.checkpoint_policy,
+    )
+    checkpoint_resolution.print_summary(
+        model=args.model,
+        phase=args.train_phase,
+        policy=args.checkpoint_policy,
+    )
 
     os.makedirs('log', exist_ok=True)
     os.makedirs('model_trained', exist_ok=True)
@@ -119,30 +140,46 @@ def main(args):
         channel_fea=channel_fea,
     ).to(device)
     parameter_count = sum(parameter.numel() for parameter in stage1_model.parameters())
-    wandb_resume_id = read_wandb_run_id_from_checkpoint(args.resume_checkpoint)
-    if args.resume_checkpoint and not wandb_resume_id:
+    resume_source = (
+        checkpoint_resolution.source
+        if checkpoint_resolution.action == 'resume'
+        else None
+    )
+    wandb_resume_id = read_wandb_run_id_from_checkpoint(resume_source)
+    if resume_source and not wandb_resume_id:
         print(
             Fore.YELLOW
-            + 'WARNING: resume checkpoint has no wandb_run_id; '
-            'a new WandB Run will be created for this legacy checkpoint'
+            + 'WARNING: automatically selected resume checkpoint has no wandb_run_id; '
+            'a new WandB Run will be created'
         )
+    checkpoint_args = {
+        **vars(args),
+        'use_extra_features': use_extra_features,
+    }
     run = initialize_wandb_run(
         project=args.wandb_project,
         entity=args.wandb_entity,
         name=args.wandb_run_name if args.wandb_run_name else save_str,
         run_id=wandb_resume_id,
         config={
-            **vars(args),
+            **checkpoint_args,
             'parameter_count': parameter_count,
             'input_feature_dim': channel_fea,
             'device': str(device),
             'dataset_file_count': len(train_loader.dataset),
+            'checkpoint_action': checkpoint_resolution.action,
+            'checkpoint_source': (
+                str(checkpoint_resolution.source)
+                if checkpoint_resolution.source is not None
+                else ''
+            ),
+            'checkpoint_dir': str(checkpoint_resolution.checkpoint_dir),
         },
     )
     trainer = CstPredTrainer(
         model=stage1_model,
         train_loader = train_loader,
-        checkpoint_dir=os.path.join('model_trained', save_str),
+        checkpoint_dir=str(checkpoint_resolution.checkpoint_dir),
         log_savepth = os.path.join('log', save_str + f'_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json'),
         max_epoch = args.epoch,
         lr = args.lr,
@@ -158,9 +195,13 @@ def main(args):
         overfit_one_batch=args.overfit_one_batch,
         train_phase=args.train_phase,
         enabled_losses=enabled_losses,
-        resume_checkpoint=args.resume_checkpoint,
-        init_from_checkpoint=args.init_from_checkpoint,
-        checkpoint_args=vars(args),
+        checkpoint_action=checkpoint_resolution.action,
+        checkpoint_source=(
+            str(checkpoint_resolution.source)
+            if checkpoint_resolution.source is not None
+            else ''
+        ),
+        checkpoint_args=checkpoint_args,
         joint_backbone_lr_scale=args.joint_backbone_lr_scale,
         use_amp=args.use_amp,
         enable_grad_diagnostics=args.enable_grad_diagnostics,
