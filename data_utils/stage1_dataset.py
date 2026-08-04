@@ -20,7 +20,7 @@ class Stage1ConstraintDataset(Dataset):
     def __init__(
         self,
         root: str | Path,
-        n_points: int = 2000,
+        n_points: int = 2048,
         data_augmentation: bool = False,
         sample_seed: int | None = None,
     ):

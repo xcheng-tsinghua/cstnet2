@@ -45,15 +45,59 @@ def sample_without_replacement(
     path: str | Path,
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
+    # if n_points <= 0:
+    #     raise ValueError("n_points must be positive")
+    # if point_set.shape[0] < n_points:
+    #     raise ValueError(
+    #         f"insufficient points in sample {path}: "
+    #         f"current={point_set.shape[0]}, required={n_points}"
+    #     )
+    # chooser = np.random.choice if rng is None else rng.choice
+    # indices = chooser(point_set.shape[0], n_points, replace=False)
+    # return point_set[indices]
     if n_points <= 0:
         raise ValueError("n_points must be positive")
-    if point_set.shape[0] < n_points:
-        raise ValueError(
-            f"insufficient points in sample {path}: "
-            f"current={point_set.shape[0]}, required={n_points}"
-        )
+
+    current_points = point_set.shape[0]
+
+    if current_points == 0:
+        raise ValueError(f"empty point set in sample {path}")
+
     chooser = np.random.choice if rng is None else rng.choice
-    indices = chooser(point_set.shape[0], n_points, replace=False)
+
+    if current_points >= n_points:
+        indices = chooser(current_points, n_points, replace=False)
+        return point_set[indices]
+
+    warnings.warn(
+        f"insufficient points in sample {path}: "
+        f"current={current_points}, required={n_points}; "
+        f"duplicate points will be sampled",
+        category=RuntimeWarning,
+        stacklevel=2,
+    )
+
+    # 先保留所有原始点，再通过有放回采样补足缺少的点。
+    additional_count = n_points - current_points
+    additional_indices = chooser(
+        current_points,
+        additional_count,
+        replace=True,
+    )
+
+    indices = np.concatenate(
+        [
+            np.arange(current_points),
+            additional_indices,
+        ]
+    )
+
+    # 打乱顺序，避免重复点集中在数组末尾。
+    if rng is None:
+        np.random.shuffle(indices)
+    else:
+        rng.shuffle(indices)
+
     return point_set[indices]
 
 
