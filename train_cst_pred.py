@@ -26,7 +26,7 @@ def parse_args(argv=None):
     parser.add_argument('--bs', type=int, default=50, help='batch size in training')
     parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=1e-4, type=float, help='learning rate in training')
-    parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
+    parser.add_argument('--n_points', type=int, default=2000, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
     parser.add_argument('--model', default='attn_3dgcn', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
