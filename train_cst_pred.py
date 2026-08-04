@@ -23,7 +23,7 @@ from colorama import init, Fore, Back
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--bs', type=int, default=50, help='batch size in training')
+    parser.add_argument('--bs', type=int, default=40, help='batch size in training')
     parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=1e-4, type=float, help='learning rate in training')
     parser.add_argument('--n_points', type=int, default=2000, help='Point Number')

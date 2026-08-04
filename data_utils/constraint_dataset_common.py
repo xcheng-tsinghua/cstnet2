@@ -69,13 +69,13 @@ def sample_without_replacement(
         indices = chooser(current_points, n_points, replace=False)
         return point_set[indices]
 
-    warnings.warn(
-        f"insufficient points in sample {path}: "
-        f"current={current_points}, required={n_points}; "
-        f"duplicate points will be sampled",
-        category=RuntimeWarning,
-        stacklevel=2,
-    )
+    # warnings.warn(
+    #     f"insufficient points in sample {path}: "
+    #     f"current={current_points}, required={n_points}; "
+    #     f"duplicate points will be sampled",
+    #     category=RuntimeWarning,
+    #     stacklevel=2,
+    # )
 
     # 先保留所有原始点，再通过有放回采样补足缺少的点。
     additional_count = n_points - current_points
