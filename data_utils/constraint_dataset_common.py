@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import warnings
 
-CONSTRAINT_POINT_COLUMNS = 12
+CONSTRAINT_POINT_COLUMNS = (12, 15)
 
 
 def discover_txt_files(root: str | Path) -> list[Path]:
@@ -28,7 +28,7 @@ def load_constraint_point_file(path: str | Path, *, task_name: str) -> np.ndarra
     point_set = np.loadtxt(path, dtype=np.float32)
     if point_set.ndim == 1:
         point_set = point_set.reshape(1, -1)
-    if point_set.ndim != 2 or point_set.shape[1] != CONSTRAINT_POINT_COLUMNS:
+    if point_set.ndim != 2 or point_set.shape[1] not in CONSTRAINT_POINT_COLUMNS:
         raise ValueError(
             f"expected {CONSTRAINT_POINT_COLUMNS} columns in {task_name} sample "
             f"{path}, got shape {point_set.shape}"
