@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from contextlib import nullcontext
 from time import time
 
@@ -39,6 +40,7 @@ BEST_FILE_NAMES = {
     "cluster_ari": "best_cluster_ari.pth",
     "constraint_score": "best_constraint_score.pth",
 }
+RESUME_WARNING_ONLY_CONFIG_KEYS = frozenset({"point_count"})
 
 
 class CstPredTrainer(object):
@@ -233,12 +235,33 @@ class CstPredTrainer(object):
             saved_config.pop("stage1_mode", None)
         current_config = _critical_checkpoint_config(self.checkpoint_args)
         differences = _config_differences(saved_config, current_config)
-        if differences:
+        warning_differences = [
+            difference
+            for difference in differences
+            if difference[0] in RESUME_WARNING_ONLY_CONFIG_KEYS
+        ]
+        fatal_differences = [
+            difference
+            for difference in differences
+            if difference[0] not in RESUME_WARNING_ONLY_CONFIG_KEYS
+        ]
+        for key, saved, current in warning_differences:
+            warnings.warn(
+                f"resume checkpoint {key} differs: checkpoint={saved!r}, "
+                f"current={current!r}; continuing because this does not change "
+                "checkpoint parameter shapes",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if fatal_differences:
             print(Fore.RED + "resume checkpoint configuration mismatch:")
-            for key, saved, current in differences:
+            for key, saved, current in fatal_differences:
                 print(Fore.RED + f"  {key}: checkpoint={saved!r}, current={current!r}")
             raise ValueError("resume checkpoint configuration mismatch")
-        print(Fore.GREEN + "resume checkpoint configuration: exact match")
+        if warning_differences:
+            print(Fore.YELLOW + "resume checkpoint configuration: compatible with warnings")
+        else:
+            print(Fore.GREEN + "resume checkpoint configuration: exact match")
 
     def _load_model_state(self, incoming_state, require_complete, source):
         load_model_state_with_diagnostics(

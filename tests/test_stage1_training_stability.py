@@ -277,6 +277,22 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
 
             mismatched_args = checkpoint_args("joint")
             mismatched_args["n_points"] = 21
+            with self.assertWarnsRegex(RuntimeWarning, "point_count differs"):
+                point_count_resumed = make_trainer(
+                    root,
+                    "joint",
+                    max_epoch=2,
+                    checkpoint_action="resume",
+                    checkpoint_source=last_path,
+                    args_override=mismatched_args,
+                )
+            self.assertEqual(
+                point_count_resumed.start_epoch,
+                int(resumed_state["epoch"]) + 1,
+            )
+
+            incompatible_args = checkpoint_args("joint")
+            incompatible_args["model"] = "dgcnn"
             with self.assertRaisesRegex(ValueError, "configuration mismatch"):
                 make_trainer(
                     root,
@@ -284,7 +300,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                     max_epoch=2,
                     checkpoint_action="resume",
                     checkpoint_source=last_path,
-                    args_override=mismatched_args,
+                    args_override=incompatible_args,
                 )
 
             initialized = make_trainer(
