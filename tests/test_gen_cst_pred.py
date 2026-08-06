@@ -162,6 +162,32 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         self.assertEqual(sum(batch[0].shape[0] for batch in batches), 3)
         np.testing.assert_array_equal(first_read, second_read)
 
+    def test_stage1_dataset_skips_txt_files_with_too_few_points(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            enough_points = np.zeros((6, 12), dtype=np.float64)
+            too_few_points = np.zeros((3, 12), dtype=np.float64)
+            enough_points[:, 3] = np.arange(6) % 5
+            enough_points[:, 11] = np.arange(6)
+            np.savetxt(root / "enough.txt", enough_points)
+            np.savetxt(root / "too_few.txt", too_few_points)
+
+            dataset = Stage1ConstraintDataset(root, n_points=4)
+
+            self.assertEqual(dataset.files, [root / "enough.txt"])
+            self.assertEqual(len(dataset), 1)
+
+    def test_stage1_dataset_reports_when_all_txt_files_are_too_small(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            np.savetxt(root / "too_few.txt", np.zeros((3, 12)))
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "no Stage 1 samples.*at least 4 points",
+            ):
+                Stage1ConstraintDataset(root, n_points=4)
+
     def test_cli_defaults_to_checkpoint_metadata_and_xyz_text_files(self):
         args = gen_cst_pred.parse_args(
             ["--input_dir", "input", "--output_dir", "output", "--checkpoint", "weights.pth"]

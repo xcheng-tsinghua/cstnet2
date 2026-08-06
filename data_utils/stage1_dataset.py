@@ -14,8 +14,22 @@ from data_utils.constraint_dataset_common import (
 )
 
 
+def _has_at_least_n_points(path: Path, n_points: int) -> bool:
+    """Return whether a TXT sample contains at least ``n_points`` data rows."""
+    point_count = 0
+    with path.open("r", encoding="utf-8", errors="replace") as point_file:
+        for line in point_file:
+            # Match numpy.loadtxt's handling of blank lines and ``#`` comments.
+            if not line.split("#", maxsplit=1)[0].strip():
+                continue
+            point_count += 1
+            if point_count >= n_points:
+                return True
+    return False
+
+
 class Stage1ConstraintDataset(Dataset):
-    """Read all normal-free 12-column Stage 1 samples below one directory."""
+    """Read Stage 1 samples that contain at least the requested point count."""
 
     def __init__(
         self,
@@ -26,11 +40,29 @@ class Stage1ConstraintDataset(Dataset):
     ):
         self.root = Path(root)
         self.n_points = int(n_points)
+        if self.n_points <= 0:
+            raise ValueError("n_points must be positive")
         self.data_augmentation = bool(data_augmentation)
         self.sample_seed = sample_seed
-        self.files = discover_txt_files(self.root)
+        discovered_files = discover_txt_files(self.root)
+        self.files = [
+            path
+            for path in discovered_files
+            if _has_at_least_n_points(path, self.n_points)
+        ]
+        skipped_count = len(discovered_files) - len(self.files)
+        if not self.files:
+            raise ValueError(
+                f"no Stage 1 samples below {self.root} contain at least "
+                f"{self.n_points} points; skipped {skipped_count} file(s)"
+            )
         print(f"Stage 1 constraint dataset: {self.root}")
         print(f"instance all: {len(self.files)}")
+        if skipped_count:
+            print(
+                f"skipped {skipped_count} file(s) with fewer than "
+                f"{self.n_points} points"
+            )
 
     def __len__(self):
         return len(self.files)
