@@ -32,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Train an independent XYZ-only Stage 1 direct baseline"
     )
     parser.add_argument(
-        "--model", default="pointnet2", choices=DIRECT_BASELINE_MODEL_NAMES
+        "--model", default="attn3dgcn", choices=DIRECT_BASELINE_MODEL_NAMES
     )
     parser.add_argument("--data_root", default=DEFAULT_DATA_ROOT)
     parser.add_argument(
