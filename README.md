@@ -118,7 +118,9 @@ cstnet2/
 |-- README.md                      This file
 |-- .env.example                   WandB API-key template (copy to .env)
 |-- train_cst_pred.py              Stage 1 training entry point
+|-- train_stage1_direct_baseline.py Independent XYZ-only direct-baseline training
 |-- eval_cst_pred.py               Standalone Stage 1 evaluation entry point
+|-- eval_stage1_direct_baseline.py Standalone direct-baseline evaluation
 |-- gen_cst_pred.py                Offline Stage 1 constraint generation
 |-- train_cls.py                   Stage 2 classification training
 |-- train_seg.py                   Stage 2 MFCAD++ segmentation training
@@ -141,9 +143,13 @@ cstnet2/
 |   |-- constraints.py             Constraint assembly and primitive fitting
 |   |-- cst_pred_trainer.py        Train-only Stage 1 loop
 |   |-- cst_pred_evaluator.py      Full-dataset Stage 1 evaluator
+|   |-- stage1_direct_trainer.py   Independent direct-baseline trainer
+|   |-- stage1_direct_evaluator.py Direct-baseline evaluator
+|   |-- stage1_direct_loss.py      Four-component direct supervision
 |   |-- loss.py                    Stage 1 and geometry losses
 |-- networks/
 |   |-- cst_pred_wrapper.py        Stage 1 model wrapper
+|   |-- stage1_direct_baselines.py Eight XYZ-only direct-prediction models
 |   |-- stage1_extractor.py        Offline frozen Stage 1 inference helper
 |   |-- stage2.py                  Stage 2 classifier
 |   |-- stage2_segmentation.py     Stage 2 segmentation model
@@ -381,6 +387,71 @@ model_trained/stage1/attn_3dgcn/geometry/
 model_trained/stage1/attn_3dgcn/joint/
 ```
 
+### Train Stage 1 XYZ-Only Direct Baselines
+
+The direct baselines are isolated from `train_cst_pred.py`. They take only XYZ,
+share one per-point backbone, and use four independent heads to predict primitive
+type, direction, dimension, and location. They do not predict instance embeddings,
+consume `affiliate_idx`, cluster points, fit primitives, or update any existing
+Stage 1 checkpoint directory.
+
+The first three models provide controlled same-backbone comparisons with the
+main Stage 1 method; the remaining five reuse the project's segmentation
+baseline implementations:
+
+```text
+pointnet | pointnet2 | attn3dgcn
+dgcnn | pointtransformer | pointmamba | pointnext | pointmlp
+```
+
+Train one model with a held-out validation directory:
+
+```bash
+python train_stage1_direct_baseline.py \
+  --model pointnet2 \
+  --data_root /path/to/stage1_train \
+  --val_data_root /path/to/stage1_val \
+  --n_points 2048 \
+  --bs 30 \
+  --epoch 100 \
+  --use_amp
+```
+
+The loss contains exactly four supervised terms. Direction, dimension, and
+location use the same GT primitive validity masks as the main Stage 1 method;
+there is no cluster, geometry-consistency, or instance-consistency loss. During
+inference, direction unification and invalid sentinels are applied according to
+the predicted primitive type, but there is no clustering or primitive fitting.
+
+Checkpoints are isolated by model and seed:
+
+```text
+model_trained/stage1_direct_baseline/<model>/seed_<seed>/last.pth
+model_trained/stage1_direct_baseline/<model>/seed_<seed>/best_loss.pth
+model_trained/stage1_direct_baseline/<model>/seed_<seed>/best_pmt_miou.pth
+```
+
+Resume the selected run with `--resume auto`, or pass a concrete direct-baseline
+checkpoint path. Architecture and loss-weight mismatches are rejected. If
+`--val_data_root` is omitted, training still runs but best checkpoints use train
+metrics and a warning is printed; a validation set should be used for formal
+comparisons.
+
+Evaluate a direct checkpoint without initializing WandB:
+
+```bash
+python eval_stage1_direct_baseline.py \
+  model_trained/stage1_direct_baseline/pointnet2/seed_2026/best_loss.pth \
+  --data_root /path/to/stage1_test \
+  --bs 30 \
+  --output_json evaluations/stage1_direct_pointnet2.json
+```
+
+Evaluation reports both raw head errors and `final/` errors after applying the
+predicted-type representation rules. Primitive accuracy, macro-F1, mIoU,
+direction angular error, dimension MAE, and location Euclidean error are shared
+across all direct models. Clustering ARI/NMI is intentionally absent.
+
 ### Evaluate Stage 1
 
 Evaluate a checkpoint on every `.txt` file below a separate dataset directory:
@@ -611,7 +682,7 @@ python vis_cstpred.py --root_dataset path/to/pointclouds --num_point 2500
 Run compile checks:
 
 ```bash
-python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py eval_cst_pred.py train_seg.py eval_seg.py vis_cstpred.py
+python -B -m compileall functional networks cst_pred data_utils train_cls.py train_cst_pred.py train_stage1_direct_baseline.py eval_cst_pred.py eval_stage1_direct_baseline.py train_seg.py eval_seg.py vis_cstpred.py
 ```
 
 Run import checks:

@@ -145,6 +145,26 @@ python train_cst_pred.py --data_root /path/to/stage1_train --epoch 200 --bs 20 -
 One-batch overfit
 python train_cst_pred.py --epoch 20 --bs 20 --train_phase joint --overfit_one_batch --geom_start_epoch 0 --geom_ramp_epochs 5
 
+------------------------------- stage1 direct baseline（只输入 XYZ，不聚类/拟合）
+
+先做三个同骨干对照：
+python train_stage1_direct_baseline.py --model pointnet --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model pointnet2 --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model attn3dgcn --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+
+其余五个模型：
+python train_stage1_direct_baseline.py --model dgcnn --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model pointtransformer --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model pointmamba --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model pointnext --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+python train_stage1_direct_baseline.py --model pointmlp --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --use_amp
+
+中断续训（按 model 和 seed 自动查找 last.pth）：
+python train_stage1_direct_baseline.py --model pointnet2 --data_root /path/to/stage1_train --val_data_root /path/to/stage1_val --resume auto --use_amp
+
+独立评估：
+python eval_stage1_direct_baseline.py model_trained/stage1_direct_baseline/pointnet2/seed_2026/best_loss.pth --data_root /path/to/stage1_test --output_json evaluations/stage1_direct_pointnet2.json
+
 ------------------------------- stage 2
 
 -- stage2 seg

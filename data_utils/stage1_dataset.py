@@ -79,8 +79,13 @@ class Stage1ConstraintDataset(Dataset):
             path=path,
             rng=rng,
         )
+        # The shared format supports both the normal-free 12-column layout and
+        # the legacy 15-column layout containing an unused normal triplet.
+        # Preserve the legacy behavior for 15 columns while parsing 12-column
+        # files through their actual column positions.
+        contains_legacy_normal = point_set.shape[1] == 15
         xyz, pmt, direction, dimension, location, affiliate_idx = (
-            split_constraint_columns(point_set, True)
+            split_constraint_columns(point_set, contains_legacy_normal)
         )
         if self.data_augmentation:
             xyz = xyz + np.random.normal(0.0, 0.02, size=xyz.shape)
