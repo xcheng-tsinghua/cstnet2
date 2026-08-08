@@ -210,3 +210,9 @@ nohup bash -c '
   python train_seg.py --model pointmlp --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointmlp_cst_gt.log
 ' > /dev/null 2>&1 &
 
+
+## baseline stage1 训练
+python train_stage1_direct_baseline.py --model=pointnet2 && python train_stage1_direct_baseline.py --model=dgcnn && python train_stage1_direct_baseline.py --model=pointtransformer 
+
+python train_stage1_direct_baseline.py --model=pointmamba && python train_stage1_direct_baseline.py --model=pointnext && python train_stage1_direct_baseline.py --model=pointmlp 
+
