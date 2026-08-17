@@ -69,6 +69,18 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--use_stats_token", action="store_true", default=False)
 
     parser.add_argument("--save_name", type=str, default="stage2_cls")
+    parser.add_argument(
+        "--test_ratio",
+        type=float,
+        default=0.2,
+        help="Test fraction used only when first creating split_file.json",
+    )
+    parser.add_argument(
+        "--split_seed",
+        type=int,
+        default=42,
+        help="Random seed used only when first creating split_file.json",
+    )
     parser.add_argument("--wandb_project", type=str, default="cstnet2")
     parser.add_argument("--wandb_entity", type=str, default="")
     parser.add_argument("--wandb_run_name", type=str, default="")
@@ -216,6 +228,8 @@ def main(args):
         n_points=args.n_points,
         num_workers=args.workers,
         is_sample=args.is_sample,
+        test_ratio=args.test_ratio,
+        split_seed=args.split_seed,
     )
     n_classes = train_loader.dataset.n_classes()
     class_names = [f"class_{index}" for index in range(n_classes)]

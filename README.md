@@ -200,6 +200,27 @@ dataset_root/
 |   |-- class_name_b/
 ```
 
+It also accepts a class-root layout. Every `.txt` file recursively found below
+a top-level class directory belongs to that class, so arbitrary nested folders
+are allowed:
+
+```text
+dataset_root/
+|-- class_name_a/
+|   |-- family_1/
+|   |   |-- sample_000.txt
+|   |-- family_2/deeper/sample_001.txt
+|-- class_name_b/
+|   |-- sample_002.txt
+```
+
+On first use, this layout creates `dataset_root/split_file.json` using a
+class-stratified 80/20 train/test split and seed 42. Later runs reuse that file
+exactly, so the split remains stable. `--test_ratio` and `--split_seed` change
+first-time generation only; delete or edit the manifest deliberately if a new
+split is required. The original explicit `train/test` layout remains supported
+and does not create a manifest.
+
 Each point file should contain one point per row with 12 columns:
 
 ```text
@@ -300,8 +321,8 @@ python train_cst_pred.py --data_root /path/to/stage1_train
 ```
 
 Stage 2 classification retains its existing `--root_local`, `--root_sever`,
-and `--local` options because its precomputed dataset still has task-specific
-train/test splits:
+and `--local` options. Its dataset may use explicit `train/test` directories or
+top-level class directories governed by the automatically generated split file:
 
 ```bash
 python train_cls.py --root_local D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend --local

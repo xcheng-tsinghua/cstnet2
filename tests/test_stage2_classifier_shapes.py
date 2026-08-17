@@ -109,6 +109,8 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
         self.assertFalse(hasattr(defaults, "stage1_model"))
         self.assertFalse(hasattr(defaults, "stage2_variant"))
         self.assertEqual(defaults.wandb_project, "cstnet2")
+        self.assertEqual(defaults.test_ratio, 0.2)
+        self.assertEqual(defaults.split_seed, 42)
 
         args = train_cls.parse_args([
             "--model", "pointnet2",
