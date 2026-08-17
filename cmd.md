@@ -170,37 +170,30 @@ nohup python train_cls.py > out_s2cls.log 2>&1 &
 tail -f out_s2cls.log
 
 
-训练无约束版本的baseline
+训练baseline
 
 nohup bash -c '
-  python train_cls.py --model pointnet --batch_size=100 --epochs=70 2>&1 | tee pointnet.log
-  python train_cls.py --model pointnet2 --batch_size=100 --epochs=70 2>&1 | tee pointnet2.log
-  python train_cls.py --model dgcnn --batch_size=100 --epochs=70 2>&1 | tee dgcnn.log
-  python train_cls.py --model attn3dgcn --batch_size=100 --epochs=70 2>&1 | tee attn3dgcn.log
+  python train_cls.py --model pointnet --batch_size=100 --epoch=70 2>&1 | tee pointnet.log
+  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 2>&1 | tee pointnet2.log
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 2>&1 | tee dgcnn.log
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 2>&1 | tee attn3dgcn.log
+
+  python train_cls.py --model pointnet --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet_cst.log
+  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet2_cst.log
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee dgcnn_cst.log
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee attn3dgcn_cst.log
 ' > /dev/null 2>&1 &
 
 nohup bash -c '
-  python train_cls.py --model pointtransformer --batch_size=100 --epochs=70 2>&1 | tee pointtransformer.log
-  python train_cls.py --model pointmamba --batch_size=100 --epochs=70 2>&1 | tee pointmamba.log
-  python train_cls.py --model pointnext --batch_size=100 --epochs=70 2>&1 | tee pointnext.log
-  python train_cls.py --model pointmlp --batch_size=100 --epochs=70 2>&1 | tee pointmlp.log
-' > /dev/null 2>&1 &
+  python train_cls.py --model pointtransformer --batch_size=100 --epoch=70 2>&1 | tee pointtransformer.log
+  python train_cls.py --model pointmamba --batch_size=100 --epoch=70 2>&1 | tee pointmamba.log
+  python train_cls.py --model pointnext --batch_size=100 --epoch=70 2>&1 | tee pointnext.log
+  python train_cls.py --model pointmlp --batch_size=100 --epoch=70 2>&1 | tee pointmlp.log
 
-
-训练有约束版本的baseline
-
-nohup bash -c '
-  python train_cls.py --model pointnet --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointnet.log
-  python train_cls.py --model pointnet2 --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointnet2.log
-  python train_cls.py --model dgcnn --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee dgcnn.log
-  python train_cls.py --model attn3dgcn --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee attn3dgcn.log
-' > /dev/null 2>&1 &
-
-nohup bash -c '
-  python train_cls.py --model pointtransformer --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointtransformer.log
-  python train_cls.py --model pointmamba --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointmamba.log
-  python train_cls.py --model pointnext --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointnext.log
-  python train_cls.py --model pointmlp --batch_size=100 --epochs=70 --baseline_use_constraints 2>&1 | tee pointmlp.log
+  python train_cls.py --model pointtransformer --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointtransformer_cst.log
+  python train_cls.py --model pointmamba --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointmamba_cst.log
+  python train_cls.py --model pointnext --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnext_cst.log
+  python train_cls.py --model pointmlp --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointmlp_cst.log
 ' > /dev/null 2>&1 &
 
 
