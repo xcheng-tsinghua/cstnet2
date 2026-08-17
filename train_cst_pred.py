@@ -35,7 +35,7 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd',
+        default='/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd',
         help='directory recursively containing every Stage 1 training .txt sample',
     )
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
