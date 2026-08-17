@@ -37,13 +37,13 @@ def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser("Stage 2 classification training")
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=200)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--decay_rate", type=float, default=1e-4)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2000)
+    parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2048)
     parser.add_argument("--is_sample", action="store_true", default=False)
     parser.add_argument("--local", action="store_true", default=False)
-    parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd")
+    parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
 
     parser.add_argument(
