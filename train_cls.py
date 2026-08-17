@@ -35,7 +35,7 @@ from networks.utils import all_metric_cls
 
 def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser("Stage 2 classification training")
-    parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=32)
+    parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=20)
     parser.add_argument("--epoch", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--decay_rate", type=float, default=1e-4)
