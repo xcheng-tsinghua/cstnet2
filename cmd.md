@@ -248,3 +248,22 @@ python train_stage1_direct_baseline.py --model=pointnet2 && python train_stage1_
 
 python train_stage1_direct_baseline.py --model=pointmamba && python train_stage1_direct_baseline.py --model=pointnext && python train_stage1_direct_baseline.py --model=pointmlp 
 
+------------ 2026.8.21 中断续训
+nohup bash -c '
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 2>&1 | tee dgcnn.log
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 2>&1 | tee attn3dgcn.log
+
+  python train_cls.py --model pointnet --batch_size=80 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet_cst.log
+  python train_cls.py --model pointnet2 --batch_size=80 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet2_cst.log
+  python train_cls.py --model dgcnn --batch_size=80 --epoch=70 --baseline_use_constraints 2>&1 | tee dgcnn_cst.log
+  python train_cls.py --model attn3dgcn --batch_size=80 --epoch=70 --baseline_use_constraints 2>&1 | tee attn3dgcn_cst.log
+' > /dev/null 2>&1 &
+
+nohup bash -c '
+  python train_cls.py --model pointtransformer --batch_size=50 --epoch=70 --baseline_use_constraints 2>&1 | tee pointtransformer_cst.log
+  python train_cls.py --model pointmamba --batch_size=50 --epoch=70 --baseline_use_constraints 2>&1 | tee pointmamba_cst.log
+  python train_cls.py --model pointnext --batch_size=50 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnext_cst.log
+  python train_cls.py --model pointmlp --batch_size=50 --epoch=70 --baseline_use_constraints 2>&1 | tee pointmlp_cst.log
+' > /dev/null 2>&1 &
+
+
