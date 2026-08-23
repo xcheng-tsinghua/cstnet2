@@ -1,6 +1,6 @@
 import json
 import matplotlib.pyplot as plt
-from functional.remove_norm import remove_norm_
+# from functional.remove_norm import remove_norm_
 from data_utils.stage1_h5 import convert_stage1_txt_to_h5
 
 
