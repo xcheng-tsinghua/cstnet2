@@ -243,8 +243,27 @@ loc            primitive location
 affiliate_idx  primitive instance label for clustering supervision
 ```
 
-The Stage 1 dataset loader reads `*.txt` directly. It never reads, writes, or
-refreshes adjacent NumPy cache files.
+The Stage 1 dataset loader supports recursive TXT input and typed HDF5 shards.
+With the default `storage_format="auto"`, HDF5 is preferred when both formats
+exist below the same directory, preventing converted samples from being loaded
+twice. It never reads, writes, or refreshes adjacent NumPy cache files.
+
+Convert a Stage 1 TXT tree into HDF5 shards once before training:
+
+```bash
+python -m tools.convert_stage1_txt_to_h5 \
+  --input_dir /path/to/stage1_txt \
+  --output_dir /path/to/stage1_h5 \
+  --samples_per_shard 2000 \
+  --compression lzf
+```
+
+The conversion recursively finds every `.txt`, accepts both the 12-column and
+legacy 15-column layouts, retains variable point counts, and writes a manifest.
+Use `--compression none` for maximum local-NVMe throughput. Existing shards are
+protected unless `--overwrite` is supplied. Train directly from the shard
+directory with `--data_root /path/to/stage1_h5`; use `--data_format txt` or
+`--data_format h5` to override automatic detection.
 
 ## Deployment Method
 
@@ -263,7 +282,7 @@ version first, then install the common Python dependencies:
 conda create -n dp python=3.11
 conda activate dp
 pip install torch torchvision torchaudio
-pip install numpy scipy scikit-learn tqdm colorama einops matplotlib wandb
+pip install numpy scipy scikit-learn tqdm colorama einops matplotlib wandb h5py
 ```
 
 Optional dependencies:

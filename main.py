@@ -1,6 +1,7 @@
 import json
 import matplotlib.pyplot as plt
 from functional.remove_norm import remove_norm_
+from data_utils.stage1_h5 import convert_stage1_txt_to_h5
 
 
 def main(log_path):
@@ -18,7 +19,11 @@ def main(log_path):
 
 if __name__ == '__main__':
     # main(r'C:\Users\xcheng\Desktop\attn_3dgcn_multitask_pmt_prim_cluster_2026-07-09_04-11-11.json')
-    remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd')
-    remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
+    # remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd')
+    # remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
+    convert_stage1_txt_to_h5(
+        input_dir=r'/opt/data/private/data_set/pcd_cstnet2/abc_pcd',
+        output_dir=r'/opt/data/private/data_set/pcd_cstnet2/abc_pcd_h5')
+    pass
 
 

@@ -36,7 +36,13 @@ def parse_args(argv=None):
         '--data_root',
         type=str,
         default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd',
-        help='directory recursively containing every Stage 1 training .txt sample',
+        help='directory containing Stage 1 TXT samples or HDF5 shards',
+    )
+    parser.add_argument(
+        '--data_format',
+        default='auto',
+        choices=['auto', 'txt', 'h5'],
+        help='Stage 1 storage format; auto prefers HDF5 when shards are present',
     )
     parser.add_argument('--wandb_project', type=str, default='cstnet2')
     parser.add_argument('--wandb_entity', type=str, default='')
@@ -113,6 +119,7 @@ def main(args):
         num_workers=args.workers,
         shuffle=True,
         is_sample=args.is_sample,
+        storage_format=args.data_format,
     )
 
     # trainer
