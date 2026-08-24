@@ -201,9 +201,7 @@ class Stage1ConstraintDataset(Dataset):
         if self.storage_format == "txt":
             path = self.files[index]
             point_set = load_constraint_point_file(path, task_name="Stage 1")
-            fields = split_constraint_columns(
-                point_set, point_set.shape[1] == 15
-            )
+            fields = split_constraint_columns(point_set)
         else:
             fields = self._load_h5_sample(index)
             path = f"HDF5 sample {index} below {self.root}"

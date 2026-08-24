@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import warnings
 
-CONSTRAINT_POINT_COLUMNS = (12, 15)
+CONSTRAINT_POINT_COLUMNS = 12
 
 
 def discover_txt_files(root: str | Path) -> list[Path]:
@@ -22,17 +21,40 @@ def discover_txt_files(root: str | Path) -> list[Path]:
     return files
 
 
-def load_constraint_point_file(path: str | Path, *, task_name: str) -> np.ndarray:
-    """Load and validate the shared normal-free 12-column constraint layout."""
+def load_constraint_point_file(
+    path: str | Path,
+    *,
+    task_name: str,
+    allow_extra_columns: bool = False,
+) -> np.ndarray:
+    """Load the 12-column constraint core, optionally discarding later columns."""
     path = Path(path)
     point_set = np.loadtxt(path, dtype=np.float32)
     if point_set.ndim == 1:
         point_set = point_set.reshape(1, -1)
-    if point_set.ndim != 2 or point_set.shape[1] not in CONSTRAINT_POINT_COLUMNS:
+    if point_set.ndim != 2:
         raise ValueError(
-            f"expected {CONSTRAINT_POINT_COLUMNS} columns in {task_name} sample "
+            f"expected a 2D array in {task_name} sample "
             f"{path}, got shape {point_set.shape}"
         )
+    column_count = point_set.shape[1]
+    valid_column_count = (
+        column_count >= CONSTRAINT_POINT_COLUMNS
+        if allow_extra_columns
+        else column_count == CONSTRAINT_POINT_COLUMNS
+    )
+    if not valid_column_count:
+        expectation = (
+            f"at least {CONSTRAINT_POINT_COLUMNS}"
+            if allow_extra_columns
+            else str(CONSTRAINT_POINT_COLUMNS)
+        )
+        raise ValueError(
+            f"expected {expectation} columns in {task_name} sample "
+            f"{path}, got shape {point_set.shape}"
+        )
+    if allow_extra_columns and column_count > CONSTRAINT_POINT_COLUMNS:
+        point_set = point_set[:, :CONSTRAINT_POINT_COLUMNS]
     if not np.isfinite(point_set).all():
         raise ValueError(f"non-finite value found in {task_name} sample: {path}")
     return point_set
@@ -101,21 +123,12 @@ def sample_without_replacement(
     return point_set[indices]
 
 
-def split_constraint_columns(point_set: np.ndarray, is_contain_normal=False):
+def split_constraint_columns(point_set: np.ndarray):
     """Split the normal-free 12-column constraint layout."""
-    if is_contain_normal:
-        xyz = point_set[:, 0:3]
-        pmt = point_set[:, 3].astype(np.int32)
-        direction = point_set[:, 4:7]
-        dimension = point_set[:, 7]
-        normal = point_set[:, 8:11]
-        location = point_set[:, 11:14]
-        affiliate_idx = point_set[:, 14].astype(np.int32)
-    else:
-        xyz = point_set[:, 0:3]
-        pmt = point_set[:, 3].astype(np.int32)
-        direction = point_set[:, 4:7]
-        dimension = point_set[:, 7]
-        location = point_set[:, 8:11]
-        affiliate_idx = point_set[:, 11].astype(np.int32)
+    xyz = point_set[:, 0:3]
+    pmt = point_set[:, 3].astype(np.int32)
+    direction = point_set[:, 4:7]
+    dimension = point_set[:, 7]
+    location = point_set[:, 8:11]
+    affiliate_idx = point_set[:, 11].astype(np.int32)
     return xyz, pmt, direction, dimension, location, affiliate_idx

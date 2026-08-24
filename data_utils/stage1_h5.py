@@ -196,8 +196,8 @@ def convert_stage1_txt_to_h5(
 ) -> list[Path]:
     """Recursively convert one or more Stage 1 TXT trees to HDF5 shards.
 
-    All points are retained. The normal triplet in the legacy 15-column layout
-    is discarded, producing the same six fields returned by
+    All points are retained. Each input row must have at least 12 columns; only
+    the first 12 are converted into the six fields returned by
     :class:`Stage1ConstraintDataset`.
     """
     input_roots = _normalize_input_roots(input_dir)
@@ -228,13 +228,12 @@ def convert_stage1_txt_to_h5(
         ]
         samples: list[tuple[np.ndarray, ...]] = []
         for source_path in shard_paths:
-            point_set = load_constraint_point_file(source_path, task_name="Stage 1")
-            samples.append(
-                split_constraint_columns(
-                    point_set,
-                    is_contain_normal=point_set.shape[1] == 15,
-                )
+            point_set = load_constraint_point_file(
+                source_path,
+                task_name="Stage 1 HDF5 conversion",
+                allow_extra_columns=True,
             )
+            samples.append(split_constraint_columns(point_set))
         _write_shard(
             output_path,
             shard_source_names,

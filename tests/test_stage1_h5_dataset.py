@@ -16,21 +16,15 @@ from data_utils.stage1_h5 import convert_stage1_txt_to_h5, parse_args
 H5PY_AVAILABLE = importlib.util.find_spec("h5py") is not None
 
 
-def _sample(point_count: int, marker: float, *, legacy: bool = False) -> np.ndarray:
-    column_count = 15 if legacy else 12
-    sample = np.zeros((point_count, column_count), dtype=np.float32)
+def _sample(point_count: int, marker: float) -> np.ndarray:
+    sample = np.zeros((point_count, 12), dtype=np.float32)
     sample[:, 0] = marker
     sample[:, 1:3] = np.arange(point_count * 2, dtype=np.float32).reshape(-1, 2)
     sample[:, 3] = np.arange(point_count) % 5
     sample[:, 4:7] = (1.0, 0.0, 0.0)
     sample[:, 7] = 0.5
-    if legacy:
-        sample[:, 8:11] = 99.0  # legacy normal, intentionally not retained
-        sample[:, 11:14] = marker + 10.0
-        sample[:, 14] = np.arange(point_count) // 2
-    else:
-        sample[:, 8:11] = marker + 10.0
-        sample[:, 11] = np.arange(point_count) // 2
+    sample[:, 8:11] = marker + 10.0
+    sample[:, 11] = np.arange(point_count) // 2
     return sample
 
 
@@ -86,7 +80,7 @@ class Stage1H5DatasetTest(unittest.TestCase):
             txt_root = root / "txt"
             h5_root = root / "h5"
             paths = [txt_root / "one.txt", txt_root / "nested" / "two.txt"]
-            for path, sample in zip(paths, (_sample(8, 1.0), _sample(9, 2.0, legacy=True))):
+            for path, sample in zip(paths, (_sample(8, 1.0), _sample(9, 2.0))):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 np.savetxt(path, sample)
 
@@ -106,6 +100,55 @@ class Stage1H5DatasetTest(unittest.TestCase):
                 for txt_field, h5_field in zip(txt_dataset[index], h5_dataset[index]):
                     np.testing.assert_array_equal(txt_field, h5_field)
             h5_dataset.close()
+
+    def test_conversion_discards_columns_after_the_constraint_core(self):
+        import h5py
+
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            txt_root = root / "txt"
+            txt_root.mkdir()
+            constraint_core = _sample(8, 3.0)
+            extra_columns = np.full((8, 5), 99.0, dtype=np.float32)
+            np.savetxt(
+                txt_root / "with_extra_columns.txt",
+                np.concatenate((constraint_core, extra_columns), axis=1),
+            )
+
+            with self.assertRaisesRegex(ValueError, "expected 12 columns"):
+                Stage1ConstraintDataset(
+                    txt_root, n_points=4, storage_format="txt"
+                )[0]
+            shard = convert_stage1_txt_to_h5(
+                txt_root, root / "h5", compression="none"
+            )[0]
+            with h5py.File(shard, "r") as h5_file:
+                np.testing.assert_array_equal(h5_file["xyz"][:], constraint_core[:, 0:3])
+                np.testing.assert_array_equal(h5_file["pmt"][:], constraint_core[:, 3])
+                np.testing.assert_array_equal(
+                    h5_file["direction"][:], constraint_core[:, 4:7]
+                )
+                np.testing.assert_array_equal(
+                    h5_file["dimension"][:], constraint_core[:, 7]
+                )
+                np.testing.assert_array_equal(
+                    h5_file["location"][:], constraint_core[:, 8:11]
+                )
+                np.testing.assert_array_equal(
+                    h5_file["affiliate_idx"][:], constraint_core[:, 11]
+                )
+
+    def test_conversion_rejects_samples_with_fewer_than_12_columns(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            txt_root = root / "txt"
+            txt_root.mkdir()
+            np.savetxt(txt_root / "too_few_columns.txt", np.zeros((8, 11)))
+
+            with self.assertRaisesRegex(ValueError, "expected at least 12 columns"):
+                convert_stage1_txt_to_h5(
+                    txt_root, root / "h5", compression="none"
+                )
 
     def test_auto_prefers_h5_and_h5_filter_uses_offsets(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
