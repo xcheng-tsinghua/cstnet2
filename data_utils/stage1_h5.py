@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -73,8 +73,7 @@ def _compression_kwargs(compression: str) -> dict[str, object]:
 
 def _write_shard(
     output_path: Path,
-    input_root: Path,
-    source_paths: list[Path],
+    source_names: list[str],
     samples: list[tuple[np.ndarray, ...]],
     *,
     compression: str,
@@ -116,13 +115,9 @@ def _write_shard(
                 ),
             }
             string_dtype = h5py.string_dtype(encoding="utf-8")
-            relative_paths = [
-                source_path.relative_to(input_root).as_posix()
-                for source_path in source_paths
-            ]
             h5_file.create_dataset(
                 "source_path",
-                data=np.asarray(relative_paths, dtype=object),
+                data=np.asarray(source_names, dtype=object),
                 dtype=string_dtype,
             )
 
@@ -149,25 +144,67 @@ def _write_shard(
         raise
 
 
+def _normalize_input_roots(
+    input_dir: str | Path | Sequence[str | Path],
+) -> list[Path]:
+    if isinstance(input_dir, (str, Path)):
+        candidates = [input_dir]
+    else:
+        candidates = list(input_dir)
+    if not candidates:
+        raise ValueError("at least one input directory is required")
+
+    roots: list[Path] = []
+    seen_roots: set[Path] = set()
+    for candidate in candidates:
+        root = Path(candidate).resolve()
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        roots.append(root)
+    return roots
+
+
+def _discover_txt_files_from_roots(
+    input_roots: Sequence[Path],
+) -> tuple[list[Path], list[str]]:
+    """Discover files in root order and remove duplicates from overlapping roots."""
+    source_files: list[Path] = []
+    source_names: list[str] = []
+    seen_files: set[Path] = set()
+    for root_index, input_root in enumerate(input_roots):
+        root_label = f"root_{root_index:03d}_{input_root.name or 'root'}"
+        for source_path in discover_txt_files(input_root):
+            resolved_path = source_path.resolve()
+            if resolved_path in seen_files:
+                continue
+            seen_files.add(resolved_path)
+            source_files.append(resolved_path)
+            source_names.append(
+                f"{root_label}/{resolved_path.relative_to(input_root).as_posix()}"
+            )
+    return source_files, source_names
+
+
 def convert_stage1_txt_to_h5(
-    input_dir: str | Path,
+    input_dir: str | Path | Sequence[str | Path],
     output_dir: str | Path,
     *,
     samples_per_shard: int = 2_000,
     compression: str = "lzf",
     overwrite: bool = False,
 ) -> list[Path]:
-    """Recursively convert Stage 1 TXT samples into typed HDF5 shards.
+    """Recursively convert one or more Stage 1 TXT trees to HDF5 shards.
 
     All points are retained. The normal triplet in the legacy 15-column layout
     is discarded, producing the same six fields returned by
     :class:`Stage1ConstraintDataset`.
     """
-    input_root = Path(input_dir).resolve()
+    input_roots = _normalize_input_roots(input_dir)
     output_root = Path(output_dir).resolve()
     if samples_per_shard <= 0:
         raise ValueError("samples_per_shard must be positive")
-    source_files = discover_txt_files(input_root)
+    source_files, source_names = _discover_txt_files_from_roots(input_roots)
     output_root.mkdir(parents=True, exist_ok=True)
     shard_count = (len(source_files) + samples_per_shard - 1) // samples_per_shard
     expected_paths = [
@@ -186,6 +223,9 @@ def convert_stage1_txt_to_h5(
         shard_paths = source_files[
             shard_index * samples_per_shard : (shard_index + 1) * samples_per_shard
         ]
+        shard_source_names = source_names[
+            shard_index * samples_per_shard : (shard_index + 1) * samples_per_shard
+        ]
         samples: list[tuple[np.ndarray, ...]] = []
         for source_path in shard_paths:
             point_set = load_constraint_point_file(source_path, task_name="Stage 1")
@@ -197,8 +237,7 @@ def convert_stage1_txt_to_h5(
             )
         _write_shard(
             output_path,
-            input_root,
-            shard_paths,
+            shard_source_names,
             samples,
             compression=compression,
         )
@@ -211,12 +250,15 @@ def convert_stage1_txt_to_h5(
     manifest = {
         "format": STAGE1_H5_FORMAT,
         "format_version": STAGE1_H5_VERSION,
-        "input_root": str(input_root),
+        "input_roots": [str(path) for path in input_roots],
         "sample_count": len(source_files),
         "samples_per_shard": samples_per_shard,
         "compression": compression,
         "shards": [path.name for path in written_paths],
     }
+    if len(input_roots) == 1:
+        # Preserve the original manifest field for existing single-root users.
+        manifest["input_root"] = str(input_roots[0])
     manifest_path = output_root / "stage1_manifest.json"
     temporary_manifest = manifest_path.with_suffix(".json.tmp")
     temporary_manifest.write_text(
@@ -235,7 +277,13 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Recursively convert Stage 1 TXT samples to HDF5 shards."
     )
-    parser.add_argument("--input_dir", required=True, type=Path)
+    parser.add_argument(
+        "--input_dir",
+        required=True,
+        nargs="+",
+        type=Path,
+        help="one or more directories recursively containing Stage 1 TXT files",
+    )
     parser.add_argument("--output_dir", required=True, type=Path)
     parser.add_argument("--samples_per_shard", default=2_000, type=int)
     parser.add_argument(

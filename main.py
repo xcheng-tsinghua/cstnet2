@@ -22,8 +22,8 @@ if __name__ == '__main__':
     # remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd')
     # remove_norm_(r'/opt/data/private/data_set/pcd_cstnet2/Param20K_pcd')
     convert_stage1_txt_to_h5(
-        input_dir=r'/opt/data/private/data_set/pcd_cstnet2/abc_pcd',
-        output_dir=r'/opt/data/private/data_set/pcd_cstnet2/abc_pcd_h5')
+        input_dir=[r'/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd', r'/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd'],
+        output_dir=r'/opt/data/private/data_set/pcd_cstnet2/stage1_all')
     pass
 
 

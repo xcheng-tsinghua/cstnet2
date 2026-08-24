@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import gc
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
-from data_utils.stage1_h5 import convert_stage1_txt_to_h5
+from data_utils.stage1_h5 import convert_stage1_txt_to_h5, parse_args
 
 
 H5PY_AVAILABLE = importlib.util.find_spec("h5py") is not None
@@ -35,6 +36,50 @@ def _sample(point_count: int, marker: float, *, legacy: bool = False) -> np.ndar
 
 @unittest.skipUnless(H5PY_AVAILABLE, "h5py is required for HDF5 tests")
 class Stage1H5DatasetTest(unittest.TestCase):
+    def test_conversion_accepts_multiple_input_directories(self):
+        import h5py
+
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            first_root = root / "first"
+            second_root = root / "second"
+            (first_root / "nested").mkdir(parents=True)
+            second_root.mkdir()
+            np.savetxt(first_root / "nested" / "one.txt", _sample(6, 1.0))
+            np.savetxt(second_root / "two.txt", _sample(7, 2.0))
+            output_root = root / "h5"
+
+            shards = convert_stage1_txt_to_h5(
+                [first_root, second_root, first_root],
+                output_root,
+                samples_per_shard=10,
+                compression="none",
+            )
+            dataset = Stage1ConstraintDataset(output_root, n_points=4)
+            manifest = json.loads(
+                (output_root / "stage1_manifest.json").read_text(encoding="utf-8")
+            )
+            with h5py.File(shards[0], "r") as h5_file:
+                source_names = h5_file["source_path"].asstr()[:].tolist()
+
+            self.assertEqual(len(dataset), 2)
+            self.assertEqual(
+                manifest["input_roots"],
+                [str(first_root.resolve()), str(second_root.resolve())],
+            )
+            self.assertEqual(manifest["sample_count"], 2)
+            self.assertEqual(
+                source_names,
+                ["root_000_first/nested/one.txt", "root_001_second/two.txt"],
+            )
+
+    def test_cli_accepts_one_or_more_input_directories(self):
+        args = parse_args(
+            ["--input_dir", "first", "second", "--output_dir", "output"]
+        )
+
+        self.assertEqual(args.input_dir, [Path("first"), Path("second")])
+
     def test_recursive_conversion_and_txt_h5_reads_match(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
             root = Path(temporary)

@@ -252,14 +252,16 @@ Convert a Stage 1 TXT tree into HDF5 shards once before training:
 
 ```bash
 python -m tools.convert_stage1_txt_to_h5 \
-  --input_dir /path/to/stage1_txt \
+  --input_dir /path/to/stage1_txt_a /path/to/stage1_txt_b \
   --output_dir /path/to/stage1_h5 \
   --samples_per_shard 2000 \
   --compression lzf
 ```
 
-The conversion recursively finds every `.txt`, accepts both the 12-column and
-legacy 15-column layouts, retains variable point counts, and writes a manifest.
+`--input_dir` accepts one or more directories. The conversion recursively finds
+every `.txt`, removes duplicate files from repeated or overlapping input roots,
+accepts both the 12-column and legacy 15-column layouts, retains variable point
+counts, and writes all input roots to the manifest.
 Use `--compression none` for maximum local-NVMe throughput. Existing shards are
 protected unless `--overwrite` is supplied. Train directly from the shard
 directory with `--data_root /path/to/stage1_h5`; use `--data_format txt` or
