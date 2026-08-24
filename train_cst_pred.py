@@ -35,7 +35,7 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd_h5',
+        default='/opt/data/private/data_set/pcd_cstnet2/stage1_all',
         help='directory containing Stage 1 TXT samples or HDF5 shards',
     )
     parser.add_argument(
