@@ -120,6 +120,243 @@ def _robust_mean(values: torch.Tensor, trim_ratio: float = 0.1) -> torch.Tensor:
     return sorted_values[:keep].mean()
 
 
+def _orthogonal_basis(axis: torch.Tensor) -> torch.Tensor:
+    """Return a stable 3x2 orthonormal basis perpendicular to ``axis``."""
+    axis = _unit(axis)
+    helper = torch.zeros_like(axis)
+    helper[int(axis.abs().argmin().item())] = 1.0
+    first = _unit(torch.cross(axis, helper, dim=0))
+    second = _unit(torch.cross(axis, first, dim=0))
+    return torch.stack((first, second), dim=1)
+
+
+def _orient_normals_consistently(
+    points: torch.Tensor,
+    normals: torch.Tensor,
+    k: int = 8,
+) -> torch.Tensor:
+    """Resolve local PCA normal signs by propagation over a spatial KNN graph."""
+    normals = F.normalize(normals, dim=-1, eps=1e-6)
+    point_count = int(points.shape[0])
+    if point_count <= 1:
+        return normals
+
+    neighbor_count = max(1, min(int(k), point_count - 1))
+    distances = torch.cdist(points.float(), points.float())
+    neighbors = distances.topk(
+        k=neighbor_count + 1, dim=-1, largest=False
+    ).indices[:, 1:].detach().cpu()
+
+    # Fitting is non-differentiable and already instance-by-instance. Doing the
+    # graph traversal on CPU avoids one device synchronization per graph edge.
+    work_dtype = torch.float64 if normals.dtype == torch.float64 else torch.float32
+    oriented = normals.detach().to(device="cpu", dtype=work_dtype).clone()
+    visited = [False] * point_count
+    for seed in range(point_count):
+        if visited[seed]:
+            continue
+        visited[seed] = True
+        queue = [seed]
+        while queue:
+            current = queue.pop()
+            for neighbor in neighbors[current].tolist():
+                if visited[neighbor]:
+                    continue
+                if torch.dot(oriented[current], oriented[neighbor]) < 0:
+                    oriented[neighbor] = -oriented[neighbor]
+                visited[neighbor] = True
+                queue.append(neighbor)
+
+    return oriented.to(device=normals.device, dtype=normals.dtype)
+
+
+def _fit_radial_center_2d(
+    points: torch.Tensor,
+    normals: torch.Tensor,
+    axis: torch.Tensor,
+) -> tuple[Optional[torch.Tensor], torch.Tensor]:
+    """Intersect projected normal lines to locate an axis in its normal plane."""
+    basis = _orthogonal_basis(axis)
+    point_2d = points @ basis
+    normal_perp = normals - (normals @ axis).unsqueeze(1) * axis
+    normal_norm = normal_perp.norm(dim=1)
+    valid = (
+        torch.isfinite(point_2d).all(dim=1)
+        & torch.isfinite(normal_perp).all(dim=1)
+        & (normal_norm > 1e-5)
+    )
+    if int(valid.sum().item()) < 2:
+        return None, basis
+
+    radial_2d = F.normalize(normal_perp[valid] @ basis, dim=1, eps=1e-6)
+    point_2d = point_2d[valid]
+    # A line through q with direction (dx, dy) satisfies
+    # (-dy, dx) dot center = (-dy, dx) dot q.
+    equations = torch.stack((-radial_2d[:, 1], radial_2d[:, 0]), dim=1)
+    rhs = (equations * point_2d).sum(dim=1, keepdim=True)
+    gram = equations.transpose(0, 1) @ equations
+    eigenvalues, _ = _symmetric_eigh(gram)
+    if (
+        not torch.isfinite(eigenvalues).all()
+        or float(eigenvalues[-1].item()) <= 1e-8
+        or float(eigenvalues[0].item())
+        <= float(eigenvalues[-1].item()) * 1e-8
+    ):
+        return None, basis
+
+    try:
+        center_2d = _least_squares(equations, rhs).squeeze(1)
+        # Huber IRLS reduces the influence of poor local PCA normals near
+        # primitive boundaries.
+        for _ in range(4):
+            residual = (equations @ center_2d.unsqueeze(1) - rhs).abs().squeeze(1)
+            scale = residual.median().clamp_min(1e-6)
+            cutoff = 2.5 * scale
+            weights = torch.where(
+                residual <= cutoff,
+                torch.ones_like(residual),
+                cutoff / residual.clamp_min(1e-6),
+            )
+            sqrt_weight = weights.sqrt().unsqueeze(1)
+            center_2d = _least_squares(
+                equations * sqrt_weight, rhs * sqrt_weight
+            ).squeeze(1)
+    except RuntimeError:
+        return None, basis
+
+    if not torch.isfinite(center_2d).all():
+        return None, basis
+    return center_2d, basis
+
+
+def _fit_circle_center_2d(
+    points: torch.Tensor,
+    axis: torch.Tensor,
+) -> tuple[Optional[torch.Tensor], torch.Tensor]:
+    """Algebraic circle fallback when usable surface normals are unavailable."""
+    basis = _orthogonal_basis(axis)
+    point_2d = points @ basis
+    if point_2d.shape[0] < 3:
+        return None, basis
+    design = torch.cat(
+        (
+            2.0 * point_2d,
+            torch.ones(
+                point_2d.shape[0], 1, device=points.device, dtype=points.dtype
+            ),
+        ),
+        dim=1,
+    )
+    rhs = (point_2d * point_2d).sum(dim=1, keepdim=True)
+    try:
+        solution = _least_squares(design, rhs).squeeze(1)
+    except RuntimeError:
+        return None, basis
+    center_2d = solution[:2]
+    if not torch.isfinite(center_2d).all():
+        return None, basis
+    return center_2d, basis
+
+
+def _robust_linear_fit(
+    x: torch.Tensor,
+    y: torch.Tensor,
+) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+    """Fit ``y = slope * x + intercept`` with Huber IRLS."""
+    valid = torch.isfinite(x) & torch.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+    if x.numel() < 3 or float(x.var(unbiased=False).item()) <= 1e-10:
+        return None
+    design = torch.stack((x, torch.ones_like(x)), dim=1)
+    try:
+        solution = _least_squares(design, y.unsqueeze(1)).squeeze(1)
+        for _ in range(5):
+            residual = (design @ solution - y).abs()
+            scale = residual.median().clamp_min(1e-6)
+            cutoff = 2.5 * scale
+            weights = torch.where(
+                residual <= cutoff,
+                torch.ones_like(residual),
+                cutoff / residual.clamp_min(1e-6),
+            )
+            sqrt_weight = weights.sqrt().unsqueeze(1)
+            solution = _least_squares(
+                design * sqrt_weight, y.unsqueeze(1) * sqrt_weight
+            ).squeeze(1)
+    except RuntimeError:
+        return None
+    if not torch.isfinite(solution).all():
+        return None
+    return solution[0], solution[1]
+
+
+def _refine_cone_profile(
+    point_2d: torch.Tensor,
+    axial: torch.Tensor,
+    center_2d: torch.Tensor,
+) -> Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Jointly refine the 2D axis center and linear cone radius profile."""
+    radial = (point_2d - center_2d).norm(dim=1)
+    linear_fit = _robust_linear_fit(axial, radial)
+    if linear_fit is None:
+        return None
+    slope, intercept = linear_fit
+    parameters = torch.cat((center_2d, slope.view(1), intercept.view(1)))
+    initial_radius = (point_2d - center_2d).norm(dim=1)
+    best_error = (
+        initial_radius - (slope * axial + intercept)
+    ).abs().median()
+    best_parameters = parameters.clone()
+
+    try:
+        for _ in range(8):
+            center = parameters[:2]
+            slope = parameters[2]
+            intercept = parameters[3]
+            offset = point_2d - center
+            radius = offset.norm(dim=1).clamp_min(1e-6)
+            residual = radius - (slope * axial + intercept)
+            jacobian = torch.cat(
+                (
+                    -offset / radius.unsqueeze(1),
+                    -axial.unsqueeze(1),
+                    -torch.ones_like(axial).unsqueeze(1),
+                ),
+                dim=1,
+            )
+            scale = residual.abs().median().clamp_min(1e-6)
+            cutoff = 2.5 * scale
+            weights = torch.where(
+                residual.abs() <= cutoff,
+                torch.ones_like(residual),
+                cutoff / residual.abs().clamp_min(1e-6),
+            )
+            sqrt_weight = weights.sqrt().unsqueeze(1)
+            update = _least_squares(
+                jacobian * sqrt_weight,
+                -residual.unsqueeze(1) * sqrt_weight,
+            ).squeeze(1)
+            if not torch.isfinite(update).all():
+                break
+            parameters = parameters + update
+            candidate_radius = (point_2d - parameters[:2]).norm(dim=1)
+            candidate_error = (
+                candidate_radius - (parameters[2] * axial + parameters[3])
+            ).abs().median()
+            if torch.isfinite(candidate_error) and candidate_error < best_error:
+                best_error = candidate_error
+                best_parameters = parameters.clone()
+            if float(update.norm().item()) < 1e-7:
+                break
+    except RuntimeError:
+        pass
+
+    if not torch.isfinite(best_parameters).all():
+        return None
+    return best_parameters[:2], best_parameters[2], best_parameters[3]
+
+
 def _fit_plane(points: torch.Tensor, normals: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     center, eigvec = _pca(points)
     pca_normal = eigvec[:, 0]
@@ -139,37 +376,121 @@ def _fit_plane(points: torch.Tensor, normals: Optional[torch.Tensor] = None) -> 
 def _fit_cylinder(points: torch.Tensor, normals: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     center, eigvec = _pca(points)
     axis = eigvec[:, -1]
+    normalized_normals = None
     if normals is not None and normals.shape[0] >= 3:
-        normals = F.normalize(normals, dim=-1, eps=1e-6)
-        cov = normals.transpose(0, 1) @ normals / float(normals.shape[0])
+        normalized_normals = F.normalize(normals, dim=-1, eps=1e-6)
+        cov = normalized_normals.transpose(0, 1) @ normalized_normals / float(
+            normalized_normals.shape[0]
+        )
         _, n_eigvec = _symmetric_eigh(cov)
         normal_axis = n_eigvec[:, 0]
         if torch.isfinite(normal_axis).all():
             axis = normal_axis
     axis = canonicalize_directions(axis.view(1, 3)).view(3)
-    foot = center - axis * torch.dot(axis, center)
-    radial = torch.cross(points - foot, axis.expand_as(points), dim=1).norm(dim=1)
-    radius = _robust_mean(radial, trim_ratio=0.1)
+
+    candidates = []
+    if normalized_normals is not None:
+        normal_center, normal_basis = _fit_radial_center_2d(
+            points, normalized_normals, axis
+        )
+        if normal_center is not None:
+            candidates.append((normal_center, normal_basis))
+    circle_center, circle_basis = _fit_circle_center_2d(points, axis)
+    if circle_center is not None:
+        candidates.append((circle_center, circle_basis))
+
+    best = None
+    for center_2d, basis in candidates:
+        candidate_foot = basis @ center_2d
+        candidate_radial = torch.cross(
+            points - candidate_foot, axis.expand_as(points), dim=1
+        ).norm(dim=1)
+        candidate_radius = (
+            candidate_radial.median()
+            if candidate_radial.numel() >= 3
+            else candidate_radial.mean()
+        )
+        candidate_error = (candidate_radial - candidate_radius).abs().median()
+        if torch.isfinite(candidate_error) and (
+            best is None or float(candidate_error.item()) < best[0]
+        ):
+            best = (
+                float(candidate_error.item()),
+                candidate_foot,
+                candidate_radius,
+            )
+
+    if best is None:
+        foot = center - axis * torch.dot(axis, center)
+        radial = torch.cross(
+            points - foot, axis.expand_as(points), dim=1
+        ).norm(dim=1)
+        radius = radial.median() if radial.numel() >= 3 else radial.mean()
+    else:
+        _, foot, radius = best
+    if not (torch.isfinite(radius) and torch.isfinite(foot).all()):
+        foot = center - axis * torch.dot(axis, center)
+        radial = torch.cross(
+            points - foot, axis.expand_as(points), dim=1
+        ).norm(dim=1)
+        radius = _robust_mean(radial, trim_ratio=0.1)
     return axis, radius, foot
 
 
-def _fit_cone(points: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _fit_cone(
+    points: torch.Tensor,
+    normals: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     center, eigvec = _pca(points)
-    axis = canonicalize_directions(eigvec[:, -1].view(1, 3)).view(3)
+    axis = eigvec[:, -1]
+    oriented_normals = None
+    if normals is not None and normals.shape[0] >= 4:
+        oriented_normals = _orient_normals_consistently(points, normals)
+        centered_normals = oriented_normals - oriented_normals.mean(
+            dim=0, keepdim=True
+        )
+        normal_cov = centered_normals.transpose(0, 1) @ centered_normals
+        normal_cov = normal_cov / float(centered_normals.shape[0])
+        _, normal_eigvec = _symmetric_eigh(normal_cov)
+        normal_axis = normal_eigvec[:, 0]
+        if torch.isfinite(normal_axis).all():
+            axis = normal_axis
+    axis = canonicalize_directions(axis.view(1, 3)).view(3)
+
+    center_2d = None
+    basis = _orthogonal_basis(axis)
+    if oriented_normals is not None:
+        center_2d, basis = _fit_radial_center_2d(
+            points, oriented_normals, axis
+        )
+    if center_2d is None:
+        # Exact for complete circular sections and a finite fallback when
+        # normals are unavailable or degenerate.
+        center_2d = (points @ basis).mean(dim=0)
+
+    point_2d = points @ basis
+    axial = points @ axis
+    profile = _refine_cone_profile(point_2d, axial, center_2d)
+    if profile is not None:
+        center_2d, slope, intercept = profile
+        if float(slope.abs().item()) > 1e-4:
+            apex_axial = -intercept / slope
+            apex = basis @ center_2d + apex_axial * axis
+            semi_angle = torch.atan(slope.abs()).clamp(max=1.55)
+            if torch.isfinite(apex).all() and torch.isfinite(semi_angle):
+                return axis, semi_angle, apex
+
+    # Retain a finite approximation for an almost cylindrical or otherwise
+    # degenerate cone instead of emitting an unstable far-away apex.
     proj = (points - center) @ axis
     apex = center + proj.min() * axis
     v = points - apex
     signed_axial = v @ axis
-    axial = signed_axial.abs()
-    radial = (v - (v @ axis).unsqueeze(1) * axis).norm(dim=1)
-    valid = axial > 1e-4
+    axial_distance = signed_axial.abs()
+    radial = (v - signed_axial.unsqueeze(1) * axis).norm(dim=1)
+    valid = axial_distance > 1e-4
     if valid.any():
-        ratio = radial[valid] / axial[valid].clamp_min(1e-4)
-        ratio = ratio.sort().values
-        if ratio.numel() >= 8:
-            lo = int(0.1 * ratio.numel())
-            hi = max(lo + 1, int(0.9 * ratio.numel()))
-            ratio = ratio[lo:hi]
+        ratio = radial[valid] / axial_distance[valid].clamp_min(1e-4)
         semi_angle = torch.atan(ratio.median().clamp_min(0.0))
     else:
         semi_angle = points.new_tensor(0.0)
@@ -223,8 +544,8 @@ def assemble_constraints_from_stage1(
     cluster_embedding: [B, N, D]
     log_primitive: [B, N, 5]
 
-    PCA normals are an optional fitting-only intermediate for plane and
-    cylinder clusters. They are never returned as a constraint component.
+    PCA normals are an optional fitting-only intermediate for plane, cylinder,
+    and cone clusters. They are never returned as a constraint component.
     """
     bsz, n_points, _ = xyz.shape
     device = xyz.device
@@ -251,7 +572,7 @@ def assemble_constraints_from_stage1(
             if (
                 use_robust_fitting
                 and use_pca_normals_for_fitting
-                and prim in (0, 1)
+                and prim in (0, 1, 2)
             ):
                 cluster_normals = estimate_normals_pca(
                     points.unsqueeze(0), k=normal_k
@@ -262,7 +583,7 @@ def assemble_constraints_from_stage1(
             elif prim == 1:
                 fit_dir, fit_dim, fit_loc = _fit_cylinder(points, cluster_normals)
             elif prim == 2:
-                fit_dir, fit_dim, fit_loc = _fit_cone(points)
+                fit_dir, fit_dim, fit_loc = _fit_cone(points, cluster_normals)
             elif prim == 3:
                 fit_dir, fit_dim, fit_loc = _fit_sphere(points)
             else:

@@ -1,0 +1,183 @@
+{
+  "input": "C:\\Users\\xcheng\\AppData\\Local\\Temp\\cstnet2_stage1_mini\\stage1-00000-of-00035.h5",
+  "h5_files": [
+    "C:\\Users\\xcheng\\AppData\\Local\\Temp\\cstnet2_stage1_mini\\stage1-00000-of-00035.h5"
+  ],
+  "device": "cpu",
+  "settings": {
+    "max_samples": 0,
+    "min_points": 12,
+    "max_points_per_instance": 2048,
+    "normal_k": 16,
+    "min_label_purity": 0.95,
+    "seed": 0
+  },
+  "dataset": {
+    "samples_evaluated": 2000,
+    "points_evaluated": 4096000,
+    "xyz_min": [
+      -1.0,
+      -1.0,
+      -1.0
+    ],
+    "xyz_max": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "xyz_outside_unit_cube_count": 0,
+    "xyz_outside_unit_cube_ratio": 0.0,
+    "primitive_point_counts": [
+      3802655,
+      291592,
+      1561,
+      0,
+      192
+    ]
+  },
+  "elapsed_seconds": 97.34660649998114,
+  "primitives": {
+    "cylinder": {
+      "instances_seen": 5936,
+      "instances_fitted": 5850,
+      "instances_failed": 0,
+      "instances_skipped_too_small": 86,
+      "instances_skipped_mixed_labels": 0,
+      "canonical_sign_mismatches": 1927,
+      "point_count": {
+        "count": 5850,
+        "mean": 49.69401709401709,
+        "median": 38.0,
+        "p90": 96.0
+      },
+      "direction_error_deg": {
+        "count": 5850,
+        "mean": 62.4819641150654,
+        "median": 6.706276091533791,
+        "p90": 178.72755715903696
+      },
+      "axis_error_deg_unsigned": {
+        "count": 5850,
+        "mean": 9.824166530456006,
+        "median": 2.4986926930991133,
+        "p90": 24.13239842077023
+      },
+      "dimension_absolute_error": {
+        "count": 5850,
+        "mean": 0.08025543690730746,
+        "median": 0.0004178062081336975,
+        "p90": 0.04364759661257268
+      },
+      "location_distance_error": {
+        "count": 5850,
+        "mean": 0.16674050222493572,
+        "median": 0.024189434945583344,
+        "p90": 0.4943454116582878
+      },
+      "geometry_residual_mean": {
+        "count": 5850,
+        "mean": 0.006480848739777206,
+        "median": 0.003801204264163971,
+        "p90": 0.015731962956488137
+      },
+      "geometry_residual_median": {
+        "count": 5850,
+        "mean": 0.005261479942048462,
+        "median": 0.002975108101963997,
+        "p90": 0.012859915196895602
+      },
+      "target_direction_spread_deg": {
+        "count": 5850,
+        "mean": 3.381596607530219e-06,
+        "median": 0.0,
+        "p90": 0.0
+      },
+      "target_dimension_spread": {
+        "count": 5850,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0
+      },
+      "target_location_spread": {
+        "count": 5850,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0
+      }
+    },
+    "cone": {
+      "instances_seen": 94,
+      "instances_fitted": 43,
+      "instances_failed": 0,
+      "instances_skipped_too_small": 51,
+      "instances_skipped_mixed_labels": 0,
+      "canonical_sign_mismatches": 12,
+      "point_count": {
+        "count": 43,
+        "mean": 25.58139534883721,
+        "median": 19.0,
+        "p90": 43.0
+      },
+      "direction_error_deg": {
+        "count": 43,
+        "mean": 59.50783668416328,
+        "median": 29.283216877662824,
+        "p90": 173.0118253672142
+      },
+      "axis_error_deg_unsigned": {
+        "count": 43,
+        "mean": 18.829573779886893,
+        "median": 15.222311122065895,
+        "p90": 37.04993768100563
+      },
+      "dimension_absolute_error": {
+        "count": 43,
+        "mean": 0.14575281392696293,
+        "median": 0.09007686376571655,
+        "p90": 0.4180471420288086
+      },
+      "location_distance_error": {
+        "count": 43,
+        "mean": 0.13986236231975518,
+        "median": 0.06579431146383286,
+        "p90": 0.3391102254390717
+      },
+      "geometry_residual_mean": {
+        "count": 43,
+        "mean": 0.005441858974357506,
+        "median": 0.003790467046201229,
+        "p90": 0.013616740889847283
+      },
+      "geometry_residual_median": {
+        "count": 43,
+        "mean": 0.004161521879046462,
+        "median": 0.0028108395636081696,
+        "p90": 0.009999018907546998
+      },
+      "target_direction_spread_deg": {
+        "count": 43,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0
+      },
+      "target_dimension_spread": {
+        "count": 43,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0
+      },
+      "target_location_spread": {
+        "count": 43,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0
+      },
+      "semi_angle_absolute_error_deg": {
+        "count": 43,
+        "mean": 8.351021090170581,
+        "median": 5.16102412555045,
+        "p90": 23.952336875756828
+      }
+    }
+  }
+}

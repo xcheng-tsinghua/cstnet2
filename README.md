@@ -550,7 +550,7 @@ then selects `best_constraint_score.pth`, `best_pmt_miou.pth`,
 settings, and clustering bandwidth are read from current checkpoint metadata.
 Existing outputs are skipped unless `--overwrite` is supplied. TXT is processed by default; use for example
 `--extensions .txt,.npy` when required.
-Plane and cylinder fitting uses transient XYZ-PCA normals by default; add
+Plane, cylinder, and cone fitting uses transient XYZ-PCA normals by default; add
 `--disable_pca_normals_for_fitting` to use coordinate-only fitting.
 
 ### Train Stage 2 Classification

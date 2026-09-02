@@ -55,7 +55,7 @@ def parse_args(argv=None):
         "--disable_pca_normals_for_fitting",
         action="store_true",
         default=False,
-        help="Fit plane/cylinder clusters from coordinates without PCA-normal assistance.",
+        help="Fit plane/cylinder/cone clusters from coordinates without PCA-normal assistance.",
     )
     parser.add_argument(
         "--extensions", default=".txt", type=str,
