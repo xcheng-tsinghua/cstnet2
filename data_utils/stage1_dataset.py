@@ -12,6 +12,7 @@ from data_utils.constraint_dataset_common import (
     load_constraint_point_file,
     sample_without_replacement,
     split_constraint_columns,
+    zero_invalid_constraint_components,
 )
 from data_utils.stage1_h5 import (
     STAGE1_H5_FIELDS,
@@ -216,6 +217,11 @@ class Stage1ConstraintDataset(Dataset):
         )
         xyz, pmt, direction, dimension, location, affiliate_idx = (
             field[row_indices] for field in fields
+        )
+        # HDF5 shards can contain either legacy or zero sentinels. TXT samples
+        # have already passed through this same idempotent canonicalization.
+        direction, dimension = zero_invalid_constraint_components(
+            pmt, direction, dimension
         )
         if self.data_augmentation:
             xyz = xyz + np.random.normal(0.0, 0.02, size=xyz.shape)

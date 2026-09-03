@@ -2,6 +2,7 @@ import os
 import numpy as np
 from torch.utils.data import Dataset
 
+from data_utils.constraint_dataset_common import zero_invalid_constraint_components
 from networks import utils
 
 
@@ -298,7 +299,7 @@ def trans_loc_for_cylinders(pmt, loc, mad, trans):
 
 
 def update_dim(pmt, dim, scale):
-    # Only length-valued dimensions scale. Cone semi-angle and invalid -1 values do not.
+    # Only length-valued dimensions scale. Cone semi-angles and invalid zeros do not.
     scale_mask = (pmt == 1) | (pmt == 3)
     dim[scale_mask] = dim[scale_mask] * scale
 
@@ -357,6 +358,7 @@ def single_load(pcd_file):
     dim = point_set[:, 7]  # 主尺寸 [n, ]
     loc = point_set[:, 8:11]  # 主位置 [n, 3]
     affil_idx = point_set[:, 11]  # 从属索引 [n, ]
+    mad, dim = zero_invalid_constraint_components(pmt, mad, dim)
 
     # 质心平移到原点，三轴范围缩放到 [-1, 1]^3
     move_dir = -np.mean(xyz, axis=0)

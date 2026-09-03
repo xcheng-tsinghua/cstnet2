@@ -77,8 +77,8 @@ The direction definition is:
 plane:                   surface normal
 cylinder:                rotation axis
 cone:                    rotation axis
-sphere:                  (0, 0, -1), indicating no valid main direction
-free-form surface/other: (0, 0, -1), indicating no valid main direction
+sphere:                  (0, 0, 0), indicating no valid main direction
+free-form surface/other: (0, 0, 0), indicating no valid main direction
 ```
 
 For `plane`, `cylinder`, and `cone`, the direction must be processed by the `dir_unify` function to ensure a unique and consistent direction.
@@ -123,11 +123,11 @@ This rule ensures that equivalent opposite directions are mapped to a unique rep
 The dimension definition is:
 
 ```text
-plane:                   -1.0, indicating no valid main dimension
+plane:                   0.0, indicating no valid main dimension
 cylinder:                radius
 cone:                    semi-angle
 sphere:                  radius
-free-form surface/other: -1.0, indicating no valid main dimension
+free-form surface/other: 0.0, indicating no valid main dimension
 ```
 
 ---

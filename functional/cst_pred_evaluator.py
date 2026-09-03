@@ -4,21 +4,25 @@ import torch
 from colorama import Fore
 from tqdm import tqdm
 
+from functional.constraints import assemble_constraints_from_stage1
 from functional.cst_pred_trainer import (
     LOSS_NAMES,
     _aggregate_metric_dicts,
     _detach_dict,
     _mean_dicts,
     _scalar,
+    _to_python,
     stage1_active_losses,
     warn_if_primitive_collapsed,
 )
 from functional.loss import constraint_loss, evaluate_clustering
 from functional.point_features import build_stage1_input_features
 from functional.stage1_metrics import (
+    aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
     evaluate_predicted_clustering,
     evaluate_primitive_metrics,
+    primitive_metrics_from_confusion,
 )
 
 
@@ -38,6 +42,14 @@ class CstPredEvaluator:
         use_extra_features,
         feature_k,
         cluster_bandwidth,
+        cluster_method="radius",
+        mean_shift_quantile=0.015,
+        mean_shift_iterations=20,
+        mean_shift_max_clusters=128,
+        mean_shift_bandwidth=None,
+        normal_k=16,
+        use_pca_normals_for_fitting=True,
+        use_prediction_initialization=True,
     ):
         self.model = model
         self.data_loader = data_loader
@@ -50,19 +62,33 @@ class CstPredEvaluator:
         self.use_extra_features = bool(use_extra_features)
         self.feature_k = int(feature_k)
         self.cluster_bandwidth = float(cluster_bandwidth)
+        self.cluster_method = str(cluster_method)
+        self.mean_shift_quantile = float(mean_shift_quantile)
+        self.mean_shift_iterations = int(mean_shift_iterations)
+        self.mean_shift_max_clusters = int(mean_shift_max_clusters)
+        self.mean_shift_bandwidth = (
+            None if mean_shift_bandwidth is None else float(mean_shift_bandwidth)
+        )
+        self.normal_k = int(normal_k)
+        self.use_pca_normals_for_fitting = bool(use_pca_normals_for_fitting)
+        self.use_prediction_initialization = bool(
+            use_prediction_initialization
+            and self.train_phase in {"geometry", "joint"}
+        )
 
     @torch.no_grad()
     def evaluate(self, global_epoch):
         self.model.eval()
         loss_batches = []
         metric_batches = []
+        fitted_metric_batches = []
         active_losses = stage1_active_losses(
             self.train_phase,
             self.enabled_losses,
         )
         progress = tqdm(self.data_loader, desc="evaluate Stage 1")
         for data_batch in progress:
-            loss_dict, metric_dict = self._process_batch(
+            loss_dict, metric_dict, fitted_metric_dict = self._process_batch(
                 data_batch,
                 global_epoch=global_epoch,
                 active_losses=active_losses,
@@ -74,12 +100,14 @@ class CstPredEvaluator:
             })
             loss_batches.append(_detach_dict(loss_dict))
             metric_batches.append(_detach_dict(metric_dict))
+            fitted_metric_batches.append(_detach_dict(fitted_metric_dict))
 
         if not loss_batches:
             raise ValueError("evaluation dataset produced no batches")
 
         loss_summary = _mean_dicts(loss_batches)
         metric_summary = _aggregate_metric_dicts(metric_batches)
+        metric_summary.update(self._aggregate_fitted_metrics(fitted_metric_batches))
         metric_summary["constraint_score"] = 0.5 * (
             float(metric_summary.get("pmt_miou", 0.0))
             + max(0.0, float(metric_summary.get("cluster_ari_real", 0.0)))
@@ -132,12 +160,36 @@ class CstPredEvaluator:
         )
         self._validate_losses(loss_dict)
 
+        fitted_constraints = assemble_constraints_from_stage1(
+            xyz=xyz,
+            cluster_embedding=outputs["embedding"],
+            log_primitive=outputs["log_pmt"],
+            cluster_bandwidth=self.cluster_bandwidth,
+            cluster_method=self.cluster_method,
+            mean_shift_quantile=self.mean_shift_quantile,
+            mean_shift_iterations=self.mean_shift_iterations,
+            mean_shift_max_clusters=self.mean_shift_max_clusters,
+            mean_shift_bandwidth=self.mean_shift_bandwidth,
+            normal_k=self.normal_k,
+            use_pca_normals_for_fitting=self.use_pca_normals_for_fitting,
+            mad_prediction=outputs["mad"],
+            dim_prediction=outputs["dim"],
+            loc_prediction=outputs["loc"],
+            use_prediction_initialization=self.use_prediction_initialization,
+        )
+
         metric_dict = {}
         metric_dict.update(evaluate_primitive_metrics(outputs["log_pmt"], pmt_gt))
         metric_dict.update(evaluate_predicted_clustering(
             affiliate_idx,
             outputs["embedding"],
             bandwidth=self.cluster_bandwidth,
+            predicted_affiliate_idx=fitted_constraints["affiliate_idx"],
+            cluster_method=self.cluster_method,
+            mean_shift_quantile=self.mean_shift_quantile,
+            mean_shift_iterations=self.mean_shift_iterations,
+            mean_shift_max_clusters=self.mean_shift_max_clusters,
+            mean_shift_bandwidth=self.mean_shift_bandwidth,
         ))
         oracle_acc, oracle_nmi, oracle_ari = evaluate_clustering(
             affiliate_idx,
@@ -157,6 +209,20 @@ class CstPredEvaluator:
             dim_gt=dim_gt,
             loc_gt=loc_gt,
         ))
+        fitted_metric_dict = {
+            "pmt_confusion_matrix": evaluate_primitive_metrics(
+                fitted_constraints["primitive_type"], pmt_gt
+            )["pmt_confusion_matrix"]
+        }
+        fitted_metric_dict.update(evaluate_constraint_attribute_metrics(
+            mad_pred=fitted_constraints["direction"],
+            dim_pred=fitted_constraints["dimension"],
+            loc_pred=fitted_constraints["location"],
+            pmt_gt=pmt_gt,
+            mad_gt=mad_gt,
+            dim_gt=dim_gt,
+            loc_gt=loc_gt,
+        ))
 
         aggregation_weight = torch.tensor(
             float(xyz.shape[0]),
@@ -165,7 +231,23 @@ class CstPredEvaluator:
         )
         loss_dict["_aggregation_weight"] = aggregation_weight
         metric_dict["_aggregation_weight"] = aggregation_weight
-        return loss_dict, metric_dict
+        return loss_dict, metric_dict, fitted_metric_dict
+
+    @staticmethod
+    def _aggregate_fitted_metrics(metric_batches):
+        confusion = torch.stack([
+            batch["pmt_confusion_matrix"].float() for batch in metric_batches
+        ]).sum(dim=0)
+        primitive = primitive_metrics_from_confusion(confusion)
+        attributes = aggregate_constraint_attribute_metrics(metric_batches)
+        output = {
+            f"fitted_{name}": value
+            for name, value in _to_python(primitive).items()
+        }
+        output.update({
+            f"fitted_{name}": value for name, value in attributes.items()
+        })
+        return output
 
     @staticmethod
     def _validate_outputs(outputs):
@@ -219,4 +301,15 @@ class CstPredEvaluator:
         print(
             "eval: confusion matrix="
             f"{metric_summary.get('pmt_confusion_matrix', [])}"
+        )
+        print(
+            Fore.CYAN
+            + "eval fitted pipeline: "
+            + f"pmt_acc={metric_summary.get('fitted_pmt_acc', 0.0):.4f}, "
+            + "direction="
+            + f"{metric_summary.get('fitted_direction_mean_angular_error_deg', 0.0):.4f}deg, "
+            + "dimension="
+            + f"{metric_summary.get('fitted_dimension_mean_absolute_error', 0.0):.6f}, "
+            + "location="
+            + f"{metric_summary.get('fitted_location_mean_distance_error', 0.0):.6f}"
         )

@@ -7,6 +7,7 @@ from datetime import datetime
 import torch
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
+from functional.constraints import CLUSTER_METHODS
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
 from functional.stage1_checkpoint_policy import (
@@ -51,6 +52,36 @@ def parse_args(argv=None):
     parser.add_argument('--disable_extra_features', action='store_true', default=False)
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
+    parser.add_argument('--cluster_method', default='meanshift', choices=CLUSTER_METHODS)
+    parser.add_argument('--mean_shift_quantile', default=0.015, type=float)
+    parser.add_argument('--mean_shift_iterations', default=20, type=int)
+    parser.add_argument('--mean_shift_max_clusters', default=128, type=int)
+    parser.add_argument('--mean_shift_bandwidth', default=None, type=float)
+    parser.add_argument(
+        '--normal_k',
+        default=16,
+        type=int,
+        help='PCA neighborhood size used by the epoch-end primitive fitter',
+    )
+    parser.add_argument(
+        '--disable_pca_normals_for_fitting',
+        action='store_true',
+        default=False,
+    )
+    parser.add_argument(
+        '--disable_prediction_initialization',
+        action='store_true',
+        default=False,
+    )
+    parser.add_argument(
+        '--cluster_metric_interval',
+        default=50,
+        type=int,
+        help=(
+            'training batches between real Mean Shift ARI/NMI computations; '
+            '0 evaluates only the first batch of each epoch'
+        ),
+    )
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
     parser.add_argument(
         '--checkpoint_root',
@@ -78,13 +109,13 @@ def parse_args(argv=None):
     parser.add_argument('--disable_geom_loss', dest='enable_geom_loss', action='store_false', default=True)
     parser.add_argument('--disable_inst_loss', dest='enable_inst_loss', action='store_false', default=True)
     parser.add_argument('--joint_backbone_lr_scale', default=0.1, type=float)
-    parser.add_argument('--use_amp', action='store_true', default=False)
     parser.add_argument(
-        '--disable_grad_diagnostics',
-        dest='enable_grad_diagnostics',
-        action='store_false',
-        default=True,
+        '--grad_clip',
+        default=1.0,
+        type=float,
+        help='global gradient norm limit; set to 0 to disable clipping',
     )
+    parser.add_argument('--use_amp', action='store_true', default=False)
 
     args = parser.parse_args(argv)
     return args
@@ -199,6 +230,19 @@ def main(args):
         use_extra_features=use_extra_features,
         feature_k=args.feature_k,
         cluster_bandwidth=args.cluster_bandwidth,
+        cluster_method=args.cluster_method,
+        mean_shift_quantile=args.mean_shift_quantile,
+        mean_shift_iterations=args.mean_shift_iterations,
+        mean_shift_max_clusters=args.mean_shift_max_clusters,
+        mean_shift_bandwidth=args.mean_shift_bandwidth,
+        normal_k=args.normal_k,
+        use_pca_normals_for_fitting=(
+            not args.disable_pca_normals_for_fitting
+        ),
+        use_prediction_initialization=(
+            not args.disable_prediction_initialization
+        ),
+        cluster_metric_interval=args.cluster_metric_interval,
         overfit_one_batch=args.overfit_one_batch,
         train_phase=args.train_phase,
         enabled_losses=enabled_losses,
@@ -210,8 +254,8 @@ def main(args):
         ),
         checkpoint_args=checkpoint_args,
         joint_backbone_lr_scale=args.joint_backbone_lr_scale,
+        grad_clip=args.grad_clip,
         use_amp=args.use_amp,
-        enable_grad_diagnostics=args.enable_grad_diagnostics,
     )
     try:
         trainer.start()

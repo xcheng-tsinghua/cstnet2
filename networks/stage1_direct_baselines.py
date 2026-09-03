@@ -434,7 +434,7 @@ def finalize_direct_constraints(
         primitive_index == 3
     )
     dimension = torch.where(
-        dimension_valid, dimension_raw, dimension_raw.new_full((), -1.0)
+        dimension_valid, dimension_raw, torch.zeros_like(dimension_raw)
     )
     location = torch.where(
         (primitive_index != 4).unsqueeze(-1), location_raw, torch.zeros_like(location_raw)

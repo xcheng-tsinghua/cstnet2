@@ -138,6 +138,42 @@ class Stage1H5DatasetTest(unittest.TestCase):
                     h5_file["affiliate_idx"][:], constraint_core[:, 11]
                 )
 
+    def test_legacy_h5_sentinels_are_zeroed_when_loaded(self):
+        import h5py
+
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            txt_root = root / "txt"
+            txt_root.mkdir()
+            sample = _sample(5, 1.0)
+            np.savetxt(txt_root / "sample.txt", sample)
+            shard = convert_stage1_txt_to_h5(
+                txt_root, root / "h5", compression="none"
+            )[0]
+            with h5py.File(shard, "r+") as h5_file:
+                pmt = h5_file["pmt"][:]
+                direction = h5_file["direction"][:]
+                dimension = h5_file["dimension"][:]
+                direction[np.isin(pmt, (3, 4))] = (0.0, 0.0, -1.0)
+                dimension[np.isin(pmt, (0, 4))] = -1.0
+                h5_file["direction"][:] = direction
+                h5_file["dimension"][:] = dimension
+
+            dataset = Stage1ConstraintDataset(
+                shard, n_points=5, sample_seed=3, storage_format="h5"
+            )
+            _, pmt, direction, dimension, _, _ = dataset[0]
+
+            np.testing.assert_array_equal(
+                direction[np.isin(pmt, (3, 4))],
+                np.zeros((2, 3), dtype=direction.dtype),
+            )
+            np.testing.assert_array_equal(
+                dimension[np.isin(pmt, (0, 4))],
+                np.zeros(2, dtype=dimension.dtype),
+            )
+            dataset.close()
+
     def test_conversion_rejects_samples_with_fewer_than_12_columns(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
             root = Path(temporary)

@@ -74,6 +74,10 @@ class EvaluateStage1Test(unittest.TestCase):
         self.assertIn("loss_all", saved_report["loss"])
         self.assertIn("pmt_miou", saved_report["metrics"])
         self.assertIn("cluster_ari_real", saved_report["metrics"])
+        self.assertIn("fitted_pmt_miou", saved_report["metrics"])
+        self.assertIn(
+            "fitted_direction_mean_angular_error_deg", saved_report["metrics"]
+        )
 
 
 if __name__ == "__main__":

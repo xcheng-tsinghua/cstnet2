@@ -151,6 +151,26 @@ class Stage2ClassifierShapeTest(unittest.TestCase):
 
         self.assertTrue(torch.equal(actual, expected))
 
+    def test_ground_truth_constraints_canonicalize_legacy_sentinels(self):
+        from functional.constraints import ground_truth_constraints_to_tensor
+
+        pmt = torch.tensor([[0, 1, 2, 3, 4]])
+        direction = torch.tensor(
+            [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+              [0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]]
+        )
+        dimension = torch.tensor([[-1.0, 2.0, 0.3, 4.0, -1.0]])
+        location = torch.zeros(1, 5, 3)
+
+        constraints = ground_truth_constraints_to_tensor(
+            pmt, direction, dimension, location
+        )
+
+        self.assertTrue(torch.equal(constraints[0, 3:5, 5:8], torch.zeros(2, 3)))
+        self.assertEqual(float(constraints[0, 0, 8]), 0.0)
+        self.assertEqual(float(constraints[0, 4, 8]), 0.0)
+        self.assertEqual(float(constraints[0, 1, 8]), 2.0)
+
     def test_classification_model_config_and_run_names(self):
         from networks.classification_models import (
             classification_model_config,

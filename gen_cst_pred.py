@@ -20,7 +20,8 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 
-from functional.constraints import assemble_constraints_from_stage1
+from data_utils.constraint_dataset_common import zero_invalid_constraint_components
+from functional.constraints import CLUSTER_METHODS, assemble_constraints_from_stage1
 from functional.point_features import build_stage1_input_features, stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 
@@ -50,7 +51,23 @@ def parse_args(argv=None):
         help="auto, cpu, cuda, or an explicit device such as cuda:1.",
     )
     parser.add_argument("--cluster_bandwidth", default=None, type=float)
+    parser.add_argument(
+        "--cluster_method",
+        default=None,
+        choices=CLUSTER_METHODS,
+        help="defaults to checkpoint metadata, or meanshift for older checkpoints",
+    )
+    parser.add_argument("--mean_shift_quantile", default=None, type=float)
+    parser.add_argument("--mean_shift_iterations", default=None, type=int)
+    parser.add_argument("--mean_shift_max_clusters", default=None, type=int)
+    parser.add_argument("--mean_shift_bandwidth", default=None, type=float)
     parser.add_argument("--normal_k", default=16, type=int)
+    parser.add_argument(
+        "--disable_prediction_initialization",
+        action="store_true",
+        default=False,
+        help="Do not initialize cylinder/cone fitting from Joint geometry heads.",
+    )
     parser.add_argument(
         "--disable_pca_normals_for_fitting",
         action="store_true",
@@ -130,8 +147,14 @@ class Stage1Predictor:
         device: torch.device,
         model_name: str = "auto",
         cluster_bandwidth: float | None = None,
+        cluster_method: str | None = None,
+        mean_shift_quantile: float | None = None,
+        mean_shift_iterations: int | None = None,
+        mean_shift_max_clusters: int | None = None,
+        mean_shift_bandwidth: float | None = None,
         normal_k: int = 16,
         use_pca_normals_for_fitting: bool = True,
+        use_prediction_initialization: bool = True,
     ):
         self.checkpoint_path = resolve_checkpoint(checkpoint_path)
         checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
@@ -172,6 +195,46 @@ class Stage1Predictor:
         )
         if self.cluster_bandwidth <= 0:
             raise ValueError("cluster_bandwidth must be positive")
+        saved_cluster_method = checkpoint_args.get("cluster_method", "meanshift")
+        self.cluster_method = str(
+            saved_cluster_method if cluster_method is None else cluster_method
+        )
+        if self.cluster_method not in CLUSTER_METHODS:
+            raise ValueError(
+                f"unsupported cluster_method={self.cluster_method!r}; "
+                f"expected one of {CLUSTER_METHODS}"
+            )
+        self.mean_shift_quantile = float(
+            checkpoint_args.get("mean_shift_quantile", 0.015)
+            if mean_shift_quantile is None else mean_shift_quantile
+        )
+        self.mean_shift_iterations = int(
+            checkpoint_args.get("mean_shift_iterations", 50)
+            if mean_shift_iterations is None else mean_shift_iterations
+        )
+        self.mean_shift_max_clusters = int(
+            checkpoint_args.get("mean_shift_max_clusters", 128)
+            if mean_shift_max_clusters is None else mean_shift_max_clusters
+        )
+        saved_mean_shift_bandwidth = checkpoint_args.get(
+            "mean_shift_bandwidth", None
+        )
+        self.mean_shift_bandwidth = (
+            saved_mean_shift_bandwidth
+            if mean_shift_bandwidth is None else mean_shift_bandwidth
+        )
+        if self.mean_shift_bandwidth is not None:
+            self.mean_shift_bandwidth = float(self.mean_shift_bandwidth)
+        checkpoint_phase = str(checkpoint_args.get("train_phase", ""))
+        self.use_prediction_initialization = bool(
+            use_prediction_initialization
+            and checkpoint_phase in {"geometry", "joint"}
+        )
+        if use_prediction_initialization and not self.use_prediction_initialization:
+            print(
+                "WARNING: fitting initialization disabled because the checkpoint "
+                "is not marked as a geometry/joint checkpoint"
+            )
         self.normal_k = int(normal_k)
         if self.normal_k < 2:
             raise ValueError("normal_k must be at least 2")
@@ -195,7 +258,8 @@ class Stage1Predictor:
         model_output = self.model(xyz, self._extra_features(xyz))
         embedding = model_output["embedding"]
         log_pmt = model_output["log_pmt"]
-        if not torch.isfinite(embedding).all() or not torch.isfinite(log_pmt).all():
+        required_outputs = ("embedding", "log_pmt", "mad", "dim", "loc")
+        if any(not torch.isfinite(model_output[name]).all() for name in required_outputs):
             raise FloatingPointError("Stage 1 output contains NaN or Inf")
 
         constraints = assemble_constraints_from_stage1(
@@ -203,8 +267,17 @@ class Stage1Predictor:
             cluster_embedding=embedding,
             log_primitive=log_pmt,
             cluster_bandwidth=self.cluster_bandwidth,
+            cluster_method=self.cluster_method,
+            mean_shift_quantile=self.mean_shift_quantile,
+            mean_shift_iterations=self.mean_shift_iterations,
+            mean_shift_max_clusters=self.mean_shift_max_clusters,
+            mean_shift_bandwidth=self.mean_shift_bandwidth,
             normal_k=self.normal_k,
             use_pca_normals_for_fitting=self.use_pca_normals_for_fitting,
+            mad_prediction=model_output["mad"],
+            dim_prediction=model_output["dim"],
+            loc_prediction=model_output["loc"],
+            use_prediction_initialization=self.use_prediction_initialization,
         )
         return {
             "pmt": constraints["primitive_type"].argmax(dim=-1)[0].cpu().numpy(),
@@ -247,12 +320,18 @@ def build_output_array(
     else:
         raise ValueError(f"unsupported input_layout: {input_layout}")
 
+    pmt = np.asarray(prediction["pmt"]).reshape(count)
+    mad, dim = zero_invalid_constraint_components(
+        pmt,
+        np.asarray(prediction["mad"]).reshape(count, 3),
+        np.asarray(prediction["dim"]).reshape(count),
+    )
     core = np.concatenate(
         [
             input_array[:, :3],
-            np.asarray(prediction["pmt"]).reshape(count, 1),
-            np.asarray(prediction["mad"]).reshape(count, 3),
-            np.asarray(prediction["dim"]).reshape(count, 1),
+            pmt.reshape(count, 1),
+            mad,
+            dim.reshape(count, 1),
             np.asarray(prediction["loc"]).reshape(count, 3),
             np.asarray(prediction["affiliate_idx"]).reshape(count, 1),
         ],
@@ -361,14 +440,24 @@ def generate_dataset(args) -> None:
         device=device,
         model_name=args.model,
         cluster_bandwidth=args.cluster_bandwidth,
+        cluster_method=args.cluster_method,
+        mean_shift_quantile=args.mean_shift_quantile,
+        mean_shift_iterations=args.mean_shift_iterations,
+        mean_shift_max_clusters=args.mean_shift_max_clusters,
+        mean_shift_bandwidth=args.mean_shift_bandwidth,
         normal_k=args.normal_k,
         use_pca_normals_for_fitting=not args.disable_pca_normals_for_fitting,
+        use_prediction_initialization=not args.disable_prediction_initialization,
     )
     print(
         "Stage 1 predictor: "
         f"checkpoint={predictor.checkpoint_path}; model={predictor.model_name}; "
         f"device={device}; "
+        f"cluster_method={predictor.cluster_method}; "
         f"cluster_bandwidth={predictor.cluster_bandwidth}; "
+        f"mean_shift_quantile={predictor.mean_shift_quantile}; "
+        f"mean_shift_iterations={predictor.mean_shift_iterations}; "
+        f"prediction_initialization={predictor.use_prediction_initialization}; "
         f"pca_normals_for_fitting={predictor.use_pca_normals_for_fitting}"
     )
     print(f"input files: {len(files)}; input={input_dir}; output={output_dir}")

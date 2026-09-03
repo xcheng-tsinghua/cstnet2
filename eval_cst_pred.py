@@ -11,6 +11,7 @@ import torch
 from colorama import Fore, init
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
+from functional.constraints import CLUSTER_METHODS
 from functional.cst_pred_evaluator import CstPredEvaluator
 from functional.cst_pred_trainer import load_model_state_with_diagnostics
 from functional.point_features import stage1_feature_dim
@@ -55,6 +56,18 @@ def parse_args(argv=None):
         type=float,
         default=None,
         help="defaults to the checkpoint value",
+    )
+    parser.add_argument("--cluster_method", choices=CLUSTER_METHODS, default=None)
+    parser.add_argument("--mean_shift_quantile", type=float, default=None)
+    parser.add_argument("--mean_shift_iterations", type=int, default=None)
+    parser.add_argument("--mean_shift_max_clusters", type=int, default=None)
+    parser.add_argument("--mean_shift_bandwidth", type=float, default=None)
+    parser.add_argument("--normal_k", type=int, default=16)
+    parser.add_argument(
+        "--disable_prediction_initialization", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--disable_pca_normals_for_fitting", action="store_true", default=False
     )
     parser.add_argument(
         "--output_json",
@@ -121,6 +134,31 @@ def main(args):
         if args.cluster_bandwidth is not None
         else float(_checkpoint_value(checkpoint_args, "cluster_bandwidth", 0.35))
     )
+    cluster_method = str(
+        args.cluster_method
+        if args.cluster_method is not None
+        else _checkpoint_value(checkpoint_args, "cluster_method", "meanshift")
+    )
+    mean_shift_quantile = float(
+        args.mean_shift_quantile
+        if args.mean_shift_quantile is not None
+        else _checkpoint_value(checkpoint_args, "mean_shift_quantile", 0.015)
+    )
+    mean_shift_iterations = int(
+        args.mean_shift_iterations
+        if args.mean_shift_iterations is not None
+        else _checkpoint_value(checkpoint_args, "mean_shift_iterations", 20)
+    )
+    mean_shift_max_clusters = int(
+        args.mean_shift_max_clusters
+        if args.mean_shift_max_clusters is not None
+        else _checkpoint_value(checkpoint_args, "mean_shift_max_clusters", 128)
+    )
+    mean_shift_bandwidth = (
+        float(args.mean_shift_bandwidth)
+        if args.mean_shift_bandwidth is not None
+        else _checkpoint_value(checkpoint_args, "mean_shift_bandwidth", None)
+    )
     train_phase = str(_checkpoint_value(checkpoint_args, "train_phase", "joint"))
     geom_start_epoch = int(
         _checkpoint_value(checkpoint_args, "geom_start_epoch", 20)
@@ -178,6 +216,14 @@ def main(args):
         use_extra_features=use_extra_features,
         feature_k=feature_k,
         cluster_bandwidth=cluster_bandwidth,
+        cluster_method=cluster_method,
+        mean_shift_quantile=mean_shift_quantile,
+        mean_shift_iterations=mean_shift_iterations,
+        mean_shift_max_clusters=mean_shift_max_clusters,
+        mean_shift_bandwidth=mean_shift_bandwidth,
+        normal_k=args.normal_k,
+        use_pca_normals_for_fitting=not args.disable_pca_normals_for_fitting,
+        use_prediction_initialization=not args.disable_prediction_initialization,
     )
     checkpoint_epoch = int(checkpoint.get("epoch", 0))
     loss_summary, metric_summary = evaluator.evaluate(checkpoint_epoch)
@@ -204,6 +250,17 @@ def main(args):
         "use_extra_features": use_extra_features,
         "feature_k": feature_k,
         "cluster_bandwidth": cluster_bandwidth,
+        "cluster_method": cluster_method,
+        "mean_shift_quantile": mean_shift_quantile,
+        "mean_shift_iterations": mean_shift_iterations,
+        "mean_shift_max_clusters": mean_shift_max_clusters,
+        "mean_shift_bandwidth": mean_shift_bandwidth,
+        "normal_k": args.normal_k,
+        "prediction_initialization": (
+            not args.disable_prediction_initialization
+            and train_phase in {"geometry", "joint"}
+        ),
+        "pca_normals_for_fitting": not args.disable_pca_normals_for_fitting,
         "sampling_seed": args.seed,
         "loss": loss_summary,
         "metrics": metric_summary,

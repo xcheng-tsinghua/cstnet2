@@ -66,13 +66,26 @@ The primitive type is trained with per-point classification loss. The clustering
 embedding is trained with a discriminative instance loss using `affiliate_idx` as
 the primitive-instance label. Geometry attributes provide auxiliary supervision
 and geometric consistency losses; Stage 1 does not consume or predict point normals.
+Direction supervision and reporting treat plane normals, cylinder axes, and cone
+axes as unoriented: loss uses the smaller error against `target` and `-target`,
+and angular metrics use `acos(abs(dot(prediction, target)))`. `dir_unify` is
+reserved for deterministic final serialization rather than loss computation.
 
 During inference, Stage 1 post-processing performs:
 
-1. Cluster points in Stage 1 embedding space.
+1. L2-normalize the clustering embeddings and run adaptive spherical Mean Shift.
 2. Assign each cluster a primitive type by majority vote.
-3. Fit a primitive to each cluster.
-4. Convert fitted primitives into the 12D per-point constraint tensor.
+3. Robustly aggregate the Joint direction/dimension/location heads inside each
+   cluster and use them as the initial values for cylinder and cone fitting.
+4. Fit the primitive to cluster XYZ coordinates. The prediction-head candidate
+   competes with coordinate/PCA candidates, and the candidate with the smallest
+   robust XYZ residual is retained.
+5. Convert fitted primitives into the 12D per-point constraint tensor.
+
+The geometry heads are therefore not copied directly to the final constraint.
+They resolve ambiguous partial-cylinder and partial-cone initializations, while
+the XYZ fit enforces one geometrically consistent parameter set per instance.
+Plane and sphere continue to use their stable closed-form XYZ fits.
 
 The reusable implementation is used by the offline dataset-preprocessing step:
 
@@ -394,9 +407,8 @@ semantic checkpoint, and joint initializes from `geometry/last.pth`. Use
 
 All training boolean options are value-less flags. For example, use
 `--is_sample`, `--overfit_one_batch`, or `--use_amp` to enable an option; do not append
-`True` or `False`. Stage 1 losses and gradient diagnostics are enabled by
-default and can be turned off with flags such as `--disable_mad_loss` and
-`--disable_grad_diagnostics`.
+`True` or `False`. Stage 1 auxiliary losses are enabled by default and can be
+turned off with flags such as `--disable_mad_loss`.
 
 Stage 1 does not create or consume a test loader during training. At the end
 of each epoch it records aggregate metrics from all training batches to WandB
@@ -404,9 +416,9 @@ and the local JSON history. Consequently, Stage 1 `best_pmt_miou.pth`,
 `best_cluster_ari.pth`, and `best_constraint_score.pth` are selected from
 training metrics and carry `best_metrics_source: "train"` in the checkpoint.
 
-Stage 1, classification, and segmentation log every training epoch to WandB.
-This includes all losses, learning rates, aggregate metrics, per-class metrics,
-class histograms, and confusion matrices produced by each task.
+Stage 1 logs only loss summaries, aggregate training metrics, and its primitive
+confusion matrix to WandB. Runtime, learning-rate, gradient-diagnostic,
+checkpoint-status, and redundant legacy loss keys are intentionally omitted.
 
 Stage 1 reports constraint-property errors using GT
 primitive validity masks: Direction mean angular error in degrees, Dimension
@@ -512,11 +524,31 @@ The evaluator restores model architecture, feature settings, loss weights,
 loss switches, and geometry ramp settings from the checkpoint. It does not
 restore optimizer state and does not initialize WandB. The generated JSON
 contains dataset metadata, aggregate raw and weighted losses, primitive
-confusion metrics, real radius-clustering ARI/NMI, oracle clustering diagnostics,
-and direction/dimension/location errors.
+confusion metrics, real inference-time Mean Shift ARI/NMI, oracle clustering diagnostics,
+raw-head direction/dimension/location errors, and `fitted_*` metrics for the
+complete Mean Shift + Joint-head initialization + XYZ-fitting pipeline.
 Every file is evaluated once. If a file contains more than `--n_points`, the
 evaluator uses a deterministic per-file subset controlled by `--seed`;
 `--n_points` defaults to the checkpoint value.
+
+During training, the differentiable discriminative embedding loss is still
+computed on every batch, but inference-time Mean Shift and optional oracle
+clustering metrics default to every 50 batches because they do not contribute
+gradients. Set `--cluster_metric_interval 1` for the old every-batch behavior,
+or `--cluster_metric_interval 0` to measure only the first batch of each epoch.
+The complete Mean Shift and primitive-fitting pipeline is evaluated only by
+`eval_cst_pred.py`.
+
+Geometry-head supervision is robust to parameters outside the normalized point
+cloud. Cylinder and sphere radii use Smooth L1 in `log1p(radius)` space; cone
+semi-angles and all valid locations use Smooth L1 in their native units. The
+surface residuals for planes, cylinders, cones, and spheres use Smooth L1 as
+well. Parameter and surface losses are averaged per primitive instance rather
+than per point, and radii or locations more than 20 observed-patch diameters
+away are softly down-weighted (never below 0.05). Raw MAE/distance metrics stay
+unchanged so this robust objective cannot hide physical-unit errors. Training
+also applies global gradient-norm clipping after AMP unscaling; the default is
+`--grad_clip 1.0`, and `--grad_clip 0` disables it.
 
 ### Generate Offline Stage 1 Constraints
 
@@ -541,17 +573,27 @@ GT column layout, or `--input_layout gt` to force replacement.
 python gen_cst_pred.py \
   --input_dir /opt/data/private/data_set/pcd_cstnet2/MFCAD_raw \
   --output_dir /opt/data/private/data_set/pcd_cstnet2/MFCAD_predicted_constraints \
-  --checkpoint model_trained/pointnet2_pmt_prim_cluster/best_constraint_score.pth
+  --checkpoint model_trained/stage1/attn_3dgcn/joint/best_constraint_score.pth
 ```
 
 The checkpoint argument can also be its containing directory. The generator
 then selects `best_constraint_score.pth`, `best_pmt_miou.pth`,
 `best_cluster_ari.pth`, or `last.pth`, in that order. Model name, feature
-settings, and clustering bandwidth are read from current checkpoint metadata.
+settings, Mean Shift settings, and clustering bandwidth are read from current
+checkpoint metadata. Older checkpoints without clustering metadata use Mean
+Shift by default. Prediction-head initialization is enabled only for checkpoints
+marked as `geometry` or `joint`; a semantic-only checkpoint cannot safely use
+untrained geometry heads.
+
 Existing outputs are skipped unless `--overwrite` is supplied. TXT is processed by default; use for example
 `--extensions .txt,.npy` when required.
 Plane, cylinder, and cone fitting uses transient XYZ-PCA normals by default; add
 `--disable_pca_normals_for_fitting` to use coordinate-only fitting.
+Use `--cluster_method radius` only for an explicit legacy comparison. Mean Shift
+bandwidth is estimated separately for each cloud; `--mean_shift_bandwidth` can
+override that estimate. The default safety cap is 128 modes and can be changed
+with `--mean_shift_max_clusters`. `--disable_prediction_initialization` provides
+an ablation of the Joint-head initialization.
 
 ### Train Stage 2 Classification
 

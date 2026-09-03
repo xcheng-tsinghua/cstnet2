@@ -7,8 +7,6 @@ from collections.abc import Mapping
 import torch
 import torch.nn.functional as F
 
-from functional.constraints import canonicalize_directions
-
 
 DIRECT_LOSS_NAMES = ("pmt", "mad", "dim", "loc")
 DEFAULT_DIRECT_LOSS_WEIGHTS = {
@@ -39,9 +37,11 @@ def _masked_direction_mse(
 ) -> torch.Tensor:
     if not bool(mask.any()):
         return _zero_loss(prediction)
-    prediction = canonicalize_directions(prediction[mask])
-    target = canonicalize_directions(target[mask])
-    return F.mse_loss(prediction, target)
+    prediction = F.normalize(prediction[mask], dim=-1, eps=1e-6)
+    target = F.normalize(target[mask], dim=-1, eps=1e-6)
+    direct = (prediction - target).pow(2).mean(dim=-1)
+    flipped = (prediction + target).pow(2).mean(dim=-1)
+    return torch.minimum(direct, flipped).mean()
 
 
 def _masked_mse(

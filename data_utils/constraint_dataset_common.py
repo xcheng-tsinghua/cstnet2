@@ -5,6 +5,43 @@ from pathlib import Path
 import numpy as np
 
 CONSTRAINT_POINT_COLUMNS = 12
+VALID_DIRECTION_PRIMITIVES = (0, 1, 2)
+VALID_DIMENSION_PRIMITIVES = (1, 2, 3)
+
+
+def zero_invalid_constraint_components(
+    pmt: np.ndarray,
+    direction: np.ndarray,
+    dimension: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return attributes with invalid direction and dimension set to zero.
+
+    Validity comes only from the primitive type, never from a numeric sentinel.
+    Consequently, legacy ``(0, 0, -1)``/``-1`` files and zero-filled files
+    produce the same in-memory representation without rewriting the dataset.
+    """
+    pmt = np.asarray(pmt)
+    direction = np.array(direction, copy=True)
+    dimension = np.array(dimension, copy=True)
+    if direction.shape != (*pmt.shape, 3):
+        raise ValueError(
+            "direction shape must equal primitive shape followed by 3; "
+            f"got pmt={pmt.shape}, direction={direction.shape}"
+        )
+    if dimension.shape not in (pmt.shape, (*pmt.shape, 1)):
+        raise ValueError(
+            "dimension shape must equal primitive shape with an optional "
+            f"trailing singleton; got pmt={pmt.shape}, dimension={dimension.shape}"
+        )
+
+    direction_valid = np.isin(pmt, VALID_DIRECTION_PRIMITIVES)
+    dimension_valid = np.isin(pmt, VALID_DIMENSION_PRIMITIVES)
+    direction[~direction_valid] = 0.0
+    if dimension.shape == pmt.shape:
+        dimension[~dimension_valid] = 0.0
+    else:
+        dimension[~dimension_valid, :] = 0.0
+    return direction, dimension
 
 
 def discover_txt_files(root: str | Path) -> list[Path]:
@@ -123,7 +160,11 @@ def sample_without_replacement(
     return point_set[indices]
 
 
-def split_constraint_columns(point_set: np.ndarray):
+def split_constraint_columns(
+    point_set: np.ndarray,
+    *,
+    canonicalize_invalid: bool = True,
+):
     """Split the normal-free 12-column constraint layout."""
     xyz = point_set[:, 0:3]
     pmt = point_set[:, 3].astype(np.int32)
@@ -131,4 +172,8 @@ def split_constraint_columns(point_set: np.ndarray):
     dimension = point_set[:, 7]
     location = point_set[:, 8:11]
     affiliate_idx = point_set[:, 11].astype(np.int32)
+    if canonicalize_invalid:
+        direction, dimension = zero_invalid_constraint_components(
+            pmt, direction, dimension
+        )
     return xyz, pmt, direction, dimension, location, affiliate_idx

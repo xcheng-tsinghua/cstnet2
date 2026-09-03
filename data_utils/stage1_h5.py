@@ -233,7 +233,13 @@ def convert_stage1_txt_to_h5(
                 task_name="Stage 1 HDF5 conversion",
                 allow_extra_columns=True,
             )
-            samples.append(split_constraint_columns(point_set))
+            # Conversion is storage-preserving. Legacy sentinels are
+            # canonicalized only when a consumer loads the resulting shard.
+            samples.append(
+                split_constraint_columns(
+                    point_set, canonicalize_invalid=False
+                )
+            )
         _write_shard(
             output_path,
             shard_source_names,

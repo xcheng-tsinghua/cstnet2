@@ -75,7 +75,7 @@ class Stage1DirectBaselineTest(unittest.TestCase):
                 self.assertNotIn("embedding", output)
                 self.assertTrue(all(torch.isfinite(value).all() for value in output.values()))
 
-    def test_finalization_applies_direction_and_invalid_sentinels(self):
+    def test_finalization_applies_direction_and_zeroes_invalid_components(self):
         primitive = torch.tensor([[0, 1, 2, 3, 4]])
         logits = torch.full((1, 5, 5), -20.0)
         logits.scatter_(-1, primitive.unsqueeze(-1), 20.0)
@@ -93,10 +93,10 @@ class Stage1DirectBaselineTest(unittest.TestCase):
         self.assertTrue(torch.allclose(finalized["direction"][0, 0], torch.tensor([1.0, 0.0, 0.0])))
         self.assertTrue(torch.allclose(finalized["direction"][0, 1], torch.tensor([0.0, 1.0, 0.0])))
         self.assertTrue(torch.allclose(finalized["direction"][0, 2], torch.tensor([0.0, 0.0, 1.0])))
-        self.assertTrue(torch.allclose(finalized["direction"][0, 3], torch.tensor([0.0, 0.0, -1.0])))
-        self.assertTrue(torch.allclose(finalized["direction"][0, 4], torch.tensor([0.0, 0.0, -1.0])))
-        self.assertEqual(float(finalized["dimension"][0, 0]), -1.0)
-        self.assertEqual(float(finalized["dimension"][0, 4]), -1.0)
+        self.assertTrue(torch.equal(finalized["direction"][0, 3], torch.zeros(3)))
+        self.assertTrue(torch.equal(finalized["direction"][0, 4], torch.zeros(3)))
+        self.assertEqual(float(finalized["dimension"][0, 0]), 0.0)
+        self.assertEqual(float(finalized["dimension"][0, 4]), 0.0)
         self.assertTrue(torch.equal(finalized["location"][0, 4], torch.zeros(3)))
 
     def test_loss_ignores_undefined_component_targets(self):
@@ -105,9 +105,14 @@ class Stage1DirectBaselineTest(unittest.TestCase):
         logits.scatter_(-1, primitive.unsqueeze(-1), 30.0)
         direction_gt = torch.tensor([[[1.0, 0.0, 0.0]] * 5])
         direction_pred = direction_gt.clone()
-        direction_pred[0, 0] *= -1.0
+        direction_gt[0, 0] = torch.nn.functional.normalize(
+            torch.tensor([1.0, 0.0, 1e-7]), dim=0
+        )
+        direction_pred[0, 0] = torch.nn.functional.normalize(
+            torch.tensor([-1.0, 0.0, 1e-7]), dim=0
+        )
         direction_pred[0, 3:] = 100.0
-        dimension_gt = torch.tensor([[-1.0, 2.0, 0.3, 4.0, -1.0]])
+        dimension_gt = torch.tensor([[0.0, 2.0, 0.3, 4.0, 0.0]])
         dimension_pred = dimension_gt.clone()
         dimension_pred[0, [0, 4]] = 100.0
         location_gt = torch.zeros(1, 5, 3)
@@ -127,7 +132,7 @@ class Stage1DirectBaselineTest(unittest.TestCase):
             location_gt,
         )
         self.assertLess(float(loss), 1e-6)
-        self.assertEqual(float(losses["mad_loss"]), 0.0)
+        self.assertLess(float(losses["mad_loss"]), 1e-10)
         self.assertEqual(float(losses["dim_loss"]), 0.0)
         self.assertEqual(float(losses["loc_loss"]), 0.0)
 

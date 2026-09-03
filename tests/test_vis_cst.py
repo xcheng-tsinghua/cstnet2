@@ -8,6 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 import vis_cst
+from data_utils.constraint_dataset_common import split_constraint_columns
 from data_utils.stage1_h5 import convert_stage1_txt_to_h5
 
 
@@ -84,17 +85,7 @@ class ConstraintVisualizationSourceTest(unittest.TestCase):
 
             self.assertEqual(index, 0)
             self.assertEqual(sample_count, 1)
-            for actual, field_slice in zip(
-                fields,
-                (
-                    expected[:, 0:3],
-                    expected[:, 3],
-                    expected[:, 4:7],
-                    expected[:, 7],
-                    expected[:, 8:11],
-                    expected[:, 11],
-                ),
-            ):
+            for actual, field_slice in zip(fields, split_constraint_columns(expected)):
                 np.testing.assert_array_equal(actual, field_slice)
 
     def test_negative_sample_index_selects_from_end(self):

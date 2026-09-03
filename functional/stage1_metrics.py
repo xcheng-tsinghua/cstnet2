@@ -6,7 +6,11 @@ from typing import Any, Dict, Iterable, Mapping
 import torch
 import torch.nn.functional as F
 
-from functional.constraints import cluster_embeddings_radius
+from functional.constraints import (
+    CLUSTER_METHODS,
+    cluster_embeddings_mean_shift,
+    cluster_embeddings_radius,
+)
 
 
 CONSTRAINT_ATTRIBUTE_METRIC_SPECS = {
@@ -41,23 +45,10 @@ def _primitive_mask(pmt_gt: torch.Tensor, valid_types: tuple[int, ...]) -> torch
     return mask
 
 
-def _canonicalize_direction(vectors: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Apply the project's dir_unify sign convention to normalized vectors."""
-    x, y, z = vectors.unbind(dim=-1)
-    z_zero = z.abs() <= eps
-    y_zero = y.abs() <= eps
-    flip = (z < -eps) | (z_zero & (y < -eps)) | (
-        z_zero & y_zero & (x < -eps)
-    )
-    return torch.where(flip.unsqueeze(-1), -vectors, vectors)
-
-
 def _angular_error_sum_and_count(
     prediction: torch.Tensor,
     target: torch.Tensor,
     mask: torch.Tensor,
-    *,
-    canonicalize: bool,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     pred_norm = prediction.norm(dim=-1)
@@ -75,10 +66,10 @@ def _angular_error_sum_and_count(
 
     pred_unit = F.normalize(prediction[valid].float(), dim=-1, eps=eps)
     target_unit = F.normalize(target[valid].float(), dim=-1, eps=eps)
-    if canonicalize:
-        pred_unit = _canonicalize_direction(pred_unit, eps=eps)
-        target_unit = _canonicalize_direction(target_unit, eps=eps)
-    cosine = (pred_unit * target_unit).sum(dim=-1).clamp(-1.0, 1.0)
+    # Plane normals and cylinder/cone axes are unoriented. The absolute dot
+    # product makes nearly antiparallel vectors robustly equivalent even near
+    # the discontinuous dir_unify sign boundary.
+    cosine = (pred_unit * target_unit).sum(dim=-1).abs().clamp(0.0, 1.0)
     error_deg = torch.acos(cosine) * (180.0 / math.pi)
     return error_deg.sum(), count
 
@@ -98,7 +89,6 @@ def evaluate_constraint_attribute_metrics(
         mad_pred,
         mad_gt,
         _primitive_mask(pmt_gt, (0, 1, 2)),
-        canonicalize=True,
     )
     dimension_mask = (
         _primitive_mask(pmt_gt, (1, 2, 3))
@@ -206,16 +196,33 @@ def evaluate_predicted_clustering(
     affiliate_idx: torch.Tensor,
     point_emb: torch.Tensor,
     bandwidth: float = 0.35,
+    *,
+    predicted_affiliate_idx: torch.Tensor | None = None,
+    cluster_method: str = "radius",
+    mean_shift_quantile: float = 0.015,
+    mean_shift_iterations: int = 20,
+    mean_shift_max_clusters: int = 128,
+    mean_shift_bandwidth: float | None = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Evaluate real inference-time clustering from predicted embeddings.
 
-    The prediction path intentionally mirrors Stage 1 inference: normalize the
-    embedding, run radius connected components, then compare predicted cluster
-    ids with GT primitive-instance ids. GT centers are not used.
+    The prediction path mirrors the selected Stage 1 inference clusterer. GT
+    centers and the number of GT instances are never used to make predictions.
     """
+    if cluster_method not in CLUSTER_METHODS:
+        raise ValueError(
+            f"unsupported cluster_method={cluster_method!r}; expected one of {CLUSTER_METHODS}"
+        )
     affiliate_idx = affiliate_idx.detach().long()
     point_emb = point_emb.detach().float()
+    if (
+        predicted_affiliate_idx is not None
+        and tuple(predicted_affiliate_idx.shape) != tuple(affiliate_idx.shape)
+    ):
+        raise ValueError(
+            "predicted_affiliate_idx must have the same shape as affiliate_idx"
+        )
     device = point_emb.device
     bsz = point_emb.shape[0]
 
@@ -225,8 +232,22 @@ def evaluate_predicted_clustering(
         _, gt_idx = torch.unique(gt, sorted=True, return_inverse=True)
         gt_count = int(gt_idx.max().item()) + 1 if gt_idx.numel() > 0 else 0
 
-        emb = F.normalize(point_emb[b], dim=-1, eps=1e-6)
-        pred_idx = cluster_embeddings_radius(emb, bandwidth=bandwidth).to(device=device)
+        if predicted_affiliate_idx is not None:
+            pred_idx = predicted_affiliate_idx[b].detach().long().to(device=device)
+        else:
+            emb = F.normalize(point_emb[b], dim=-1, eps=1e-6)
+            if cluster_method == "meanshift":
+                pred_idx = cluster_embeddings_mean_shift(
+                    emb,
+                    quantile=mean_shift_quantile,
+                    iterations=mean_shift_iterations,
+                    max_clusters=mean_shift_max_clusters,
+                    bandwidth=mean_shift_bandwidth,
+                ).to(device=device)
+            else:
+                pred_idx = cluster_embeddings_radius(
+                    emb, bandwidth=bandwidth
+                ).to(device=device)
         _, pred_idx = torch.unique(pred_idx.long(), sorted=True, return_inverse=True)
         pred_count = int(pred_idx.max().item()) + 1 if pred_idx.numel() > 0 else 0
 

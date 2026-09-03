@@ -23,6 +23,7 @@ import numpy as np
 from data_utils.constraint_dataset_common import (
     load_constraint_point_file,
     split_constraint_columns,
+    zero_invalid_constraint_components,
 )
 from data_utils.stage1_h5 import (
     STAGE1_H5_FIELDS,
@@ -331,11 +332,17 @@ def _read_h5_sample(h5_source, sample_index: int) -> tuple[tuple[np.ndarray, ...
         fields = tuple(np.asarray(h5_file[name][start:stop]) for name in H5_POINT_FIELDS)
 
     xyz, pmt, direction, dimension, location, face_idx = fields
-    fields = (
-        xyz.astype(np.float32, copy=False),
-        pmt.astype(np.int32, copy=False),
+    pmt = pmt.astype(np.int32, copy=False)
+    direction, dimension = zero_invalid_constraint_components(
+        pmt,
         direction.astype(np.float32, copy=False),
         dimension.astype(np.float32, copy=False),
+    )
+    fields = (
+        xyz.astype(np.float32, copy=False),
+        pmt,
+        direction,
+        dimension,
         location.astype(np.float32, copy=False),
         face_idx.astype(np.int32, copy=False),
     )

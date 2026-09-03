@@ -3,7 +3,12 @@ import unittest
 
 import torch
 
-from functional.constraints import _fit_cone, _fit_cylinder, estimate_normals_pca
+from functional.constraints import (
+    _fit_cone,
+    _fit_cylinder,
+    cluster_embeddings_mean_shift,
+    estimate_normals_pca,
+)
 
 
 def _surface_grid(theta_start, theta_stop, axial_start, axial_stop):
@@ -22,6 +27,28 @@ def _basis(axis):
 
 
 class ConstraintFittingTest(unittest.TestCase):
+    def test_spherical_mean_shift_finds_two_embedding_modes(self):
+        embedding = torch.tensor(
+            [
+                [1.0, 0.0],
+                [0.999, 0.04],
+                [0.998, -0.05],
+                [0.0, 1.0],
+                [0.04, 0.999],
+                [-0.05, 0.998],
+            ]
+        )
+        labels = cluster_embeddings_mean_shift(
+            embedding,
+            bandwidth=0.2,
+            iterations=20,
+            max_clusters=8,
+        )
+        self.assertEqual(labels.unique().numel(), 2)
+        self.assertTrue(torch.equal(labels[:3], labels[0].expand(3)))
+        self.assertTrue(torch.equal(labels[3:], labels[3].expand(3)))
+        self.assertNotEqual(int(labels[0]), int(labels[3]))
+
     def test_partial_cylinder_recovers_axis_radius_and_origin_foot(self):
         axis = torch.nn.functional.normalize(
             torch.tensor([0.31, -0.42, 0.85], dtype=torch.float64), dim=0
@@ -43,6 +70,21 @@ class ConstraintFittingTest(unittest.TestCase):
         self.assertAlmostEqual(float(fitted_radius), radius, places=6)
         self.assertTrue(torch.allclose(fitted_foot, foot, atol=1e-6, rtol=0.0))
 
+        guarded_axis, guarded_radius, guarded_foot = _fit_cylinder(
+            points,
+            radial,
+            initial_direction=torch.tensor(
+                [1.0, 0.0, 0.0], dtype=torch.float64
+            ),
+            initial_dimension=torch.tensor(0.05, dtype=torch.float64),
+            initial_location=torch.tensor(
+                [0.8, -0.7, 0.6], dtype=torch.float64
+            ),
+        )
+        self.assertLess(float((guarded_axis - axis).norm()), 1e-6)
+        self.assertAlmostEqual(float(guarded_radius), radius, places=6)
+        self.assertTrue(torch.allclose(guarded_foot, foot, atol=1e-6, rtol=0.0))
+
         estimated_normals = estimate_normals_pca(points.unsqueeze(0), k=16)[0]
         estimated_axis, estimated_radius, estimated_foot = _fit_cylinder(
             points, estimated_normals
@@ -50,6 +92,46 @@ class ConstraintFittingTest(unittest.TestCase):
         self.assertLess(float((estimated_axis - axis).norm()), 0.01)
         self.assertLess(abs(float(estimated_radius) - radius), 0.05)
         self.assertLess(float((estimated_foot - foot).norm()), 0.05)
+
+    def test_joint_head_initialization_recovers_short_cylinder_strip(self):
+        axis = torch.nn.functional.normalize(
+            torch.tensor([0.31, -0.42, 0.85], dtype=torch.float64), dim=0
+        )
+        foot_seed = torch.tensor([0.27, -0.31, 0.13], dtype=torch.float64)
+        foot = foot_seed - torch.dot(foot_seed, axis) * axis
+        radius = torch.tensor(0.43, dtype=torch.float64)
+        theta = torch.linspace(-0.2, 0.2, 21, dtype=torch.float64)
+        axial = torch.linspace(-0.01, 0.01, 7, dtype=torch.float64)
+        theta_grid, axial_grid = torch.meshgrid(theta, axial, indexing="ij")
+        first, second = _basis(axis)
+        radial = (
+            torch.cos(theta_grid).reshape(-1, 1) * first
+            + torch.sin(theta_grid).reshape(-1, 1) * second
+        )
+        points = (
+            foot
+            + axial_grid.reshape(-1, 1) * axis
+            + radius * radial
+        )
+
+        uninitialized_axis, _, _ = _fit_cylinder(points)
+        fitted_axis, fitted_radius, fitted_foot = _fit_cylinder(
+            points,
+            initial_direction=axis,
+            initial_dimension=radius,
+            initial_location=foot,
+        )
+
+        uninitialized_error = torch.acos(
+            torch.dot(uninitialized_axis, axis).abs().clamp(-1.0, 1.0)
+        )
+        self.assertGreater(float(uninitialized_error), math.radians(45.0))
+        self.assertLess(
+            float(torch.acos(torch.dot(fitted_axis, axis).abs().clamp(-1.0, 1.0))),
+            1e-6,
+        )
+        self.assertAlmostEqual(float(fitted_radius), float(radius), places=7)
+        self.assertTrue(torch.allclose(fitted_foot, foot, atol=1e-7, rtol=0.0))
 
     def test_truncated_partial_cone_recovers_unobserved_apex_and_angle(self):
         axis = torch.nn.functional.normalize(
