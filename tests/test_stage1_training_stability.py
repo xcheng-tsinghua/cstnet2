@@ -140,6 +140,37 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
         self.assertEqual(metrics["dimension_valid_points"], 3.0)
         self.assertEqual(metrics["location_valid_points"], 4.0)
 
+    def test_constraint_attribute_metrics_trim_each_clouds_largest_ten_percent(self):
+        primitive = torch.ones(1, 10, dtype=torch.long)
+        direction_gt = torch.zeros(1, 10, 3)
+        direction_gt[..., 0] = 1.0
+        direction_pred = direction_gt.clone()
+        direction_pred[0, -1] = torch.tensor([0.0, 1.0, 0.0])
+        dimension_gt = torch.zeros(1, 10)
+        dimension_pred = torch.arange(10, dtype=torch.float32).view(1, 10)
+        location_gt = torch.zeros(1, 10, 3)
+        location_pred = torch.zeros(1, 10, 3)
+        location_pred[0, :, 0] = torch.arange(10, dtype=torch.float32)
+
+        trimmed_batch = evaluate_constraint_attribute_metrics(
+            direction_pred,
+            dimension_pred,
+            location_pred,
+            primitive,
+            direction_gt,
+            dimension_gt,
+            location_gt,
+            trim_ratio=0.1,
+        )
+        metrics = _aggregate_metric_dicts([trimmed_batch])
+
+        self.assertEqual(metrics["direction_mean_angular_error_deg"], 0.0)
+        self.assertEqual(metrics["dimension_mean_absolute_error"], 4.0)
+        self.assertEqual(metrics["location_mean_distance_error"], 4.0)
+        self.assertEqual(metrics["direction_valid_points"], 9.0)
+        self.assertEqual(metrics["dimension_valid_points"], 9.0)
+        self.assertEqual(metrics["location_valid_points"], 9.0)
+
     def test_direction_loss_is_sign_invariant_at_dir_unify_boundary(self):
         primitive = torch.tensor([[1]])
         logits = torch.full((1, 1, 5), -20.0)
@@ -390,6 +421,15 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertLess(metrics["direction_mean_angular_error_deg"], 0.01)
             self.assertEqual(metrics["dimension_mean_absolute_error"], 0.0)
             self.assertEqual(metrics["location_mean_distance_error"], 0.0)
+            self.assertLess(
+                metrics["trimmed10/direction_mean_angular_error_deg"], 0.01
+            )
+            self.assertEqual(
+                metrics["trimmed10/dimension_mean_absolute_error"], 0.0
+            )
+            self.assertEqual(
+                metrics["trimmed10/location_mean_distance_error"], 0.0
+            )
             fitter_args = assemble.call_args.kwargs
             self.assertIsNotNone(fitter_args["mad_prediction"])
             self.assertIsNotNone(fitter_args["dim_prediction"])
@@ -414,6 +454,9 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                 "direction_mean_angular_error_deg": 12.0,
                 "dimension_mean_absolute_error": 0.2,
                 "location_mean_distance_error": 0.3,
+                "trimmed10/direction_mean_angular_error_deg": 8.0,
+                "trimmed10/dimension_mean_absolute_error": 0.1,
+                "trimmed10/location_mean_distance_error": 0.2,
             })
             trainer.append_save_dict = mock.Mock()
             trainer._update_best_metrics = mock.Mock(return_value=[])
@@ -439,6 +482,24 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertEqual(
                 payload["metric/fitted/location_mean_distance_error"],
                 0.3,
+            )
+            self.assertEqual(
+                payload[
+                    "metric/fitted/trimmed10/direction_mean_angular_error_deg"
+                ],
+                8.0,
+            )
+            self.assertEqual(
+                payload[
+                    "metric/fitted/trimmed10/dimension_mean_absolute_error"
+                ],
+                0.1,
+            )
+            self.assertEqual(
+                payload[
+                    "metric/fitted/trimmed10/location_mean_distance_error"
+                ],
+                0.2,
             )
             self.assertIn("confusion_matrix/primitive", payload)
             self.assertFalse(

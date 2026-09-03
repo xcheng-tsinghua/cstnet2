@@ -400,6 +400,17 @@ metric/fitted/dimension_mean_absolute_error
 metric/fitted/location_mean_distance_error
 ```
 
+同时记录按每个点云分别剔除有效点中最大 10% 误差后的平均值：
+
+```text
+metric/fitted/trimmed10/direction_mean_angular_error_deg
+metric/fitted/trimmed10/dimension_mean_absolute_error
+metric/fitted/trimmed10/location_mean_distance_error
+```
+
+具体计算方式是：每个点云、每种属性分别排序，删除最大的
+`floor(valid_point_count × 0.1)` 个误差，再用整个 epoch 所有保留点的误差总和除以保留点总数。该定义不会受 batch 大小或 batch 划分影响。原始均值仍然保留，用来观察长尾误差本身是否改善。
+
 预测头直接输出的指标仍保留为：
 
 ```text

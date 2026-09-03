@@ -49,6 +49,7 @@ def _angular_error_sum_and_count(
     prediction: torch.Tensor,
     target: torch.Tensor,
     mask: torch.Tensor,
+    trim_ratio: float = 0.0,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     pred_norm = prediction.norm(dim=-1)
@@ -60,9 +61,9 @@ def _angular_error_sum_and_count(
         & (pred_norm > eps)
         & (target_norm > eps)
     )
-    count = valid.sum().to(dtype=torch.float32)
     if not bool(valid.any()):
-        return prediction.new_zeros((), dtype=torch.float32), count
+        zero = prediction.new_zeros((), dtype=torch.float32)
+        return zero, zero
 
     pred_unit = F.normalize(prediction[valid].float(), dim=-1, eps=eps)
     target_unit = F.normalize(target[valid].float(), dim=-1, eps=eps)
@@ -70,8 +71,50 @@ def _angular_error_sum_and_count(
     # product makes nearly antiparallel vectors robustly equivalent even near
     # the discontinuous dir_unify sign boundary.
     cosine = (pred_unit * target_unit).sum(dim=-1).abs().clamp(0.0, 1.0)
-    error_deg = torch.acos(cosine) * (180.0 / math.pi)
-    return error_deg.sum(), count
+    error_deg = prediction.new_zeros(mask.shape, dtype=torch.float32)
+    error_deg[valid] = torch.acos(cosine) * (180.0 / math.pi)
+    return _trimmed_error_sum_and_count(error_deg, valid, trim_ratio)
+
+
+def _trimmed_error_sum_and_count(
+    errors: torch.Tensor,
+    valid_mask: torch.Tensor,
+    trim_ratio: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Drop each cloud's largest errors and return additive accumulators."""
+    if errors.shape != valid_mask.shape or errors.ndim != 2:
+        raise ValueError("attribute errors and masks must have shape [B, N]")
+    if not 0.0 <= trim_ratio < 1.0:
+        raise ValueError("trim_ratio must be in [0, 1)")
+
+    if trim_ratio == 0.0:
+        selected = errors[valid_mask]
+        return (
+            selected.sum() if selected.numel() else errors.new_zeros(()),
+            valid_mask.sum().to(dtype=torch.float32),
+        )
+
+    total_sum = errors.new_zeros((), dtype=torch.float32)
+    total_count = errors.new_zeros((), dtype=torch.float32)
+    for cloud_errors, cloud_mask in zip(errors, valid_mask):
+        selected = cloud_errors[cloud_mask].float()
+        point_count = int(selected.numel())
+        if point_count == 0:
+            continue
+        remove_count = int(math.floor(point_count * trim_ratio))
+        if remove_count > 0:
+            largest = torch.topk(
+                selected,
+                k=remove_count,
+                largest=True,
+                sorted=False,
+            ).values
+            kept_sum = (selected.sum() - largest.sum()).clamp_min(0.0)
+        else:
+            kept_sum = selected.sum()
+        total_sum = total_sum + kept_sum
+        total_count = total_count + float(point_count - remove_count)
+    return total_sum, total_count
 
 
 @torch.no_grad()
@@ -83,12 +126,18 @@ def evaluate_constraint_attribute_metrics(
     mad_gt: torch.Tensor,
     dim_gt: torch.Tensor,
     loc_gt: torch.Tensor,
+    trim_ratio: float = 0.0,
 ) -> Dict[str, torch.Tensor]:
-    """Return additive accumulators for exact epoch-level constraint errors."""
+    """Return additive accumulators for exact epoch-level constraint errors.
+
+    When ``trim_ratio`` is nonzero, the largest errors are removed separately
+    from each point cloud before the retained sums and counts are aggregated.
+    """
     direction_sum, direction_count = _angular_error_sum_and_count(
         mad_pred,
         mad_gt,
         _primitive_mask(pmt_gt, (0, 1, 2)),
+        trim_ratio=trim_ratio,
     )
     dimension_mask = (
         _primitive_mask(pmt_gt, (1, 2, 3))
@@ -96,12 +145,11 @@ def evaluate_constraint_attribute_metrics(
         & torch.isfinite(dim_gt)
     )
     dimension_errors = (dim_pred.float() - dim_gt.float()).abs()
-    dimension_sum = (
-        dimension_errors[dimension_mask].sum()
-        if bool(dimension_mask.any())
-        else dimension_errors.new_zeros(())
+    dimension_sum, dimension_count = _trimmed_error_sum_and_count(
+        dimension_errors,
+        dimension_mask,
+        trim_ratio,
     )
-    dimension_count = dimension_mask.sum().to(dtype=torch.float32)
 
     location_mask = (
         _primitive_mask(pmt_gt, (0, 1, 2, 3))
@@ -109,12 +157,11 @@ def evaluate_constraint_attribute_metrics(
         & torch.isfinite(loc_gt).all(dim=-1)
     )
     location_errors = (loc_pred.float() - loc_gt.float()).norm(dim=-1)
-    location_sum = (
-        location_errors[location_mask].sum()
-        if bool(location_mask.any())
-        else location_errors.new_zeros(())
+    location_sum, location_count = _trimmed_error_sum_and_count(
+        location_errors,
+        location_mask,
+        trim_ratio,
     )
-    location_count = location_mask.sum().to(dtype=torch.float32)
 
     return {
         "_constraint_attribute_sum/direction_angular_error_deg": direction_sum,

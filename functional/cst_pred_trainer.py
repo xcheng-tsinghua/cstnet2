@@ -42,6 +42,7 @@ FITTED_ATTRIBUTE_METRIC_NAMES = (
     "dimension_mean_absolute_error",
     "location_mean_distance_error",
 )
+FITTED_ATTRIBUTE_TRIM_RATIO = 0.1
 BEST_FILE_NAMES = {
     "pmt_miou": "best_pmt_miou.pth",
     "cluster_ari": "best_cluster_ari.pth",
@@ -598,6 +599,7 @@ class CstPredTrainer(object):
     def evaluate_fitted_epoch(self, global_epoch):
         """Evaluate the complete clustering + XYZ fitting route once per epoch."""
         fitted_metric_batches = []
+        trimmed_fitted_metric_batches = []
         was_training = self.model.training
         self.model.eval()
         loader, total_override = self._epoch_iterable()
@@ -660,16 +662,35 @@ class CstPredTrainer(object):
                         loc_gt=loc_gt,
                     )
                 ))
+                trimmed_fitted_metric_batches.append(_detach_dict(
+                    evaluate_constraint_attribute_metrics(
+                        mad_pred=fitted_constraints["direction"],
+                        dim_pred=fitted_constraints["dimension"],
+                        loc_pred=fitted_constraints["location"],
+                        pmt_gt=pmt_gt,
+                        mad_gt=mad_gt,
+                        dim_gt=dim_gt,
+                        loc_gt=loc_gt,
+                        trim_ratio=FITTED_ATTRIBUTE_TRIM_RATIO,
+                    )
+                ))
 
             if not fitted_metric_batches:
                 raise ValueError("training dataset produced no fitted metric batches")
             summary = aggregate_constraint_attribute_metrics(
                 fitted_metric_batches
             )
+            trimmed_summary = aggregate_constraint_attribute_metrics(
+                trimmed_fitted_metric_batches
+            )
             selected = {
                 name: float(summary[name])
                 for name in FITTED_ATTRIBUTE_METRIC_NAMES
             }
+            selected.update({
+                f"trimmed10/{name}": float(trimmed_summary[name])
+                for name in FITTED_ATTRIBUTE_METRIC_NAMES
+            })
             print(
                 Fore.CYAN
                 + "fitted route: "
