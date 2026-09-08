@@ -24,17 +24,14 @@ from networks.stage1_direct_baselines import (
 )
 
 
-DEFAULT_DATA_ROOT = "/opt/data/private/data_set/pcd_cstnet2/abc_pcd"
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train an independent XYZ-only Stage 1 direct baseline"
     )
     parser.add_argument(
-        "--model", default="attn3dgcn", choices=DIRECT_BASELINE_MODEL_NAMES
+        "--model", default="pointnet2", choices=DIRECT_BASELINE_MODEL_NAMES
     )
-    parser.add_argument("--data_root", default=DEFAULT_DATA_ROOT)
+    parser.add_argument("--data_root", default="/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5")
     parser.add_argument(
         "--val_data_root",
         default="",

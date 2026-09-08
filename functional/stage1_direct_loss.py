@@ -11,9 +11,9 @@ import torch.nn.functional as F
 DIRECT_LOSS_NAMES = ("pmt", "mad", "dim", "loc")
 DEFAULT_DIRECT_LOSS_WEIGHTS = {
     "w_pmt": 1.0,
-    "w_mad": 0.02,
-    "w_dim": 0.05,
-    "w_loc": 0.02,
+    "w_mad": 1.0,
+    "w_dim": 1.0,
+    "w_loc": 1.0,
 }
 
 
