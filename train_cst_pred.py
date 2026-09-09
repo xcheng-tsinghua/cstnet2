@@ -36,7 +36,7 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='/opt/data/private/data_set/pcd_cstnet2/stage1_all',
+        default='/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5',
         help='directory containing Stage 1 TXT samples or HDF5 shards',
     )
     parser.add_argument(
@@ -95,12 +95,12 @@ def parse_args(argv=None):
         help='auto-resume, restart the selected phase, or require a resume checkpoint',
     )
     parser.add_argument('--w_pmt', default=1.0, type=float)
-    parser.add_argument('--w_cluster', default=0.5, type=float)
-    parser.add_argument('--w_mad', default=0.02, type=float)
-    parser.add_argument('--w_dim', default=0.05, type=float)
-    parser.add_argument('--w_loc', default=0.02, type=float)
-    parser.add_argument('--w_geom', default=0.02, type=float)
-    parser.add_argument('--w_inst', default=0.005, type=float)
+    parser.add_argument('--w_cluster', default=1.0, type=float)  # 0.5
+    parser.add_argument('--w_mad', default=0.5, type=float)  # 0.02
+    parser.add_argument('--w_dim', default=0.5, type=float)  # 0.05
+    parser.add_argument('--w_loc', default=0.5, type=float)  # 0.02
+    parser.add_argument('--w_geom', default=0.5, type=float)  # 0.02
+    parser.add_argument('--w_inst', default=0.1, type=float)  # 0.005
     parser.add_argument('--geom_start_epoch', default=0, type=int)
     parser.add_argument('--geom_ramp_epochs', default=10, type=int)
     parser.add_argument('--disable_mad_loss', dest='enable_mad_loss', action='store_false', default=True)
