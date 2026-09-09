@@ -72,7 +72,6 @@ def main(args: argparse.Namespace) -> dict:
         model=model,
         data_loader=loader,
         device=device,
-        loss_weights=checkpoint.get("loss_weights", {}),
         use_amp=args.use_amp,
     )
     summary = evaluator.evaluate()

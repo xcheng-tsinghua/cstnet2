@@ -8,7 +8,6 @@ import random
 from collections.abc import Mapping
 from contextlib import nullcontext
 from pathlib import Path
-from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -34,7 +33,7 @@ from networks.stage1_direct_baselines import stage1_direct_model_config
 
 PRIMITIVE_CLASS_NAMES = ("plane", "cylinder", "cone", "sphere", "other")
 DIRECT_CHECKPOINT_TASK = "stage1_direct_baseline"
-DIRECT_CHECKPOINT_VERSION = 1
+DIRECT_CHECKPOINT_VERSION = 2
 
 
 def capture_rng_state() -> dict[str, Any]:
@@ -89,11 +88,9 @@ class Stage1DirectTrainer:
         optimizer: torch.optim.Optimizer,
         scheduler: Any,
         train_loader: Any,
-        val_loader: Any | None,
         output_dir: str | os.PathLike[str],
         device: torch.device,
         epochs: int,
-        loss_weights: Mapping[str, float],
         gradient_clip_norm: float = 1.0,
         use_amp: bool = False,
         checkpoint_args: Mapping[str, Any] | None = None,
@@ -103,14 +100,12 @@ class Stage1DirectTrainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.train_loader = train_loader
-        self.val_loader = val_loader
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.device = device
         self.epochs = int(epochs)
         if self.epochs <= 0:
             raise ValueError("epochs must be positive")
-        self.loss_weights = {name: float(value) for name, value in loss_weights.items()}
         self.gradient_clip_norm = float(gradient_clip_norm)
         self.use_amp = bool(use_amp and device.type == "cuda")
         if use_amp and not self.use_amp:
@@ -170,7 +165,7 @@ class Stage1DirectTrainer:
                 f"non-finite Stage 1 direct predictions: {non_finite}"
             )
 
-    def _backward_and_step(self, loss: torch.Tensor) -> tuple[float, bool]:
+    def _backward_and_step(self, loss: torch.Tensor) -> None:
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
         gradient_norm = torch.nn.utils.clip_grad_norm_(
@@ -189,99 +184,44 @@ class Stage1DirectTrainer:
             )
         if not skipped:
             self.global_step += 1
-        return gradient_norm_value, skipped
 
-    def _run_epoch(
-        self, loader: Any, *, training: bool, epoch: int
-    ) -> tuple[dict[str, float], dict[str, Any]]:
-        self.model.train(training)
+    def _run_epoch(self, epoch: int) -> tuple[dict[str, float], dict[str, Any]]:
+        self.model.train()
         metrics = Stage1DirectMetricAccumulator()
         loss_totals: dict[str, float] = {}
         sample_count = 0
-        gradient_sum = 0.0
-        gradient_max = 0.0
-        gradient_count = 0
-        amp_skips = 0
-        if self.device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(self.device)
-        start_time = perf_counter()
-        mode = "train" if training else "val"
-        iterator = tqdm(
-            loader,
-            desc=f"{mode} {epoch + 1}/{self.epochs}",
-        )
-        grad_context = nullcontext() if training else torch.no_grad()
-        with grad_context:
-            for raw_batch in iterator:
-                xyz, pmt_gt, mad_gt, dim_gt, loc_gt = self._batch_to_device(raw_batch)
-                batch_size = int(xyz.shape[0])
-                if training:
-                    self.optimizer.zero_grad(set_to_none=True)
-                with self._autocast():
-                    predictions = self.model(xyz)
-                    self._assert_finite_predictions(predictions)
-                    loss, loss_dict = direct_constraint_loss(
-                        predictions,
-                        pmt_gt,
-                        mad_gt,
-                        dim_gt,
-                        loc_gt,
-                        weights=self.loss_weights,
-                    )
-
-                if training:
-                    gradient_norm, skipped = self._backward_and_step(loss)
-                    if skipped:
-                        amp_skips += 1
-                    else:
-                        gradient_sum += gradient_norm
-                        gradient_max = max(gradient_max, gradient_norm)
-                        gradient_count += 1
-
-                for name, value in loss_dict.items():
-                    if torch.is_tensor(value) and value.numel() == 1:
-                        loss_totals[name] = loss_totals.get(name, 0.0) + (
-                            float(value.detach().cpu()) * batch_size
-                        )
-                sample_count += batch_size
-                metrics.update(
+        iterator = tqdm(self.train_loader, desc=f"train {epoch + 1}/{self.epochs}")
+        for raw_batch in iterator:
+            xyz, pmt_gt, mad_gt, dim_gt, loc_gt = self._batch_to_device(raw_batch)
+            batch_size = int(xyz.shape[0])
+            self.optimizer.zero_grad(set_to_none=True)
+            with self._autocast():
+                predictions = self.model(xyz)
+                self._assert_finite_predictions(predictions)
+                loss, loss_dict = direct_constraint_loss(
                     predictions, pmt_gt, mad_gt, dim_gt, loc_gt
                 )
-                if hasattr(iterator, "set_postfix"):
-                    iterator.set_postfix(
-                        loss=f"{float(loss.detach().cpu()):.4f}",
-                        pmt=f"{float((predictions['log_pmt'].argmax(-1) == pmt_gt).float().mean()):.3f}",
+            self._backward_and_step(loss)
+            for name, value in loss_dict.items():
+                if torch.is_tensor(value) and value.numel() == 1:
+                    loss_totals[name] = loss_totals.get(name, 0.0) + (
+                        float(value.detach().cpu()) * batch_size
                     )
+            sample_count += batch_size
+            metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt)
+            if hasattr(iterator, "set_postfix"):
+                iterator.set_postfix(
+                    loss=f"{float(loss.detach().cpu()):.4f}",
+                    pmt=f"{float((predictions['log_pmt'].argmax(-1) == pmt_gt).float().mean()):.3f}",
+                )
 
-        elapsed = max(perf_counter() - start_time, 1e-9)
         loss_summary = _scalar_loss_summary(loss_totals, sample_count)
         metric_summary = metrics.compute()
-        metric_summary.update(
-            {
-                "efficiency/samples_per_second": sample_count / elapsed,
-                "efficiency/epoch_seconds": elapsed,
-                "efficiency/peak_memory_mb": (
-                    torch.cuda.max_memory_allocated(self.device) / (1024.0**2)
-                    if self.device.type == "cuda"
-                    else 0.0
-                ),
-            }
-        )
-        if training:
-            metric_summary.update(
-                {
-                    "optimization/gradient_norm_mean": gradient_sum
-                    / max(gradient_count, 1),
-                    "optimization/gradient_norm_max": gradient_max,
-                    "optimization/amp_skipped_steps": amp_skips,
-                    "optimization/amp_scale": float(self.scaler.get_scale()),
-                }
-            )
         if primitive_prediction_collapsed(
             torch.as_tensor(metric_summary["pmt_pred_histogram"])
         ):
             print(
-                f"WARNING: {mode} primitive prediction collapsed at epoch {epoch + 1}: "
+                f"WARNING: train primitive prediction collapsed at epoch {epoch + 1}: "
                 f"{metric_summary['pmt_pred_histogram']}"
             )
         return loss_summary, metric_summary
@@ -300,7 +240,6 @@ class Stage1DirectTrainer:
             "best_pmt_miou": float(self.best_pmt_miou),
             "args": self.checkpoint_args,
             "model_config": self.model_config,
-            "loss_weights": self.loss_weights,
             "rng_state": capture_rng_state(),
             "wandb_run_id": wandb_run_id(self.wandb_run),
         }
@@ -323,7 +262,6 @@ class Stage1DirectTrainer:
             "best_loss",
             "best_pmt_miou",
             "model_config",
-            "loss_weights",
             "rng_state",
         }
         missing = sorted(required.difference(checkpoint))
@@ -339,15 +277,6 @@ class Stage1DirectTrainer:
                 "Stage 1 direct checkpoint model configuration mismatch: "
                 f"saved={saved_config}, requested={self.model_config}"
             )
-        saved_weights = {
-            name: float(value) for name, value in checkpoint["loss_weights"].items()
-        }
-        if saved_weights != self.loss_weights:
-            raise ValueError(
-                "Stage 1 direct checkpoint loss weights mismatch: "
-                f"saved={saved_weights}, requested={self.loss_weights}"
-            )
-
         self.model.load_state_dict(checkpoint["model"], strict=True)
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         if self.scheduler is not None:
@@ -383,14 +312,11 @@ class Stage1DirectTrainer:
                 float(group["lr"]) for group in self.optimizer.param_groups
             ),
         }
-        payload.update(flatten_wandb_summary_metrics("train/loss", record["train_loss"]))
-        payload.update(flatten_wandb_summary_metrics("train", record["train"]))
-        if record.get("val_loss") is not None:
-            payload.update(flatten_wandb_summary_metrics("val/loss", record["val_loss"]))
-            payload.update(flatten_wandb_summary_metrics("val", record["val"]))
-        metric_source = record["val"] if record.get("val") is not None else record["train"]
+        payload.update(flatten_wandb_summary_metrics("loss", record["train_loss"]))
+        for name, value in record["train"].items():
+            payload.update(flatten_wandb_summary_metrics(name, value))
         payload["primitive_confusion"] = wandb_confusion_matrix(
-            metric_source["pmt_confusion_matrix"],
+            record["train"]["pmt_confusion_matrix"],
             PRIMITIVE_CLASS_NAMES,
             title="Stage 1 Direct Primitive Confusion",
         )
@@ -413,27 +339,11 @@ class Stage1DirectTrainer:
             )
         else:
             print("starting new Stage 1 direct baseline training")
-        if self.val_loader is None:
-            print(
-                "WARNING: --val_data_root was not provided; best checkpoints use "
-                "training metrics. Use a validation set for formal comparisons."
-            )
-
         latest: dict[str, Any] = {}
         for epoch in range(self.start_epoch, self.epochs):
-            train_loss, train_metrics = self._run_epoch(
-                self.train_loader, training=True, epoch=epoch
-            )
-            if self.val_loader is None:
-                val_loss, val_metrics = None, None
-                selection_loss = float(train_loss["loss_all"])
-                selection_miou = float(train_metrics["pmt_miou"])
-            else:
-                val_loss, val_metrics = self._run_epoch(
-                    self.val_loader, training=False, epoch=epoch
-                )
-                selection_loss = float(val_loss["loss_all"])
-                selection_miou = float(val_metrics["pmt_miou"])
+            train_loss, train_metrics = self._run_epoch(epoch)
+            selection_loss = float(train_loss["loss_all"])
+            selection_miou = float(train_metrics["pmt_miou"])
 
             improved_loss = selection_loss < self.best_loss
             improved_miou = selection_miou > self.best_pmt_miou
@@ -459,8 +369,6 @@ class Stage1DirectTrainer:
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train": train_metrics,
-                "val_loss": val_loss,
-                "val": val_metrics,
                 "best_loss": self.best_loss,
                 "best_pmt_miou": self.best_pmt_miou,
                 "checkpoint/last_saved": last_saved,
@@ -469,15 +377,13 @@ class Stage1DirectTrainer:
             }
             self.history.append(latest)
             self._write_history()
-            source_metrics = val_metrics if val_metrics is not None else train_metrics
             print(
                 f"epoch {epoch + 1}/{self.epochs} "
                 f"train_loss={train_loss['loss_all']:.6f} "
-                f"selection_loss={selection_loss:.6f} "
-                f"pmt_mIoU={source_metrics['pmt_miou']:.4f} "
-                f"direction={source_metrics['final/direction_mean_angular_error_deg']:.3f}deg "
-                f"dimension={source_metrics['final/dimension_mean_absolute_error']:.6f} "
-                f"location={source_metrics['final/location_mean_distance_error']:.6f}"
+                f"pmt_mIoU={train_metrics['pmt_miou']:.4f} "
+                f"direction={train_metrics['final/direction_mean_angular_error_deg']:.3f}deg "
+                f"dimension={train_metrics['final/dimension_mean_absolute_error']:.6f} "
+                f"location={train_metrics['final/location_mean_distance_error']:.6f}"
             )
             self._log_wandb(latest)
         return latest

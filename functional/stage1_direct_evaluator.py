@@ -27,13 +27,11 @@ class Stage1DirectEvaluator:
         model: torch.nn.Module,
         data_loader: Any,
         device: torch.device,
-        loss_weights: Mapping[str, float],
         use_amp: bool = False,
     ):
         self.model = model
         self.data_loader = data_loader
         self.device = device
-        self.loss_weights = dict(loss_weights)
         self.use_amp = bool(use_amp and device.type == "cuda")
 
     def _autocast(self):
@@ -64,7 +62,6 @@ class Stage1DirectEvaluator:
                     mad_gt,
                     dim_gt,
                     loc_gt,
-                    weights=self.loss_weights,
                 )
             batch_size = int(xyz.shape[0])
             sample_count += batch_size

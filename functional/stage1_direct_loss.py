@@ -8,15 +8,6 @@ import torch
 import torch.nn.functional as F
 
 
-DIRECT_LOSS_NAMES = ("pmt", "mad", "dim", "loc")
-DEFAULT_DIRECT_LOSS_WEIGHTS = {
-    "w_pmt": 1.0,
-    "w_mad": 1.0,
-    "w_dim": 1.0,
-    "w_loc": 1.0,
-}
-
-
 def _zero_loss(reference: torch.Tensor) -> torch.Tensor:
     return reference.sum() * 0.0
 
@@ -60,8 +51,6 @@ def direct_constraint_loss(
     mad_gt: torch.Tensor,
     dim_gt: torch.Tensor,
     loc_gt: torch.Tensor,
-    *,
-    weights: Mapping[str, float] | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute only direct component losses, with no clustering regularizers."""
     required = {"log_pmt", "mad", "dim", "loc"}
@@ -94,18 +83,6 @@ def direct_constraint_loss(
     if mismatched:
         raise ValueError(f"direct prediction/target shape mismatch: {mismatched}")
 
-    resolved_weights = dict(DEFAULT_DIRECT_LOSS_WEIGHTS)
-    if weights is not None:
-        unknown = sorted(set(weights).difference(resolved_weights))
-        if unknown:
-            raise ValueError(f"unknown direct loss weights: {unknown}")
-        resolved_weights.update({name: float(value) for name, value in weights.items()})
-    negative = {
-        name: value for name, value in resolved_weights.items() if value < 0.0
-    }
-    if negative:
-        raise ValueError(f"direct loss weights must be non-negative: {negative}")
-
     pmt_loss = F.nll_loss(log_pmt.reshape(-1, 5), pmt_gt.reshape(-1).long())
     mad_mask = _primitive_mask(pmt_gt, (0, 1, 2))
     dim_mask = _primitive_mask(pmt_gt, (1, 2, 3))
@@ -114,17 +91,7 @@ def direct_constraint_loss(
     dim_loss = _masked_mse(dim_pred, dim_gt, dim_mask)
     loc_loss = _masked_mse(loc_pred, loc_gt, loc_mask)
 
-    raw_losses = {
-        "pmt": pmt_loss,
-        "mad": mad_loss,
-        "dim": dim_loss,
-        "loc": loc_loss,
-    }
-    weighted_losses = {
-        name: raw_losses[name] * resolved_weights[f"w_{name}"]
-        for name in DIRECT_LOSS_NAMES
-    }
-    total = sum(weighted_losses.values(), _zero_loss(log_pmt))
+    total = pmt_loss + mad_loss + dim_loss + loc_loss
     loss_dict: dict[str, torch.Tensor] = {
         "loss_all": total,
         "pmt_loss": pmt_loss,
@@ -132,13 +99,6 @@ def direct_constraint_loss(
         "dim_loss": dim_loss,
         "loc_loss": loc_loss,
     }
-    for name in DIRECT_LOSS_NAMES:
-        loss_dict[f"raw/{name}"] = raw_losses[name]
-        loss_dict[f"weighted/{name}"] = weighted_losses[name]
-        loss_dict[f"effective_weight/{name}"] = total.new_tensor(
-            resolved_weights[f"w_{name}"]
-        )
-
     non_finite = [
         name
         for name, value in loss_dict.items()
@@ -150,7 +110,5 @@ def direct_constraint_loss(
 
 
 __all__ = [
-    "DEFAULT_DIRECT_LOSS_WEIGHTS",
-    "DIRECT_LOSS_NAMES",
     "direct_constraint_loss",
 ]

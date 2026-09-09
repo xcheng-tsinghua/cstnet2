@@ -78,8 +78,15 @@ class Stage1DirectMetricAccumulator:
         raw = aggregate_constraint_attribute_metrics([self.raw_attributes])
         final = aggregate_constraint_attribute_metrics([self.final_attributes])
         output = {str(key): _to_python(value) for key, value in primitive.items()}
-        output.update(raw)
-        output.update({f"final/{key}": value for key, value in final.items()})
+        output.update({
+            key: value for key, value in raw.items()
+            if not key.endswith("_valid_points")
+        })
+        output.update({
+            f"final/{key}": value
+            for key, value in final.items()
+            if not key.endswith("_valid_points")
+        })
         return output
 
 

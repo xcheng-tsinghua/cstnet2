@@ -459,20 +459,20 @@ pointnet | pointnet2 | attn3dgcn
 dgcnn | pointtransformer | pointmamba | pointnext | pointmlp
 ```
 
-Train one model with a held-out validation directory:
+Train one model using the training dataset:
 
 ```bash
 python train_stage1_direct_baseline.py \
   --model pointnet2 \
   --data_root /path/to/stage1_train \
-  --val_data_root /path/to/stage1_val \
   --n_points 2048 \
   --bs 30 \
   --epoch 100 \
   --use_amp
 ```
 
-The loss contains exactly four supervised terms. Direction, dimension, and
+The loss is the sum of exactly four equally weighted supervised terms, with each
+weight fixed at 1. Direction, dimension, and
 location use the same GT primitive validity masks as the main Stage 1 method;
 there is no cluster, geometry-consistency, or instance-consistency loss. During
 inference, direction unification and invalid sentinels are applied according to
@@ -487,10 +487,15 @@ model_trained/stage1_direct_baseline/<model>/seed_<seed>/best_pmt_miou.pth
 ```
 
 Resume the selected run with `--resume auto`, or pass a concrete direct-baseline
-checkpoint path. Architecture and loss-weight mismatches are rejected. If
-`--val_data_root` is omitted, training still runs but best checkpoints use train
-metrics and a warning is printed; a validation set should be used for formal
-comparisons.
+checkpoint path. Architecture mismatches are rejected. Best checkpoints use
+training loss and training primitive mIoU.
+
+WandB logs once per epoch without a split prefix: `loss/loss_all`, the four
+`loss/*_loss` components, `pmt_acc`, `pmt_macro_f1`, `pmt_miou`, raw and `final/`
+geometry errors, and `primitive_confusion` from training predictions. It also
+records `epoch`, `global_step`, and `learning_rate`. Valid-point counts, duplicate
+or weighted loss entries, efficiency metrics, and optimization diagnostics are
+omitted.
 
 Evaluate a direct checkpoint without initializing WandB:
 

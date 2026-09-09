@@ -11,7 +11,6 @@ import numpy as np
 import torch
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
-from functional.stage1_direct_loss import DEFAULT_DIRECT_LOSS_WEIGHTS
 from functional.stage1_direct_trainer import Stage1DirectTrainer
 from functional.wandb_utils import (
     initialize_wandb_run,
@@ -32,11 +31,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model", default="pointnet2", choices=DIRECT_BASELINE_MODEL_NAMES
     )
     parser.add_argument("--data_root", default="/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5")
-    parser.add_argument(
-        "--val_data_root",
-        default="",
-        help="Optional held-out validation directory; strongly recommended for comparisons",
-    )
     parser.add_argument("--n_points", type=int, default=2048)
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=30)
     parser.add_argument("--workers", type=int, default=16)
@@ -68,11 +62,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pointmamba_depth", type=int, default=2)
     parser.add_argument("--pointnext_k", type=int, default=24)
     parser.add_argument("--pointmlp_group_size", type=int, default=24)
-
-    parser.add_argument("--w_pmt", type=float, default=DEFAULT_DIRECT_LOSS_WEIGHTS["w_pmt"])
-    parser.add_argument("--w_mad", type=float, default=DEFAULT_DIRECT_LOSS_WEIGHTS["w_mad"])
-    parser.add_argument("--w_dim", type=float, default=DEFAULT_DIRECT_LOSS_WEIGHTS["w_dim"])
-    parser.add_argument("--w_loc", type=float, default=DEFAULT_DIRECT_LOSS_WEIGHTS["w_loc"])
 
     parser.add_argument(
         "--output_root",
@@ -155,18 +144,6 @@ def main(args: argparse.Namespace) -> dict:
         is_sample=args.is_sample,
         sample_seed=args.seed,
     )
-    val_loader = None
-    if args.val_data_root:
-        val_loader = Stage1ConstraintDataset.create_dataloader(
-            root=args.val_data_root,
-            bs=args.bs,
-            n_points=args.n_points,
-            num_workers=args.workers,
-            shuffle=False,
-            is_sample=args.is_sample,
-            sample_seed=args.seed + 1,
-        )
-
     model = build_stage1_direct_baseline(model_config).to(device)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     optimizer = torch.optim.Adam(
@@ -175,19 +152,12 @@ def main(args: argparse.Namespace) -> dict:
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=args.scheduler_step, gamma=args.scheduler_gamma
     )
-    loss_weights = {
-        "w_pmt": args.w_pmt,
-        "w_mad": args.w_mad,
-        "w_dim": args.w_dim,
-        "w_loc": args.w_loc,
-    }
     checkpoint_args = {
         **vars(args),
         "model_config": model_config,
         "parameter_count": parameter_count,
         "device": str(device),
         "train_file_count": len(train_loader.dataset),
-        "val_file_count": len(val_loader.dataset) if val_loader is not None else 0,
     }
     run_name = args.wandb_run_name or f"stage1_direct_{args.model}_seed{args.seed}"
     wandb_resume_id = read_wandb_run_id_from_checkpoint(resume_checkpoint)
@@ -211,11 +181,9 @@ def main(args: argparse.Namespace) -> dict:
         optimizer=optimizer,
         scheduler=scheduler,
         train_loader=train_loader,
-        val_loader=val_loader,
         output_dir=output_dir,
         device=device,
         epochs=args.epochs,
-        loss_weights=loss_weights,
         gradient_clip_norm=args.gradient_clip_norm,
         use_amp=args.use_amp,
         checkpoint_args=checkpoint_args,

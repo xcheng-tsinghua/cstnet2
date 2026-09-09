@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 import torch
 
@@ -143,26 +144,54 @@ class Stage1DirectBaselineTest(unittest.TestCase):
             model = build_stage1_direct_baseline(config)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, 0.9)
+            run = Mock(id="direct-test-run")
             trainer = Stage1DirectTrainer(
                 model=model,
                 optimizer=optimizer,
                 scheduler=scheduler,
                 train_loader=[batch],
-                val_loader=[batch],
                 output_dir=temporary,
                 device=torch.device("cpu"),
                 epochs=1,
-                loss_weights={"w_pmt": 1.0, "w_mad": 0.02, "w_dim": 0.05, "w_loc": 0.02},
                 checkpoint_args=config,
-                wandb_run=None,
+                wandb_run=run,
             )
-            summary = trainer.fit()
-            self.assertIn("final/direction_mean_angular_error_deg", summary["val"])
+            with patch(
+                "functional.stage1_direct_trainer.wandb_confusion_matrix",
+                return_value="confusion-panel",
+            ) as confusion:
+                summary = trainer.fit()
+            self.assertIn("final/direction_mean_angular_error_deg", summary["train"])
+            self.assertNotIn("val", summary)
+            self.assertNotIn("val_loss", summary)
+            self.assertFalse(any(key.endswith("_valid_points") for key in summary["train"]))
+            self.assertAlmostEqual(
+                summary["train_loss"]["loss_all"],
+                sum(summary["train_loss"][f"{name}_loss"] for name in ("pmt", "mad", "dim", "loc")),
+                places=5,
+            )
+            payload = run.log.call_args.args[0]
+            geometry_keys = {
+                "direction_mean_angular_error_deg",
+                "dimension_mean_absolute_error",
+                "location_mean_distance_error",
+            }
+            self.assertEqual(set(payload), {
+                "epoch", "global_step", "learning_rate", "primitive_confusion",
+                "loss/loss_all", "loss/pmt_loss", "loss/mad_loss",
+                "loss/dim_loss", "loss/loc_loss",
+                "pmt_acc", "pmt_macro_f1", "pmt_miou",
+                *geometry_keys, *(f"final/{key}" for key in geometry_keys),
+            })
+            self.assertEqual(run.log.call_args.kwargs, {"step": 1})
+            self.assertEqual(confusion.call_args.args[0], summary["train"]["pmt_confusion_matrix"])
             for filename in ("last.pth", "best_loss.pth", "best_pmt_miou.pth", "history.json"):
                 self.assertTrue(os.path.isfile(os.path.join(temporary, filename)))
             checkpoint = load_direct_checkpoint(os.path.join(temporary, "last.pth"))
             self.assertEqual(checkpoint["task"], DIRECT_CHECKPOINT_TASK)
             self.assertNotIn("embedding", checkpoint["model_config"])
+            self.assertNotIn("loss_weights", checkpoint)
+            self.assertEqual(checkpoint["wandb_run_id"], "direct-test-run")
 
             resumed_model = build_stage1_direct_baseline(config)
             resumed_optimizer = torch.optim.Adam(resumed_model.parameters(), lr=1e-3)
@@ -172,17 +201,18 @@ class Stage1DirectBaselineTest(unittest.TestCase):
                 optimizer=resumed_optimizer,
                 scheduler=resumed_scheduler,
                 train_loader=[batch],
-                val_loader=[batch],
                 output_dir=temporary,
                 device=torch.device("cpu"),
                 epochs=2,
-                loss_weights={"w_pmt": 1.0, "w_mad": 0.02, "w_dim": 0.05, "w_loc": 0.02},
                 checkpoint_args=config,
                 wandb_run=None,
             )
             resumed.load_checkpoint(os.path.join(temporary, "last.pth"))
             self.assertEqual(resumed.start_epoch, 1)
             self.assertEqual(resumed.global_step, 1)
+            resumed_summary = resumed.fit()
+            self.assertEqual(resumed.global_step, 2)
+            self.assertEqual(resumed_summary["epoch"], 1)
 
     def test_training_entry_lists_only_direct_baselines(self):
         for model_name in DIRECT_BASELINE_MODEL_NAMES:
@@ -190,6 +220,8 @@ class Stage1DirectBaselineTest(unittest.TestCase):
             self.assertEqual(args.model, model_name)
         defaults = parse_args([])
         self.assertEqual(defaults.model, "pointnet2")
+        for removed_option in ("val_data_root", "w_pmt", "w_mad", "w_dim", "w_loc"):
+            self.assertFalse(hasattr(defaults, removed_option))
 
 
 if __name__ == "__main__":
