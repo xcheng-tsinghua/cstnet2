@@ -483,14 +483,17 @@ class CstPredTrainer(object):
         )
         for data in progress_bar:
             loss_dict, metric_dict = self.process_batch(data, global_epoch, True)
+            # Reuse the CPU copies needed for epoch statistics in the progress bar.
+            loss_dict = _detach_dict(loss_dict)
+            metric_dict = _detach_dict(metric_dict)
             progress_bar.set_postfix({
-                "loss": f"{_scalar(loss_dict, 'loss_all'):.4f}",
                 "pmt_acc": f"{_scalar(metric_dict, 'pmt_acc'):.4f}",
-                "pmt_miou": f"{_scalar(metric_dict, 'pmt_miou'):.4f}",
-                "LR": f"{max(self.current_lrs().values()):.6f}",
-            })
-            loss_batches.append(_detach_dict(loss_dict))
-            metric_batches.append(_detach_dict(metric_dict))
+                "loc_loss": f"{_scalar(loss_dict, 'raw/loc'):.4f}",
+                "mad_loss": f"{_scalar(loss_dict, 'raw/mad'):.4f}",
+                "dim_loss": f"{_scalar(loss_dict, 'raw/dim'):.4f}",
+            }, refresh=False)
+            loss_batches.append(loss_dict)
+            metric_batches.append(metric_dict)
 
         loss_summary = _mean_dicts(loss_batches)
         metric_summary = _aggregate_metric_dicts(metric_batches)
