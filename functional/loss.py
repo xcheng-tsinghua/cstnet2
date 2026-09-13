@@ -1153,50 +1153,42 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, loc_pred,
     w_geom = float(weights.get("w_geom", 0.02))
     w_inst = float(weights.get("w_inst", 0.005))
 
-    pmt_loss = F.nll_loss(log_pmt_pred.reshape(-1, 5), pmt_gt.reshape(-1))
-    cluster_loss = discriminative_loss(point_emb, affil_idx) if point_emb is not None else _zero_loss(log_pmt_pred)
+    def active(name):
+        weight = weights.get("w_" + name, {
+            "pmt": w_pmt, "cluster": w_cluster, "mad": w_mad,
+            "dim": w_dim, "loc": w_loc, "geom": w_geom, "inst": w_inst,
+        }[name])
+        ramp = linear_ramp(global_epoch, geom_start_epoch, geom_ramp_epochs) if name in {"geom", "inst"} else 1.0
+        return bool(enabled_losses.get(name, True)) and float(weight) != 0.0 and ramp != 0.0
 
+    zero = log_pmt_pred.new_zeros(())
+    pmt_loss = F.nll_loss(log_pmt_pred.reshape(-1, 5), pmt_gt.reshape(-1)) if active("pmt") else zero
+    cluster_loss = discriminative_loss(point_emb, affil_idx) if active("cluster") and point_emb is not None else zero
     mad_pred = F.normalize(mad_pred, dim=-1, eps=eps)
     mad_gt = F.normalize(mad_gt, dim=-1, eps=eps)
-
-    mad_mask = _primitive_mask(pmt_gt, (0, 1, 2))
     mad_loss = _masked_vector_mse(
-        mad_pred, mad_gt, mad_mask, sign_invariant=True
-    )
-    dim_observability, loc_observability = _parameter_observability_weights(
-        xyz,
-        pmt_gt,
-        mad_gt,
-        dim_gt,
-        loc_gt,
-        affil_idx,
-    )
+        mad_pred, mad_gt, _primitive_mask(pmt_gt, (0, 1, 2)), sign_invariant=True
+    ) if active("mad") else zero
+    dim_observability = loc_observability = torch.zeros_like(dim_gt)
+    if any(active(name) for name in ("dim", "loc", "geom")):
+        dim_observability, loc_observability = _parameter_observability_weights(
+            xyz, pmt_gt, mad_gt, dim_gt, loc_gt, affil_idx
+        )
     dim_loss = _robust_dimension_loss(
-        dim_pred,
-        dim_gt,
-        pmt_gt,
-        affil_idx,
-        dim_observability,
-    )
+        dim_pred, dim_gt, pmt_gt, affil_idx, dim_observability
+    ) if active("dim") else zero
     loc_loss = _robust_location_loss(
-        loc_pred,
-        loc_gt,
-        pmt_gt,
-        affil_idx,
-        loc_observability,
-    )
-
-    geom_losses = _stage1_geometry_losses(
-        xyz,
-        mad_pred,
-        dim_pred,
-        loc_pred,
-        pmt_gt,
-        affil_idx,
-        dim_observability,
-        loc_observability,
-    )
-    inst_loss = instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt)
+        loc_pred, loc_gt, pmt_gt, affil_idx, loc_observability
+    ) if active("loc") else zero
+    geom_losses = {name: zero for name in ("geom_loss", "loss_plane", "loss_cylinder", "loss_cone", "loss_sphere")}
+    if active("geom"):
+        geom_losses = _stage1_geometry_losses(
+            xyz, mad_pred, dim_pred, loc_pred, pmt_gt, affil_idx,
+            dim_observability, loc_observability,
+        )
+    inst_loss = instance_consistency_loss(
+        log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt
+    ) if active("inst") else zero
 
     aux_factor = linear_ramp(global_epoch, geom_start_epoch, geom_ramp_epochs)
     raw_losses = {

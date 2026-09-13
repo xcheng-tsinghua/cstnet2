@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
+from data_utils.huggingface_dataset import resolve_stage1_data_root
 from functional.stage1_direct_trainer import Stage1DirectTrainer
 from functional.wandb_utils import (
     initialize_wandb_run,
@@ -30,7 +31,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model", default="pointnet2", choices=DIRECT_BASELINE_MODEL_NAMES
     )
-    parser.add_argument("--data_root", default="/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5")
+    parser.add_argument(
+        "--data_root", default="/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5",
+        help="local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL",
+    )
+    parser.add_argument(
+        "--hf_cache_dir", default=None,
+        help="optional Hugging Face cache directory; defaults to the standard HF cache",
+    )
+    parser.add_argument(
+        "--data_format", default="auto", choices=["auto", "txt", "h5"],
+        help="dataset format; auto prefers HDF5 when shards are present",
+    )
     parser.add_argument("--n_points", type=int, default=2048)
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=30)
     parser.add_argument("--workers", type=int, default=16)
@@ -135,14 +147,18 @@ def main(args: argparse.Namespace) -> dict:
     device = resolve_device(args.device)
     model_config = stage1_direct_model_config(args)
     output_dir, resume_checkpoint = resolve_output_and_resume(args)
+    resolved_data_root = resolve_stage1_data_root(
+        args.data_root, cache_dir=args.hf_cache_dir, storage_format=args.data_format,
+    )
     train_loader = Stage1ConstraintDataset.create_dataloader(
-        root=args.data_root,
+        root=resolved_data_root,
         bs=args.bs,
         n_points=args.n_points,
         num_workers=args.workers,
         shuffle=True,
         is_sample=args.is_sample,
         sample_seed=args.seed,
+        storage_format=args.data_format,
     )
     model = build_stage1_direct_baseline(model_config).to(device)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -158,6 +174,7 @@ def main(args: argparse.Namespace) -> dict:
         "parameter_count": parameter_count,
         "device": str(device),
         "train_file_count": len(train_loader.dataset),
+        "resolved_data_root": resolved_data_root,
     }
     run_name = args.wandb_run_name or f"stage1_direct_{args.model}_seed{args.seed}"
     wandb_resume_id = read_wandb_run_id_from_checkpoint(resume_checkpoint)

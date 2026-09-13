@@ -58,9 +58,6 @@ class CstPredWrapper(nn.Module):
         self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))
         attr_mid = math.ceil((3 * channel_mid) ** 0.5)
         dim_mid = math.ceil(channel_mid ** 0.5)
-        self.geometry_decoder = utils.MLP(
-            1, (channel_mid, channel_mid, channel_mid), dropout=0.0
-        )
         self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
         self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
         self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
@@ -90,10 +87,9 @@ class CstPredWrapper(nn.Module):
 
         # -> [bs, n, fea]
         pnt_fea_l2norm, pmt_log_softmax = pnt_fea_l2norm.permute(0, 2, 1), pmt_log_softmax.permute(0, 2, 1)
-        geometry_fea = self.geometry_decoder(embedding)
-        mad_pred = F.normalize(self.mad_head(geometry_fea), dim=1, eps=1e-6).permute(0, 2, 1)
-        dim_pred = F.softplus(self.dim_head(geometry_fea)).squeeze(1)
-        loc_pred = self.loc_head(geometry_fea).permute(0, 2, 1)
+        mad_pred = F.normalize(self.mad_head(embedding), dim=1, eps=1e-6).permute(0, 2, 1)
+        dim_pred = F.softplus(self.dim_head(embedding)).squeeze(1)
+        loc_pred = self.loc_head(embedding).permute(0, 2, 1)
 
         return {
             "embedding": pnt_fea_l2norm,
@@ -115,11 +111,11 @@ class CstPredWrapper(nn.Module):
             trainable_prefixes = ["embedding", "emb_head", "cls_head"]
         elif phase == "geometry":
             trainable_prefixes = [
-                "geometry_decoder", "mad_head", "dim_head", "loc_head"
+                "mad_head", "dim_head", "loc_head"
             ]
         else:
             trainable_prefixes = [
-                "emb_head", "cls_head", "geometry_decoder",
+                "emb_head", "cls_head",
                 "mad_head", "dim_head", "loc_head",
             ]
             trainable_prefixes.extend(self._joint_backbone_prefixes())

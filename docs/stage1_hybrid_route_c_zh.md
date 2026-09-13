@@ -1,3 +1,5 @@
+> 历史路线文档：本文所述聚类拟合流程已不再用于主 Stage1 路径。当前实现见 [Stage1 直接预测](stage1_direct_route_zh.md)。
+
 # CSTNet2 Stage 1 混合路线 C 技术说明
 
 ## 1. 文档目的

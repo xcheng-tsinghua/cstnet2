@@ -50,14 +50,11 @@ class WandBLoggingTest(unittest.TestCase):
         self.assertFalse(hasattr(defaults, "root_sever"))
         self.assertFalse(defaults.disable_extra_features)
         self.assertFalse(defaults.overfit_one_batch)
-        self.assertFalse(defaults.use_amp)
+        self.assertFalse(hasattr(defaults, "use_amp"))
         self.assertTrue(defaults.enable_mad_loss)
         self.assertFalse(hasattr(defaults, "enable_grad_diagnostics"))
-        self.assertEqual(defaults.cluster_metric_interval, 50)
+        self.assertFalse(hasattr(defaults, "cluster_metric_interval"))
         self.assertEqual(defaults.grad_clip, 1.0)
-        self.assertEqual(defaults.normal_k, 16)
-        self.assertFalse(defaults.disable_pca_normals_for_fitting)
-        self.assertFalse(defaults.disable_prediction_initialization)
         self.assertEqual(defaults.checkpoint_policy, "auto")
         self.assertFalse(hasattr(defaults, "resume_checkpoint"))
         self.assertFalse(hasattr(defaults, "init_from_checkpoint"))
@@ -68,14 +65,12 @@ class WandBLoggingTest(unittest.TestCase):
             "dataset",
             "--disable_extra_features",
             "--overfit_one_batch",
-            "--use_amp",
             "--disable_mad_loss",
         ])
         self.assertTrue(enabled.is_sample)
         self.assertEqual(enabled.data_root, "dataset")
         self.assertTrue(enabled.disable_extra_features)
         self.assertTrue(enabled.overfit_one_batch)
-        self.assertTrue(enabled.use_amp)
         self.assertFalse(enabled.enable_mad_loss)
 
     def test_env_reader_and_required_key(self):

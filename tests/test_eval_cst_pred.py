@@ -42,6 +42,7 @@ class EvaluateStage1Test(unittest.TestCase):
                     "model": "pointnet",
                     "n_points": 8,
                     "train_phase": "joint",
+                    "constraint_route": "direct_mlp_v1",
                     "use_extra_features": False,
                     "feature_k": 16,
                     "cluster_bandwidth": 0.35,
@@ -73,10 +74,10 @@ class EvaluateStage1Test(unittest.TestCase):
         self.assertEqual(saved_report["checkpoint_epoch"], 3)
         self.assertIn("loss_all", saved_report["loss"])
         self.assertIn("pmt_miou", saved_report["metrics"])
-        self.assertIn("cluster_ari_real", saved_report["metrics"])
-        self.assertIn("fitted_pmt_miou", saved_report["metrics"])
+        self.assertNotIn("cluster_ari_real", saved_report["metrics"])
+        self.assertIn("direct_pmt_miou", saved_report["metrics"])
         self.assertIn(
-            "fitted_direction_mean_angular_error_deg", saved_report["metrics"]
+            "direct_direction_mean_angular_error_deg", saved_report["metrics"]
         )
 
 

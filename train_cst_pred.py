@@ -7,7 +7,8 @@ from datetime import datetime
 import torch
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
-from functional.constraints import CLUSTER_METHODS
+from data_utils.huggingface_dataset import resolve_stage1_data_root
+from functional.direct_constraints import CONSTRAINT_ROUTE
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
 from functional.stage1_checkpoint_policy import (
@@ -26,7 +27,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=30, help='batch size in training')
     parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
-    parser.add_argument('--lr', default=1e-4, type=float, help='learning rate in training')
+    parser.add_argument('--lr', default=None, type=float, help='default: 1e-4 for semantic/geometry, 1e-5 for joint')
     parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
@@ -37,7 +38,11 @@ def parse_args(argv=None):
         '--data_root',
         type=str,
         default='/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5',
-        help='directory containing Stage 1 TXT samples or HDF5 shards',
+        help='local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL',
+    )
+    parser.add_argument(
+        '--hf_cache_dir', default=None, type=str,
+        help='optional Hugging Face cache directory; defaults to the standard HF cache',
     )
     parser.add_argument(
         '--data_format',
@@ -51,41 +56,10 @@ def parse_args(argv=None):
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
     parser.add_argument('--disable_extra_features', action='store_true', default=False)
     parser.add_argument('--feature_k', default=16, type=int)
-    parser.add_argument('--cluster_bandwidth', default=0.35, type=float)
-    parser.add_argument('--cluster_method', default='meanshift', choices=CLUSTER_METHODS)
-    parser.add_argument('--mean_shift_quantile', default=0.015, type=float)
-    parser.add_argument('--mean_shift_iterations', default=20, type=int)
-    parser.add_argument('--mean_shift_max_clusters', default=128, type=int)
-    parser.add_argument('--mean_shift_bandwidth', default=None, type=float)
-    parser.add_argument(
-        '--normal_k',
-        default=16,
-        type=int,
-        help='PCA neighborhood size used by the epoch-end primitive fitter',
-    )
-    parser.add_argument(
-        '--disable_pca_normals_for_fitting',
-        action='store_true',
-        default=False,
-    )
-    parser.add_argument(
-        '--disable_prediction_initialization',
-        action='store_true',
-        default=False,
-    )
-    parser.add_argument(
-        '--cluster_metric_interval',
-        default=50,
-        type=int,
-        help=(
-            'training batches between real Mean Shift ARI/NMI computations; '
-            '0 evaluates only the first batch of each epoch'
-        ),
-    )
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
     parser.add_argument(
         '--checkpoint_root',
-        default=os.path.join('model_trained', 'stage1'),
+        default=os.path.join('model_trained', 'stage1_direct'),
         type=str,
     )
     parser.add_argument(
@@ -115,16 +89,17 @@ def parse_args(argv=None):
         type=float,
         help='global gradient norm limit; set to 0 to disable clipping',
     )
-    parser.add_argument('--use_amp', action='store_true', default=False)
 
     args = parser.parse_args(argv)
+    if args.lr is None:
+        args.lr = 1e-5 if args.train_phase == "joint" else 1e-4
     return args
 
 
 def main(args):
     if not args.data_root:
-        raise ValueError('--data_root must point to the Stage 1 training dataset directory')
-    save_str = f'{args.model}_multitask_{args.train_phase}'
+        raise ValueError('--data_root must be a local dataset path or Hugging Face dataset URL')
+    save_str = f'{args.model}_direct_{args.train_phase}'
     print(Fore.BLUE + Back.CYAN + f'-> save str: {save_str} <-')
 
     checkpoint_resolution = resolve_stage1_checkpoint(
@@ -143,8 +118,11 @@ def main(args):
     os.makedirs('model_trained', exist_ok=True)
 
     # data
+    resolved_data_root = resolve_stage1_data_root(
+        args.data_root, cache_dir=args.hf_cache_dir, storage_format=args.data_format,
+    )
     train_loader = Stage1ConstraintDataset.create_dataloader(
-        root=args.data_root,
+        root=resolved_data_root,
         bs=args.bs,
         n_points=args.n_points,
         num_workers=args.workers,
@@ -193,6 +171,8 @@ def main(args):
     checkpoint_args = {
         **vars(args),
         'use_extra_features': use_extra_features,
+        'constraint_route': CONSTRAINT_ROUTE,
+        'resolved_data_root': resolved_data_root,
     }
     run = initialize_wandb_run(
         project=args.wandb_project,
@@ -229,20 +209,6 @@ def main(args):
         geom_ramp_epochs=args.geom_ramp_epochs,
         use_extra_features=use_extra_features,
         feature_k=args.feature_k,
-        cluster_bandwidth=args.cluster_bandwidth,
-        cluster_method=args.cluster_method,
-        mean_shift_quantile=args.mean_shift_quantile,
-        mean_shift_iterations=args.mean_shift_iterations,
-        mean_shift_max_clusters=args.mean_shift_max_clusters,
-        mean_shift_bandwidth=args.mean_shift_bandwidth,
-        normal_k=args.normal_k,
-        use_pca_normals_for_fitting=(
-            not args.disable_pca_normals_for_fitting
-        ),
-        use_prediction_initialization=(
-            not args.disable_prediction_initialization
-        ),
-        cluster_metric_interval=args.cluster_metric_interval,
         overfit_one_batch=args.overfit_one_batch,
         train_phase=args.train_phase,
         enabled_losses=enabled_losses,
@@ -255,7 +221,6 @@ def main(args):
         checkpoint_args=checkpoint_args,
         joint_backbone_lr_scale=args.joint_backbone_lr_scale,
         grad_clip=args.grad_clip,
-        use_amp=args.use_amp,
     )
     try:
         trainer.start()

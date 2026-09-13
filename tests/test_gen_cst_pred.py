@@ -282,9 +282,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         self.assertFalse(hasattr(args, "stage1_mode"))
         self.assertEqual(args.extensions, ".txt")
         self.assertEqual(args.input_layout, "auto")
-        self.assertIsNone(args.cluster_method)
-        self.assertFalse(args.disable_pca_normals_for_fitting)
-        self.assertFalse(args.disable_prediction_initialization)
+        self.assertFalse(hasattr(args, "cluster_method"))
         self.assertFalse(args.overwrite)
 
     def test_real_stage1_checkpoint_xyz_inference_smoke(self):
@@ -296,7 +294,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
                     "model": model.state_dict(),
                     "args": {
                         "model": "pointnet",
-                        "stage1_mode": "multitask",
+                        "constraint_route": "direct_mlp_v1",
                         "train_phase": "joint",
                         "use_extra_features": False,
                         "feature_k": 16,
@@ -308,8 +306,6 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             predictor = gen_cst_pred.Stage1Predictor(
                 checkpoint_path, torch.device("cpu")
             )
-            self.assertEqual(predictor.cluster_method, "meanshift")
-            self.assertTrue(predictor.use_prediction_initialization)
             predicted = predictor.predict(
                 np.random.default_rng(7).normal(size=(32, 3)).astype(np.float32)
             )
@@ -318,6 +314,7 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
         self.assertEqual(predicted["mad"].shape, (32, 3))
         self.assertEqual(predicted["affiliate_idx"].shape, (32,))
         self.assertTrue(np.isfinite(predicted["loc"]).all())
+        np.testing.assert_array_equal(predicted["affiliate_idx"], np.full(32, -1))
 
     def test_frozen_extractor_rejects_semantic_only_geometry_initialization(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
@@ -326,16 +323,12 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             torch.save(
                 {
                     "model": model.state_dict(),
-                    "args": {"train_phase": "semantic"},
+                    "args": {"train_phase": "semantic", "constraint_route": "direct_mlp_v1"},
                 },
                 checkpoint_path,
             )
-            extractor = FrozenStage1ConstraintExtractor(
-                model_name="pointnet",
-                checkpoint=str(checkpoint_path),
-            )
-
-        self.assertFalse(extractor.use_prediction_initialization)
+            with self.assertRaisesRegex(ValueError, "geometry or joint"):
+                FrozenStage1ConstraintExtractor(model_name="pointnet", checkpoint=str(checkpoint_path))
 
 
 if __name__ == "__main__":

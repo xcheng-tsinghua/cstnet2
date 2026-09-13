@@ -10,10 +10,10 @@ The project follows a strict two-stage architecture:
 
    * Input: raw 3D point cloud.
    * Output: per-point constraint representation.
-   * Stage 1 learns to predict per-point primitive types and per-point clustering features.
-   * Points belonging to the same geometric primitive are grouped through clustering.
-   * Geometric primitive fitting is then performed for each cluster.
-   * The fitted primitives are used to compute the final per-point constraint representation.
+   * Stage 1 learns per-point primitive types and clustering features, then three MLP heads predict direction, dimension, and location.
+   * Clustering features are auxiliary training outputs supervised by affiliate_idx.
+   * Final constraints come directly from the primitive-type head and three attribute MLPs.
+   * Do not run clustering or primitive fitting in the main training, evaluation, or inference path.
 
 2. **Stage 2: Constraint-Aware Classification and Segmentation**
 
@@ -197,7 +197,7 @@ The input of the Stage 1 model is a 3D point cloud tensor:
 point_cloud.shape == [batch_size, num_points, 3]
 ```
 
-The model outputs two types of data:
+The model outputs the following data:
 
 1. **Per-point primitive type**
 
@@ -258,22 +258,31 @@ The `affiliate_idx` field should be treated as the primitive instance label and 
 
 ---
 
-### 4.4 Computing the Per-Point Constraint Representation
+### 4.4 Direct Per-Point Constraint Prediction
 
-After obtaining the per-point primitive type and per-point clustering feature, the following procedure should be used:
+The final representation is primitive_type (five-class one-hot), direction,
+dimension, and location predicted directly from the shared point backbone.
+Three independent MLP heads predict mad, dim, and loc. There is no shared
+geometry decoder and no clustering or geometric fitting during inference.
+Canonicalize directions with dir_unify; project plane/cylinder locations to
+their canonical foot-point representations; restrict dimensions to valid
+ranges; zero unsupported attributes. Preserve all definitions in Section 2.
 
-1. Cluster the points according to their clustering features.
-2. Treat each point cluster as one primitive instance.
-3. Determine the primitive type of each point cluster using the predicted per-point primitive types.
-4. Fit the corresponding geometric primitive for each cluster.
-5. According to the constraint definitions in Section 2, compute the per-point constraint representation:
+Stage 1 has three separate training phases:
 
-   * `primitive_type`
-   * `direction`
-   * `dimension`
-   * `location`
+1. semantic: train backbone, primitive-type head, and clustering-feature head.
+2. geometry: freeze the complete backbone and both semantic heads (including
+   BatchNorm state); train only mad_head, dim_head, and loc_head against GT.
+3. joint: unfreeze the existing high-level backbone blocks and all five heads;
+   keep lower backbone blocks frozen. Use a small learning rate and a further
+   0.1 backbone learning-rate multiplier.
 
-The final output of Stage 1 is the per-point constraint representation for the entire point cloud.
+Skip disabled loss computations entirely. Geometric residual and instance
+consistency losses remain training regularizers; they are not primitive fitting.
+No AMP or full-dataset fitting pass is used by train_cst_pred.py.
+New checkpoints use constraint_route=direct_mlp_v1 and model_trained/stage1_direct;
+legacy fitting-route checkpoints are incompatible with the three-head architecture.
+After these phases freeze all of Stage 1 before training Stage 2.
 
 ---
 
@@ -378,7 +387,7 @@ per-point primitive type
 per-point clustering feature
 ```
 
-Then clustering and primitive fitting are used to compute the final per-point constraint representation.
+Then the three attribute MLPs learn direction, dimension, and location. The four direct prediction components form the final constraints; clustering features remain auxiliary supervision.
 
 The Stage 1 model should be designed for training on a single NVIDIA RTX 4090 GPU with 24 GB VRAM. The model should be powerful enough to learn constraint extraction, but it should not be unnecessarily large.
 

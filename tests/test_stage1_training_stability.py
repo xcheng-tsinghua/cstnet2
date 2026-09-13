@@ -60,7 +60,7 @@ def checkpoint_args(phase, n_points=20):
         "geom_start_epoch": 0,
         "geom_ramp_epochs": 4,
         "joint_backbone_lr_scale": 0.1,
-        "use_amp": False,
+        "constraint_route": "direct_mlp_v1",
     }
 
 
@@ -368,30 +368,13 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
         self.assertLess(float(dimension.grad.abs().max()), 0.02)
         self.assertLess(float(location.grad.abs().max()), 0.02)
 
-    def test_real_clustering_metrics_can_be_sampled(self):
+    def test_semantic_skips_unused_losses_and_clustering(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
             trainer = make_trainer(root, "semantic")
-            trainer.cluster_metric_interval = 3
-            self.assertTrue(trainer._should_compute_cluster_metrics(0))
-            self.assertFalse(trainer._should_compute_cluster_metrics(1))
-            self.assertTrue(trainer._should_compute_cluster_metrics(3))
-            trainer.cluster_metric_interval = 0
-            self.assertTrue(trainer._should_compute_cluster_metrics(0))
-            self.assertFalse(trainer._should_compute_cluster_metrics(1))
-
-            with mock.patch(
-                "functional.cst_pred_trainer.evaluate_predicted_clustering"
-            ) as real_metric, mock.patch(
-                "functional.cst_pred_trainer.evaluate_clustering"
-            ) as oracle_metric:
-                _, metrics = trainer.process_batch(
-                    synthetic_batch(),
-                    global_epoch=0,
-                    is_train=False,
-                    compute_cluster_metrics=False,
-                )
-            real_metric.assert_not_called()
-            oracle_metric.assert_not_called()
+            with mock.patch("functional.loss.instance_consistency_loss", side_effect=AssertionError("unused")), mock.patch("functional.loss._stage1_geometry_losses", side_effect=AssertionError("unused")), mock.patch("functional.loss._parameter_observability_weights", side_effect=AssertionError("unused")):
+                loss, metrics = trainer.process_batch(synthetic_batch(), 1, True)
+            self.assertGreater(float(loss["raw/cluster"]), 0)
+            self.assertEqual(float(loss["raw/inst"]), 0)
             self.assertNotIn("cluster_ari_real", metrics)
 
     def test_stage1_checkpoint_persists_wandb_run_id(self):
@@ -403,39 +386,18 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                 "stage1-run-id",
             )
 
-    def test_epoch_fitted_metrics_use_complete_route_outputs(self):
+    def test_batch_metrics_use_direct_constraints(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
             trainer = make_trainer(root, "joint")
             batch = synthetic_batch()
-            fitted_constraints = {
-                "direction": batch[2].clone(),
-                "dimension": batch[3].clone(),
-                "location": batch[4].clone(),
-            }
-            with mock.patch(
-                "functional.cst_pred_trainer.assemble_constraints_from_stage1",
-                return_value=fitted_constraints,
-            ) as assemble:
-                metrics = trainer.evaluate_fitted_epoch(global_epoch=0)
-
-            self.assertLess(metrics["direction_mean_angular_error_deg"], 0.01)
-            self.assertEqual(metrics["dimension_mean_absolute_error"], 0.0)
-            self.assertEqual(metrics["location_mean_distance_error"], 0.0)
-            self.assertLess(
-                metrics["trimmed10/direction_mean_angular_error_deg"], 0.01
-            )
-            self.assertEqual(
-                metrics["trimmed10/dimension_mean_absolute_error"], 0.0
-            )
-            self.assertEqual(
-                metrics["trimmed10/location_mean_distance_error"], 0.0
-            )
-            fitter_args = assemble.call_args.kwargs
-            self.assertIsNotNone(fitter_args["mad_prediction"])
-            self.assertIsNotNone(fitter_args["dim_prediction"])
-            self.assertIsNotNone(fitter_args["loc_prediction"])
-            self.assertTrue(fitter_args["use_prediction_initialization"])
-            self.assertTrue(fitter_args["use_pca_normals_for_fitting"])
+            constraints = {"direction": batch[2], "dimension": batch[3], "location": batch[4]}
+            with mock.patch("functional.cst_pred_trainer.direct_constraints", return_value=constraints) as direct:
+                _, metrics = trainer.process_batch(batch, 0, False)
+            summary = _aggregate_metric_dicts([metrics])
+            self.assertLess(summary["direction_mean_angular_error_deg"], 0.01)
+            self.assertEqual(summary["dimension_mean_absolute_error"], 0)
+            self.assertEqual(summary["location_mean_distance_error"], 0)
+            direct.assert_called_once()
 
     def test_stage1_wandb_metrics_do_not_use_redundant_train_prefix(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
@@ -450,14 +412,6 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                     "pmt_confusion_matrix": torch.eye(5),
                 },
             ))
-            trainer.evaluate_fitted_epoch = mock.Mock(return_value={
-                "direction_mean_angular_error_deg": 12.0,
-                "dimension_mean_absolute_error": 0.2,
-                "location_mean_distance_error": 0.3,
-                "trimmed10/direction_mean_angular_error_deg": 8.0,
-                "trimmed10/dimension_mean_absolute_error": 0.1,
-                "trimmed10/location_mean_distance_error": 0.2,
-            })
             trainer.append_save_dict = mock.Mock()
             trainer._update_best_metrics = mock.Mock(return_value=[])
             trainer.save = mock.Mock(return_value={"last": True})
@@ -471,36 +425,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             payload = run.log.call_args.args[0]
             self.assertIn("loss/loss_all", payload)
             self.assertIn("metric/pmt_miou", payload)
-            self.assertEqual(
-                payload["metric/fitted/direction_mean_angular_error_deg"],
-                12.0,
-            )
-            self.assertEqual(
-                payload["metric/fitted/dimension_mean_absolute_error"],
-                0.2,
-            )
-            self.assertEqual(
-                payload["metric/fitted/location_mean_distance_error"],
-                0.3,
-            )
-            self.assertEqual(
-                payload[
-                    "metric/fitted/trimmed10/direction_mean_angular_error_deg"
-                ],
-                8.0,
-            )
-            self.assertEqual(
-                payload[
-                    "metric/fitted/trimmed10/dimension_mean_absolute_error"
-                ],
-                0.1,
-            )
-            self.assertEqual(
-                payload[
-                    "metric/fitted/trimmed10/location_mean_distance_error"
-                ],
-                0.2,
-            )
+            self.assertFalse(any("fitted" in key for key in payload))
             self.assertIn("confusion_matrix/primitive", payload)
             self.assertFalse(
                 any(
@@ -574,7 +499,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertTrue(all(not name.startswith("embedding.") for name in trainable))
             self.assertTrue(all(not name.startswith("cls_head.") for name in trainable))
             self.assertTrue(all(not name.startswith("emb_head.") for name in trainable))
-            self.assertTrue(any(name.startswith("geometry_decoder.") for name in trainable))
+            self.assertEqual({name.split(".")[0] for name in trainable}, {"mad_head", "dim_head", "loc_head"})
 
     def test_joint_uses_lower_backbone_lr(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
@@ -616,7 +541,6 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             for filename in (
                 "last.pth",
                 "best_pmt_miou.pth",
-                "best_cluster_ari.pth",
                 "best_constraint_score.pth",
             ):
                 self.assertTrue(os.path.isfile(os.path.join(root, "checkpoints", filename)))

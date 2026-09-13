@@ -4,17 +4,15 @@ import json
 import math
 import os
 import warnings
-from contextlib import nullcontext
 from time import time
 
 import torch
 from colorama import Back, Fore
 from tqdm import tqdm
 
-from functional.constraints import assemble_constraints_from_stage1
+from functional.direct_constraints import CONSTRAINT_ROUTE, direct_constraints, validate_direct_checkpoint
 from functional.loss import (
     constraint_loss,
-    evaluate_clustering,
     linear_ramp,
 )
 from functional.point_features import build_stage1_input_features
@@ -22,7 +20,6 @@ from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
-    evaluate_predicted_clustering,
     evaluate_primitive_metrics,
     primitive_metrics_from_confusion,
     primitive_prediction_collapsed,
@@ -37,15 +34,8 @@ from functional.wandb_utils import (
 
 LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "loc", "geom", "inst")
 PRIMITIVE_CLASS_NAMES = ("plane", "cylinder", "cone", "sphere", "other")
-FITTED_ATTRIBUTE_METRIC_NAMES = (
-    "direction_mean_angular_error_deg",
-    "dimension_mean_absolute_error",
-    "location_mean_distance_error",
-)
-FITTED_ATTRIBUTE_TRIM_RATIO = 0.1
 BEST_FILE_NAMES = {
     "pmt_miou": "best_pmt_miou.pth",
-    "cluster_ari": "best_cluster_ari.pth",
     "constraint_score": "best_constraint_score.pth",
 }
 RESUME_WARNING_ONLY_CONFIG_KEYS = frozenset({"point_count"})
@@ -70,16 +60,6 @@ class CstPredTrainer(object):
         geom_ramp_epochs=20,
         use_extra_features=False,
         feature_k=16,
-        cluster_bandwidth=0.35,
-        cluster_method="radius",
-        mean_shift_quantile=0.015,
-        mean_shift_iterations=20,
-        mean_shift_max_clusters=128,
-        mean_shift_bandwidth=None,
-        normal_k=16,
-        use_pca_normals_for_fitting=True,
-        use_prediction_initialization=True,
-        cluster_metric_interval=50,
         overfit_one_batch=False,
         grad_clip=1.0,
         train_phase="semantic",
@@ -88,7 +68,6 @@ class CstPredTrainer(object):
         checkpoint_source="",
         checkpoint_args=None,
         joint_backbone_lr_scale=0.1,
-        use_amp=False,
     ):
         super().__init__()
         if checkpoint_action not in ("scratch", "resume", "init"):
@@ -110,27 +89,6 @@ class CstPredTrainer(object):
         self.geom_ramp_epochs = int(geom_ramp_epochs)
         self.use_extra_features = bool(use_extra_features)
         self.feature_k = int(feature_k)
-        self.cluster_bandwidth = cluster_bandwidth
-        self.cluster_method = str(cluster_method)
-        self.mean_shift_quantile = float(mean_shift_quantile)
-        self.mean_shift_iterations = int(mean_shift_iterations)
-        self.mean_shift_max_clusters = int(mean_shift_max_clusters)
-        self.mean_shift_bandwidth = (
-            None if mean_shift_bandwidth is None else float(mean_shift_bandwidth)
-        )
-        self.normal_k = int(normal_k)
-        if self.normal_k < 2:
-            raise ValueError("normal_k must be at least 2")
-        self.use_pca_normals_for_fitting = bool(use_pca_normals_for_fitting)
-        # The geometry heads are intentionally inactive during semantic training,
-        # so their random outputs must not initialize the fitter in that phase.
-        self.use_prediction_initialization = bool(
-            use_prediction_initialization
-            and train_phase in {"geometry", "joint"}
-        )
-        self.cluster_metric_interval = int(cluster_metric_interval)
-        if self.cluster_metric_interval < 0:
-            raise ValueError("cluster_metric_interval must be non-negative")
         self.overfit_one_batch = overfit_one_batch
         self.overfit_batch = None
         self.grad_clip = None if grad_clip is None else float(grad_clip)
@@ -144,20 +102,14 @@ class CstPredTrainer(object):
         self.checkpoint_source = str(checkpoint_source) if checkpoint_source else ""
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_args = {} if checkpoint_args is None else dict(checkpoint_args)
+        self.checkpoint_args.update(constraint_route=CONSTRAINT_ROUTE, train_phase=train_phase)
         self.joint_backbone_lr_scale = float(joint_backbone_lr_scale)
-        self.use_amp = bool(use_amp and self.device.type == "cuda")
-        if use_amp and not self.use_amp:
-            print(Fore.YELLOW + "AMP requested without CUDA; AMP is disabled")
-        self.amp_dtype = torch.float16
-        self.scaler = torch.cuda.amp.GradScaler(enabled=True) if self.use_amp else None
-
         self.optimizer = None
         self.scheduler = None
         self.start_epoch = 0
         self.global_step = 0
         self.best_metrics = {
             "pmt_miou": {"value": float("-inf"), "epoch": -1},
-            "cluster_ari": {"value": float("-inf"), "epoch": -1},
             "constraint_score": {"value": float("-inf"), "epoch": -1},
         }
         self.save_dict_train = self._new_save_dict()
@@ -166,12 +118,6 @@ class CstPredTrainer(object):
             raise ValueError("checkpoint_dir must be provided")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         print(f"checkpoints save to: {self.checkpoint_dir}, log save to: {self.log_savepth}")
-        cluster_schedule = (
-            "the first batch only"
-            if self.cluster_metric_interval == 0
-            else f"every {self.cluster_metric_interval} batch(es)"
-        )
-        print(f"real clustering metrics: {cluster_schedule} per epoch")
         self._initialize_training(float(lr))
 
     @staticmethod
@@ -182,8 +128,6 @@ class CstPredTrainer(object):
             "prim_loss": [],
             "clus_loss": [],
             "prim_acc": [],
-            "clus_nmi": [],
-            "clus_ari": [],
         }
 
     def _initialize_training(self, lr):
@@ -213,10 +157,6 @@ class CstPredTrainer(object):
         if resume_state is not None:
             self.optimizer.load_state_dict(resume_state["optimizer"])
             self.scheduler.load_state_dict(resume_state["scheduler"])
-            if self.scaler is not None:
-                if "scaler" not in resume_state:
-                    raise ValueError("AMP resume checkpoint is missing scaler state")
-                self.scaler.load_state_dict(resume_state["scaler"])
             self.start_epoch = int(resume_state["epoch"]) + 1
             self.global_step = int(resume_state["global_step"])
             self.best_metrics = _normalize_best_metrics(resume_state["best_metrics"])
@@ -263,13 +203,9 @@ class CstPredTrainer(object):
 
     @staticmethod
     def _validate_checkpoint_mode(state, source):
-        if not isinstance(state, dict) or not isinstance(state.get("args"), dict):
-            return
-        saved_mode = state["args"].get("stage1_mode")
-        if saved_mode not in (None, "multitask"):
-            raise ValueError(
-                f"unsupported legacy Stage 1 checkpoint mode {saved_mode!r}: {source}"
-            )
+        if not isinstance(state, dict):
+            raise ValueError(f"invalid checkpoint: {source}")
+        validate_direct_checkpoint(state.get("args", {}), require_geometry=False)
 
     def _validate_resume_config(self, checkpoint):
         saved_config = checkpoint.get("checkpoint_config")
@@ -384,15 +320,8 @@ class CstPredTrainer(object):
         for global_epoch in range(self.start_epoch, self.max_epoch):
             start_time = time()
             train_loss, train_metrics = self.process_epoch(global_epoch)
-            fitted_metrics = self.evaluate_fitted_epoch(global_epoch)
-            train_metrics.update({
-                f"fitted/{name}": value
-                for name, value in fitted_metrics.items()
-            })
-            train_metrics["constraint_score"] = 0.5 * (
-                float(train_metrics.get("pmt_miou", 0.0))
-                + max(0.0, float(train_metrics.get("cluster_ari_real", 0.0)))
-            )
+            # Higher is better, using the phase's active direct-prediction losses.
+            train_metrics["constraint_score"] = -float(train_loss["loss_all"])
             self.append_save_dict(train_loss, train_metrics)
             train_time = time() - start_time
             print(Fore.BLUE + f"training time: {train_time:.4f} sec")
@@ -422,7 +351,6 @@ class CstPredTrainer(object):
     def _update_best_metrics(self, epoch, train_metrics):
         candidates = {
             "pmt_miou": float(train_metrics.get("pmt_miou", float("-inf"))),
-            "cluster_ari": float(train_metrics.get("cluster_ari_real", float("-inf"))),
             "constraint_score": float(train_metrics.get("constraint_score", float("-inf"))),
         }
         improved = []
@@ -488,8 +416,6 @@ class CstPredTrainer(object):
                 "geom_ramp_epochs": self.geom_ramp_epochs,
             },
         }
-        if self.scaler is not None:
-            payload["scaler"] = self.scaler.state_dict()
         return payload
 
     def append_save_dict(self, loss_summary, metric_summary):
@@ -500,8 +426,6 @@ class CstPredTrainer(object):
         target["prim_loss"].append(float(loss_summary.get("raw/pmt", 0.0)))
         target["clus_loss"].append(float(loss_summary.get("raw/cluster", 0.0)))
         target["prim_acc"].append(float(metric_summary.get("pmt_acc", 0.0)))
-        target["clus_nmi"].append(float(metric_summary.get("cluster_nmi_real", 0.0)))
-        target["clus_ari"].append(float(metric_summary.get("cluster_ari_real", 0.0)))
 
         raw_text = ", ".join(
             f"{name}={float(loss_summary.get('raw/' + name, 0.0)):.5f}"
@@ -518,9 +442,7 @@ class CstPredTrainer(object):
         print(
             f"{split}: pmt_acc={metric_summary.get('pmt_acc', 0.0):.4f}, "
             f"pmt_macro_f1={metric_summary.get('pmt_macro_f1', 0.0):.4f}, "
-            f"pmt_miou={metric_summary.get('pmt_miou', 0.0):.4f}, "
-            f"cluster_ari_real={metric_summary.get('cluster_ari_real', 0.0):.4f}, "
-            f"cluster_nmi_real={metric_summary.get('cluster_nmi_real', 0.0):.4f}"
+            f"pmt_miou={metric_summary.get('pmt_miou', 0.0):.4f}"
         )
         if "direction_mean_angular_error_deg" in metric_summary:
             print(
@@ -559,28 +481,12 @@ class CstPredTrainer(object):
         progress_bar = tqdm(
             loader, total=total, desc=f"[{global_epoch}/{self.max_epoch}]{self.save_str}"
         )
-        cluster_metric_batch_count = 0
-        last_cluster_ari = None
-        for batch_index, data in enumerate(progress_bar):
-            compute_cluster_metrics = self._should_compute_cluster_metrics(
-                batch_index
-            )
-            loss_dict, metric_dict = self.process_batch(
-                data,
-                global_epoch,
-                True,
-                compute_cluster_metrics=compute_cluster_metrics,
-            )
-            if compute_cluster_metrics:
-                cluster_metric_batch_count += 1
-                last_cluster_ari = _scalar(metric_dict, "cluster_ari_real")
+        for data in progress_bar:
+            loss_dict, metric_dict = self.process_batch(data, global_epoch, True)
             progress_bar.set_postfix({
                 "loss": f"{_scalar(loss_dict, 'loss_all'):.4f}",
                 "pmt_acc": f"{_scalar(metric_dict, 'pmt_acc'):.4f}",
                 "pmt_miou": f"{_scalar(metric_dict, 'pmt_miou'):.4f}",
-                "ari_real": (
-                    "-" if last_cluster_ari is None else f"{last_cluster_ari:.4f}"
-                ),
                 "LR": f"{max(self.current_lrs().values()):.6f}",
             })
             loss_batches.append(_detach_dict(loss_dict))
@@ -588,130 +494,8 @@ class CstPredTrainer(object):
 
         loss_summary = _mean_dicts(loss_batches)
         metric_summary = _aggregate_metric_dicts(metric_batches)
-        metric_summary["cluster_metric_sampled_batches"] = int(
-            cluster_metric_batch_count
-        )
-        metric_summary["cluster_metric_total_batches"] = int(len(metric_batches))
         warn_if_primitive_collapsed(metric_summary, split="train", epoch=global_epoch)
         return loss_summary, metric_summary
-
-    @torch.inference_mode()
-    def evaluate_fitted_epoch(self, global_epoch):
-        """Evaluate the complete clustering + XYZ fitting route once per epoch."""
-        fitted_metric_batches = []
-        trimmed_fitted_metric_batches = []
-        was_training = self.model.training
-        self.model.eval()
-        loader, total_override = self._epoch_iterable()
-        total = total_override if total_override is not None else len(loader)
-        progress_bar = tqdm(
-            loader,
-            total=total,
-            desc=(
-                f"[{global_epoch}/{self.max_epoch}]"
-                f"{self.save_str} fitted constraints"
-            ),
-        )
-        try:
-            for data_batch in progress_bar:
-                xyz = data_batch[0].float().to(self.device, non_blocking=True)
-                pmt_gt = data_batch[1].long().to(self.device, non_blocking=True)
-                mad_gt = data_batch[2].float().to(self.device, non_blocking=True)
-                dim_gt = data_batch[3].float().to(self.device, non_blocking=True)
-                loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
-                extra_fea = self._build_features(xyz)
-                amp_context = (
-                    torch.cuda.amp.autocast(dtype=self.amp_dtype)
-                    if self.use_amp
-                    else nullcontext()
-                )
-                with amp_context:
-                    outputs = self._unpack_model_output(
-                        self.model(xyz, extra_fea)
-                    )
-                self._assert_finite_outputs(outputs)
-                fitted_constraints = assemble_constraints_from_stage1(
-                    xyz=xyz,
-                    cluster_embedding=outputs["embedding"],
-                    log_primitive=outputs["log_pmt"],
-                    cluster_bandwidth=self.cluster_bandwidth,
-                    cluster_method=self.cluster_method,
-                    mean_shift_quantile=self.mean_shift_quantile,
-                    mean_shift_iterations=self.mean_shift_iterations,
-                    mean_shift_max_clusters=self.mean_shift_max_clusters,
-                    mean_shift_bandwidth=self.mean_shift_bandwidth,
-                    normal_k=self.normal_k,
-                    use_pca_normals_for_fitting=(
-                        self.use_pca_normals_for_fitting
-                    ),
-                    mad_prediction=outputs["mad"],
-                    dim_prediction=outputs["dim"],
-                    loc_prediction=outputs["loc"],
-                    use_prediction_initialization=(
-                        self.use_prediction_initialization
-                    ),
-                )
-                fitted_metric_batches.append(_detach_dict(
-                    evaluate_constraint_attribute_metrics(
-                        mad_pred=fitted_constraints["direction"],
-                        dim_pred=fitted_constraints["dimension"],
-                        loc_pred=fitted_constraints["location"],
-                        pmt_gt=pmt_gt,
-                        mad_gt=mad_gt,
-                        dim_gt=dim_gt,
-                        loc_gt=loc_gt,
-                    )
-                ))
-                trimmed_fitted_metric_batches.append(_detach_dict(
-                    evaluate_constraint_attribute_metrics(
-                        mad_pred=fitted_constraints["direction"],
-                        dim_pred=fitted_constraints["dimension"],
-                        loc_pred=fitted_constraints["location"],
-                        pmt_gt=pmt_gt,
-                        mad_gt=mad_gt,
-                        dim_gt=dim_gt,
-                        loc_gt=loc_gt,
-                        trim_ratio=FITTED_ATTRIBUTE_TRIM_RATIO,
-                    )
-                ))
-
-            if not fitted_metric_batches:
-                raise ValueError("training dataset produced no fitted metric batches")
-            summary = aggregate_constraint_attribute_metrics(
-                fitted_metric_batches
-            )
-            trimmed_summary = aggregate_constraint_attribute_metrics(
-                trimmed_fitted_metric_batches
-            )
-            selected = {
-                name: float(summary[name])
-                for name in FITTED_ATTRIBUTE_METRIC_NAMES
-            }
-            selected.update({
-                f"trimmed10/{name}": float(trimmed_summary[name])
-                for name in FITTED_ATTRIBUTE_METRIC_NAMES
-            })
-            print(
-                Fore.CYAN
-                + "fitted route: "
-                + ", ".join(
-                    f"{name}={value:.6f}"
-                    for name, value in selected.items()
-                )
-            )
-            return selected
-        finally:
-            self.model.train(was_training)
-            if was_training and hasattr(self.model, "apply_train_phase_mode"):
-                self.model.apply_train_phase_mode()
-
-    def _should_compute_cluster_metrics(self, batch_index):
-        if batch_index == 0:
-            return True
-        return bool(
-            self.cluster_metric_interval > 0
-            and batch_index % self.cluster_metric_interval == 0
-        )
 
     def _build_features(self, xyz):
         if not self.use_extra_features:
@@ -743,7 +527,6 @@ class CstPredTrainer(object):
         data_batch,
         global_epoch,
         is_train,
-        compute_cluster_metrics=True,
     ):
         """Stage1ConstraintDataset order: xyz, pmt, mad, dim, loc, affiliate_idx."""
         with torch.set_grad_enabled(is_train):
@@ -760,33 +543,27 @@ class CstPredTrainer(object):
             loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
             affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
             extra_fea = self._build_features(xyz)
-            amp_context = (
-                torch.cuda.amp.autocast(dtype=self.amp_dtype)
-                if self.use_amp
-                else nullcontext()
+            outputs = self._unpack_model_output(self.model(xyz, extra_fea))
+            self._assert_finite_outputs(outputs)
+            active_losses = self._active_losses()
+            loss, loss_dict = constraint_loss(
+                xyz=xyz,
+                log_pmt_pred=outputs["log_pmt"].float(),
+                mad_pred=outputs["mad"].float(),
+                dim_pred=outputs["dim"].float(),
+                loc_pred=outputs["loc"].float(),
+                pmt_gt=pmt_gt,
+                mad_gt=mad_gt,
+                dim_gt=dim_gt,
+                loc_gt=loc_gt,
+                affil_idx=affiliate_idx,
+                point_emb=outputs["embedding"].float(),
+                weights=self.loss_weights,
+                global_epoch=global_epoch,
+                geom_start_epoch=self.geom_start_epoch,
+                geom_ramp_epochs=self.geom_ramp_epochs,
+                enabled_losses=active_losses,
             )
-            with amp_context:
-                outputs = self._unpack_model_output(self.model(xyz, extra_fea))
-                self._assert_finite_outputs(outputs)
-                active_losses = self._active_losses()
-                loss, loss_dict = constraint_loss(
-                    xyz=xyz,
-                    log_pmt_pred=outputs["log_pmt"].float(),
-                    mad_pred=outputs["mad"].float(),
-                    dim_pred=outputs["dim"].float(),
-                    loc_pred=outputs["loc"].float(),
-                    pmt_gt=pmt_gt,
-                    mad_gt=mad_gt,
-                    dim_gt=dim_gt,
-                    loc_gt=loc_gt,
-                    affil_idx=affiliate_idx,
-                    point_emb=outputs["embedding"].float(),
-                    weights=self.loss_weights,
-                    global_epoch=global_epoch,
-                    geom_start_epoch=self.geom_start_epoch,
-                    geom_ramp_epochs=self.geom_ramp_epochs,
-                    enabled_losses=active_losses,
-                )
 
             self._assert_finite_losses(loss_dict)
             if is_train:
@@ -795,53 +572,19 @@ class CstPredTrainer(object):
                     for parameter in self.model.parameters()
                     if parameter.requires_grad
                 ]
-                if self.scaler is not None:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    if self.grad_clip is not None and self.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            trainable_parameters,
-                            max_norm=self.grad_clip,
-                        )
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    if self.grad_clip is not None and self.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            trainable_parameters,
-                            max_norm=self.grad_clip,
-                        )
-                    self.optimizer.step()
+                loss.backward()
+                if self.grad_clip is not None and self.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(trainable_parameters, max_norm=self.grad_clip)
+                self.optimizer.step()
                 self.global_step += 1
 
             with torch.no_grad():
                 primitive_metrics = evaluate_primitive_metrics(outputs["log_pmt"], pmt_gt)
-                real_cluster_metrics = {}
-                oracle_cluster_metrics = {}
-                if compute_cluster_metrics:
-                    real_cluster_metrics = evaluate_predicted_clustering(
-                        affiliate_idx,
-                        outputs["embedding"],
-                        bandwidth=self.cluster_bandwidth,
-                        cluster_method=self.cluster_method,
-                        mean_shift_quantile=self.mean_shift_quantile,
-                        mean_shift_iterations=self.mean_shift_iterations,
-                        mean_shift_max_clusters=self.mean_shift_max_clusters,
-                        mean_shift_bandwidth=self.mean_shift_bandwidth,
-                    )
-                    oracle_acc, oracle_nmi, oracle_ari = evaluate_clustering(
-                        affiliate_idx, outputs["embedding"]
-                    )
-                    oracle_cluster_metrics = {
-                        "cluster_acc_oracle_optional": oracle_acc,
-                        "cluster_nmi_oracle_optional": oracle_nmi,
-                        "cluster_ari_oracle_optional": oracle_ari,
-                    }
+                constraints = direct_constraints(outputs)
                 attribute_metrics = evaluate_constraint_attribute_metrics(
-                    mad_pred=outputs["mad"],
-                    dim_pred=outputs["dim"],
-                    loc_pred=outputs["loc"],
+                    mad_pred=constraints["direction"],
+                    dim_pred=constraints["dimension"],
+                    loc_pred=constraints["location"],
                     pmt_gt=pmt_gt,
                     mad_gt=mad_gt,
                     dim_gt=dim_gt,
@@ -850,9 +593,7 @@ class CstPredTrainer(object):
 
             metric_dict = {}
             metric_dict.update(primitive_metrics)
-            metric_dict.update(real_cluster_metrics)
             metric_dict.update(attribute_metrics)
-            metric_dict.update(oracle_cluster_metrics)
             aggregation_weight = torch.tensor(
                 float(xyz.shape[0]), device=xyz.device, dtype=torch.float32
             )
@@ -1010,7 +751,7 @@ def _critical_checkpoint_config(args):
         "joint_backbone_lr_scale": _normalize_config_value(
             args.get("joint_backbone_lr_scale", "<missing>")
         ),
-        "use_amp": _normalize_config_value(args.get("use_amp", False)),
+        "constraint_route": args.get("constraint_route", CONSTRAINT_ROUTE),
     }
 
 

@@ -5,6 +5,8 @@ output core follows the shared 12-column constraint point layout exactly:
 
     xyz, pmt, mad, dim, loc, affiliate_idx
 
+The affiliate_idx column is -1: direct inference does not predict instances.
+
 Unknown input columns are treated as opaque task attributes and are preserved
 after that 12-column core. Relative paths below the input directory are kept.
 """
@@ -21,7 +23,7 @@ import numpy as np
 import torch
 
 from data_utils.constraint_dataset_common import zero_invalid_constraint_components
-from functional.constraints import CLUSTER_METHODS, assemble_constraints_from_stage1
+from functional.direct_constraints import direct_constraints, validate_direct_checkpoint
 from functional.point_features import build_stage1_input_features, stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 
@@ -49,30 +51,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--device", default="auto", type=str,
         help="auto, cpu, cuda, or an explicit device such as cuda:1.",
-    )
-    parser.add_argument("--cluster_bandwidth", default=None, type=float)
-    parser.add_argument(
-        "--cluster_method",
-        default=None,
-        choices=CLUSTER_METHODS,
-        help="defaults to checkpoint metadata, or meanshift for older checkpoints",
-    )
-    parser.add_argument("--mean_shift_quantile", default=None, type=float)
-    parser.add_argument("--mean_shift_iterations", default=None, type=int)
-    parser.add_argument("--mean_shift_max_clusters", default=None, type=int)
-    parser.add_argument("--mean_shift_bandwidth", default=None, type=float)
-    parser.add_argument("--normal_k", default=16, type=int)
-    parser.add_argument(
-        "--disable_prediction_initialization",
-        action="store_true",
-        default=False,
-        help="Do not initialize cylinder/cone fitting from Joint geometry heads.",
-    )
-    parser.add_argument(
-        "--disable_pca_normals_for_fitting",
-        action="store_true",
-        default=False,
-        help="Fit plane/cylinder/cone clusters from coordinates without PCA-normal assistance.",
     )
     parser.add_argument(
         "--extensions", default=".txt", type=str,
@@ -110,7 +88,6 @@ def resolve_checkpoint(path: str | os.PathLike[str]) -> Path:
     candidates = (
         "best_constraint_score.pth",
         "best_pmt_miou.pth",
-        "best_cluster_ari.pth",
         "last.pth",
     )
     for name in candidates:
@@ -146,15 +123,6 @@ class Stage1Predictor:
         checkpoint_path: str | os.PathLike[str],
         device: torch.device,
         model_name: str = "auto",
-        cluster_bandwidth: float | None = None,
-        cluster_method: str | None = None,
-        mean_shift_quantile: float | None = None,
-        mean_shift_iterations: int | None = None,
-        mean_shift_max_clusters: int | None = None,
-        mean_shift_bandwidth: float | None = None,
-        normal_k: int = 16,
-        use_pca_normals_for_fitting: bool = True,
-        use_prediction_initialization: bool = True,
     ):
         self.checkpoint_path = resolve_checkpoint(checkpoint_path)
         checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
@@ -168,11 +136,7 @@ class Stage1Predictor:
         )
         if self.model_name not in MODEL_NAMES:
             raise ValueError(f"unsupported Stage 1 model: {self.model_name}")
-        saved_mode = checkpoint_args.get("stage1_mode")
-        if saved_mode not in (None, "multitask"):
-            raise ValueError(
-                f"unsupported legacy Stage 1 checkpoint mode: {saved_mode!r}"
-            )
+        validate_direct_checkpoint(checkpoint_args)
 
         self.use_extra_features = _as_bool(
             checkpoint_args.get("use_extra_features", False)
@@ -188,57 +152,6 @@ class Stage1Predictor:
         self.model.to(device).eval()
         for parameter in self.model.parameters():
             parameter.requires_grad_(False)
-
-        saved_bandwidth = checkpoint_args.get("cluster_bandwidth", 0.35)
-        self.cluster_bandwidth = float(
-            saved_bandwidth if cluster_bandwidth is None else cluster_bandwidth
-        )
-        if self.cluster_bandwidth <= 0:
-            raise ValueError("cluster_bandwidth must be positive")
-        saved_cluster_method = checkpoint_args.get("cluster_method", "meanshift")
-        self.cluster_method = str(
-            saved_cluster_method if cluster_method is None else cluster_method
-        )
-        if self.cluster_method not in CLUSTER_METHODS:
-            raise ValueError(
-                f"unsupported cluster_method={self.cluster_method!r}; "
-                f"expected one of {CLUSTER_METHODS}"
-            )
-        self.mean_shift_quantile = float(
-            checkpoint_args.get("mean_shift_quantile", 0.015)
-            if mean_shift_quantile is None else mean_shift_quantile
-        )
-        self.mean_shift_iterations = int(
-            checkpoint_args.get("mean_shift_iterations", 50)
-            if mean_shift_iterations is None else mean_shift_iterations
-        )
-        self.mean_shift_max_clusters = int(
-            checkpoint_args.get("mean_shift_max_clusters", 128)
-            if mean_shift_max_clusters is None else mean_shift_max_clusters
-        )
-        saved_mean_shift_bandwidth = checkpoint_args.get(
-            "mean_shift_bandwidth", None
-        )
-        self.mean_shift_bandwidth = (
-            saved_mean_shift_bandwidth
-            if mean_shift_bandwidth is None else mean_shift_bandwidth
-        )
-        if self.mean_shift_bandwidth is not None:
-            self.mean_shift_bandwidth = float(self.mean_shift_bandwidth)
-        checkpoint_phase = str(checkpoint_args.get("train_phase", ""))
-        self.use_prediction_initialization = bool(
-            use_prediction_initialization
-            and checkpoint_phase in {"geometry", "joint"}
-        )
-        if use_prediction_initialization and not self.use_prediction_initialization:
-            print(
-                "WARNING: fitting initialization disabled because the checkpoint "
-                "is not marked as a geometry/joint checkpoint"
-            )
-        self.normal_k = int(normal_k)
-        if self.normal_k < 2:
-            raise ValueError("normal_k must be at least 2")
-        self.use_pca_normals_for_fitting = bool(use_pca_normals_for_fitting)
 
     def _extra_features(self, xyz: torch.Tensor) -> torch.Tensor | None:
         if not self.use_extra_features:
@@ -256,35 +169,17 @@ class Stage1Predictor:
             np.ascontiguousarray(xyz_array), dtype=torch.float32, device=self.device
         ).unsqueeze(0)
         model_output = self.model(xyz, self._extra_features(xyz))
-        embedding = model_output["embedding"]
-        log_pmt = model_output["log_pmt"]
         required_outputs = ("embedding", "log_pmt", "mad", "dim", "loc")
         if any(not torch.isfinite(model_output[name]).all() for name in required_outputs):
             raise FloatingPointError("Stage 1 output contains NaN or Inf")
 
-        constraints = assemble_constraints_from_stage1(
-            xyz=xyz,
-            cluster_embedding=embedding,
-            log_primitive=log_pmt,
-            cluster_bandwidth=self.cluster_bandwidth,
-            cluster_method=self.cluster_method,
-            mean_shift_quantile=self.mean_shift_quantile,
-            mean_shift_iterations=self.mean_shift_iterations,
-            mean_shift_max_clusters=self.mean_shift_max_clusters,
-            mean_shift_bandwidth=self.mean_shift_bandwidth,
-            normal_k=self.normal_k,
-            use_pca_normals_for_fitting=self.use_pca_normals_for_fitting,
-            mad_prediction=model_output["mad"],
-            dim_prediction=model_output["dim"],
-            loc_prediction=model_output["loc"],
-            use_prediction_initialization=self.use_prediction_initialization,
-        )
+        constraints = direct_constraints(model_output)
         return {
             "pmt": constraints["primitive_type"].argmax(dim=-1)[0].cpu().numpy(),
             "mad": constraints["direction"][0].cpu().numpy(),
             "dim": constraints["dimension"][0].cpu().numpy(),
             "loc": constraints["location"][0].cpu().numpy(),
-            "affiliate_idx": constraints["affiliate_idx"][0].cpu().numpy(),
+            "affiliate_idx": np.full(len(xyz_array), -1, dtype=np.int64),
         }
 
 
@@ -439,26 +334,12 @@ def generate_dataset(args) -> None:
         checkpoint_path=args.checkpoint,
         device=device,
         model_name=args.model,
-        cluster_bandwidth=args.cluster_bandwidth,
-        cluster_method=args.cluster_method,
-        mean_shift_quantile=args.mean_shift_quantile,
-        mean_shift_iterations=args.mean_shift_iterations,
-        mean_shift_max_clusters=args.mean_shift_max_clusters,
-        mean_shift_bandwidth=args.mean_shift_bandwidth,
-        normal_k=args.normal_k,
-        use_pca_normals_for_fitting=not args.disable_pca_normals_for_fitting,
-        use_prediction_initialization=not args.disable_prediction_initialization,
     )
     print(
         "Stage 1 predictor: "
         f"checkpoint={predictor.checkpoint_path}; model={predictor.model_name}; "
         f"device={device}; "
-        f"cluster_method={predictor.cluster_method}; "
-        f"cluster_bandwidth={predictor.cluster_bandwidth}; "
-        f"mean_shift_quantile={predictor.mean_shift_quantile}; "
-        f"mean_shift_iterations={predictor.mean_shift_iterations}; "
-        f"prediction_initialization={predictor.use_prediction_initialization}; "
-        f"pca_normals_for_fitting={predictor.use_pca_normals_for_fitting}"
+        "constraint_route=direct_mlp_v1; affiliate_idx=-1 (not predicted)"
     )
     print(f"input files: {len(files)}; input={input_dir}; output={output_dir}")
 
