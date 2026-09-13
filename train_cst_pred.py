@@ -31,7 +31,7 @@ def parse_args(argv=None):
     parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--workers', type=int, default=16, help='dataloader workers')
-    parser.add_argument('--model', default='pointnet2', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
+    parser.add_argument('--model', default='attn_3dgcn', choices=['pointnet2', 'pointnet', 'attn_3dgcn'], type=str)
     parser.add_argument('--is_sample', action='store_true', default=False)
 
     parser.add_argument(
