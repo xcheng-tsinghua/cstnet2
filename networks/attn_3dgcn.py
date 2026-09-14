@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from networks import utils
+from functional.neighborhood import build_neighborhood
 
 
 def square_distance(src, dst):
@@ -71,9 +72,10 @@ class TransformerBlock(nn.Module):
         self.k = k
 
     # xyz: b x n x 3, features: b x n x f
-    def forward(self, xyz, features):
-        dists = square_distance(xyz, xyz)
-        knn_idx = dists.argsort()[:, :, :self.k]  # b x n x k
+    def forward(self, xyz, features, neighborhood=None):
+        if neighborhood is None:
+            neighborhood = build_neighborhood(xyz, self.k)
+        knn_idx = neighborhood.indices[..., :self.k]  # includes nearest rank zero
         knn_xyz = index_points(xyz, knn_idx)
 
         pre = features
@@ -258,7 +260,7 @@ class Attn3DGcnPointEmbedding(nn.Module):
             channel_coor=channel_coord
         )
 
-    def forward(self, xyz, fea=None):
+    def forward(self, xyz, fea=None, neighborhood=None):
         """
         xyz: [bs, 3, N]
         fea: [bs, channel_fea, N]
@@ -272,7 +274,9 @@ class Attn3DGcnPointEmbedding(nn.Module):
         vertices = xyz.permute(0, 2, 1)
 
         # 邻域 [bs, N, K]
-        neighbor_index = get_neighbor_index(vertices, self.n_neighbor)
+        if neighborhood is None:
+            neighborhood = build_neighborhood(vertices, max(self.n_neighbor + 1, self.attn_k))
+        neighbor_index, _ = neighborhood.excluding_first(self.n_neighbor)
 
         # 层层卷积
         f0 = self.act(self.conv0(neighbor_index, vertices))        # [bs, N,128]
@@ -284,9 +288,7 @@ class Attn3DGcnPointEmbedding(nn.Module):
         f1 = self.act(self.conv1(neighbor_index, vertices, f0))    # [bs, N,128]
         f2 = self.act(self.conv2(neighbor_index, vertices, f1))    # [bs, N,256]
         f3 = self.act(self.conv3(neighbor_index, vertices, f2))    # [bs, N,channel_out]
-        xyz_forward = vertices.clone()
-
-        f_attn, _ = self.attention(xyz_forward, f3)
+        f_attn, _ = self.attention(vertices, f3, neighborhood=neighborhood)
 
         # 输出转成 [bs, channel_out, N]
         return f_attn.permute(0, 2, 1)

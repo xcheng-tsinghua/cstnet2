@@ -62,7 +62,15 @@ class CstPredWrapper(nn.Module):
         self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
         self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
 
-    def forward(self, xyz, fea=None):
+    def build_neighborhood(self, xyz, feature_k=None):
+        if not isinstance(self.embedding, attn_3dgcn.Attn3DGcnPointEmbedding):
+            return None
+        count = max(self.embedding.n_neighbor + 1, self.embedding.attn_k)
+        if feature_k is not None:
+            count = max(count, max(2, int(feature_k)) + 1)
+        return attn_3dgcn.build_neighborhood(xyz, count)
+
+    def forward(self, xyz, fea=None, neighborhood=None):
         """
         xyz: [bs, N, 3]
         fea: [bs, N, channel_fea]
@@ -73,7 +81,10 @@ class CstPredWrapper(nn.Module):
             fea = fea.permute(0, 2, 1)
 
         # 提取逐点特征
-        embedding = self.embedding(xyz, fea)  # -> [bs, fea, n]
+        if neighborhood is None:
+            embedding = self.embedding(xyz, fea)
+        else:
+            embedding = self.embedding(xyz, fea, neighborhood=neighborhood)
 
         # 提取聚类特征和基元类型预测特征
         pnt_fea = self.emb_head(embedding)  # -> [bs, fea, n]
@@ -115,36 +126,15 @@ class CstPredWrapper(nn.Module):
             ]
         else:
             trainable_prefixes = [
-                "emb_head", "cls_head",
+                "embedding", "emb_head", "cls_head",
                 "mad_head", "dim_head", "loc_head",
             ]
-            trainable_prefixes.extend(self._joint_backbone_prefixes())
 
         for name, param in self.named_parameters():
             if any(name == prefix or name.startswith(prefix + ".") for prefix in trainable_prefixes):
                 param.requires_grad_(True)
 
         return trainable_prefixes
-
-    def _joint_backbone_prefixes(self):
-        """Return stable high-level blocks for each supported backbone."""
-        backbone_name = self.embedding.__class__.__name__
-        prefixes_by_backbone = {
-            "Attn3DGcnPointEmbedding": [
-                "embedding.conv2", "embedding.conv3", "embedding.attention"
-            ],
-            "PointNetPointEmbedding": [
-                "embedding.conv4", "embedding.conv5", "embedding.bn4", "embedding.bn5",
-                "embedding.convs1", "embedding.convs2", "embedding.convs3",
-                "embedding.bns1", "embedding.bns2", "embedding.bns3",
-            ],
-            "PointNet2PointEmbedding": [
-                "embedding.sa3", "embedding.fp3", "embedding.fp2", "embedding.fp1"
-            ],
-        }
-        if backbone_name not in prefixes_by_backbone:
-            raise ValueError(f"no joint high-level backbone policy for {backbone_name}")
-        return prefixes_by_backbone[backbone_name]
 
     def apply_train_phase_mode(self):
         """Keep fully frozen submodules, especially BatchNorm, in eval mode."""

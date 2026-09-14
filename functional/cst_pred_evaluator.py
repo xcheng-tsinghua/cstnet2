@@ -12,11 +12,11 @@ from functional.cst_pred_trainer import (
     _mean_dicts,
     _scalar,
     _to_python,
-    stage1_active_losses,
     warn_if_primitive_collapsed,
 )
-from functional.loss import constraint_loss
-from functional.point_features import build_stage1_input_features
+from functional.stage1_phase_loss import stage1_phase_loss
+from functional.point_features import stage1_forward
+from functional.finite_checks import assert_finite_tensors
 from functional.stage1_metrics import (
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
@@ -35,9 +35,6 @@ class CstPredEvaluator:
         *,
         loss_weights,
         train_phase,
-        enabled_losses,
-        geom_start_epoch,
-        geom_ramp_epochs,
         use_extra_features,
         feature_k,
     ):
@@ -46,9 +43,6 @@ class CstPredEvaluator:
         self.device = next(model.parameters()).device
         self.loss_weights = dict(loss_weights)
         self.train_phase = train_phase
-        self.enabled_losses = dict(enabled_losses)
-        self.geom_start_epoch = int(geom_start_epoch)
-        self.geom_ramp_epochs = int(geom_ramp_epochs)
         self.use_extra_features = bool(use_extra_features)
         self.feature_k = int(feature_k)
 
@@ -58,16 +52,11 @@ class CstPredEvaluator:
         loss_batches = []
         metric_batches = []
         direct_metric_batches = []
-        active_losses = stage1_active_losses(
-            self.train_phase,
-            self.enabled_losses,
-        )
         progress = tqdm(self.data_loader, desc="evaluate Stage 1")
         for data_batch in progress:
             loss_dict, metric_dict, direct_metric_dict = self._process_batch(
                 data_batch,
                 global_epoch=global_epoch,
-                active_losses=active_losses,
             )
             progress.set_postfix({
                 "loss": f"{_scalar(loss_dict, 'loss_all'):.4f}",
@@ -92,7 +81,7 @@ class CstPredEvaluator:
         self._print_summary(loss_summary, metric_summary)
         return loss_summary, metric_summary
 
-    def _process_batch(self, data_batch, *, global_epoch, active_losses):
+    def _process_batch(self, data_batch, *, global_epoch):
         """Stage1ConstraintDataset order: xyz, pmt, mad, dim, loc, affiliate_idx."""
         xyz = data_batch[0].float().to(self.device, non_blocking=True)
         pmt_gt = data_batch[1].long().to(self.device, non_blocking=True)
@@ -101,34 +90,12 @@ class CstPredEvaluator:
         loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
         affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
 
-        extra_features = None
-        if self.use_extra_features:
-            extra_features = build_stage1_input_features(
-                xyz,
-                use_curvature=True,
-                use_density=True,
-                k=self.feature_k,
-            )
-
-        outputs = self.model(xyz, extra_features)
+        outputs = stage1_forward(self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k)
         self._validate_outputs(outputs)
-        _, loss_dict = constraint_loss(
-            xyz=xyz,
-            log_pmt_pred=outputs["log_pmt"].float(),
-            mad_pred=outputs["mad"].float(),
-            dim_pred=outputs["dim"].float(),
-            loc_pred=outputs["loc"].float(),
-            pmt_gt=pmt_gt,
-            mad_gt=mad_gt,
-            dim_gt=dim_gt,
-            loc_gt=loc_gt,
-            affil_idx=affiliate_idx,
-            point_emb=outputs["embedding"].float(),
-            weights=self.loss_weights,
-            global_epoch=global_epoch,
-            geom_start_epoch=self.geom_start_epoch,
-            geom_ramp_epochs=self.geom_ramp_epochs,
-            enabled_losses=active_losses,
+        _, loss_dict = stage1_phase_loss(
+            {name: value.float() for name, value in outputs.items()},
+            pmt_gt, mad_gt, dim_gt, loc_gt, affiliate_idx,
+            train_phase=self.train_phase, weights=self.loss_weights,
         )
         self._validate_losses(loss_dict)
 
@@ -192,29 +159,17 @@ class CstPredEvaluator:
         missing = sorted(required.difference(outputs))
         if missing:
             raise ValueError(f"Stage 1 model output is missing fields: {missing}")
-        non_finite = [
-            name
-            for name, value in outputs.items()
-            if torch.is_tensor(value) and not torch.isfinite(value).all()
-        ]
-        if non_finite:
-            raise FloatingPointError(f"non-finite Stage 1 outputs: {non_finite}")
+        assert_finite_tensors(outputs, "Stage 1 outputs")
 
     @staticmethod
     def _validate_losses(loss_dict):
-        non_finite = [
-            name
-            for name, value in loss_dict.items()
-            if torch.is_tensor(value) and not torch.isfinite(value).all()
-        ]
-        if non_finite:
-            raise FloatingPointError(f"non-finite Stage 1 losses: {non_finite}")
+        assert_finite_tensors(loss_dict, "Stage 1 losses")
 
     @staticmethod
     def _print_summary(loss_summary, metric_summary):
         raw_text = ", ".join(
             f"{name}={float(loss_summary.get('raw/' + name, 0.0)):.5f}"
-            for name in LOSS_NAMES
+            for name in LOSS_NAMES if f"raw/{name}" in loss_summary
         )
         print(
             Fore.CYAN

@@ -272,13 +272,17 @@ Stage 1 has three separate training phases:
 
 1. semantic: train backbone, primitive-type head, and clustering-feature head.
 2. geometry: freeze the complete backbone and both semantic heads (including
-   BatchNorm state); train only mad_head, dim_head, and loc_head against GT.
-3. joint: unfreeze the existing high-level backbone blocks and all five heads;
-   keep lower backbone blocks frozen. Use a small learning rate and a further
-   0.1 backbone learning-rate multiplier.
+   BatchNorm state); train only mad_head, dim_head, and loc_head against GT,
+   using only the three direct attribute losses.
+3. joint: unfreeze the complete backbone and all five heads. Use the same small
+   learning rate for every parameter (default 1e-5), with all five losses.
 
-Skip disabled loss computations entirely. Geometric residual and instance
-consistency losses remain training regularizers; they are not primitive fitting.
+The simple_five_losses_v1 recipe uses primitive NLL, the existing discriminative
+clustering loss, and valid-point MSE for direction, dimension, and location.
+Direction MSE is sign-invariant. All five loss weights default to 1.0.
+Do not compute losses inactive in the selected phase. No geometric residual,
+instance consistency, instance-balanced attribute reduction, observability
+weighting, or auxiliary loss ramp is used in this training/evaluation route.
 No AMP or full-dataset fitting pass is used by train_cst_pred.py.
 New checkpoints use constraint_route=direct_mlp_v1 and model_trained/stage1_direct;
 legacy fitting-route checkpoints are incompatible with the three-head architecture.

@@ -1159,11 +1159,6 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, loc_pred,
             effective_weights[name], device=xyz.device, dtype=xyz.dtype
         )
 
-    non_finite = [name for name, val in loss_dict.items() if torch.is_tensor(val) and not torch.isfinite(val).all()]
-    if non_finite:
-        printable = {name: value_item(val.detach()) for name, val in loss_dict.items() if torch.is_tensor(val) and val.dim() == 0}
-        print(f"non-finite Stage 1 losses: {non_finite}; values={printable}")
-
     return loss_all, loss_dict
 
 

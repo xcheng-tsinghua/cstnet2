@@ -24,7 +24,7 @@ import torch
 
 from data_utils.constraint_dataset_common import zero_invalid_constraint_components
 from functional.direct_constraints import direct_constraints, validate_direct_checkpoint
-from functional.point_features import build_stage1_input_features, stage1_feature_dim
+from functional.point_features import stage1_forward, stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
@@ -153,22 +153,12 @@ class Stage1Predictor:
         for parameter in self.model.parameters():
             parameter.requires_grad_(False)
 
-    def _extra_features(self, xyz: torch.Tensor) -> torch.Tensor | None:
-        if not self.use_extra_features:
-            return None
-        return build_stage1_input_features(
-            xyz,
-            use_curvature=True,
-            use_density=True,
-            k=self.feature_k,
-        )
-
     @torch.inference_mode()
     def predict(self, xyz_array: np.ndarray) -> dict[str, np.ndarray]:
         xyz = torch.as_tensor(
             np.ascontiguousarray(xyz_array), dtype=torch.float32, device=self.device
         ).unsqueeze(0)
-        model_output = self.model(xyz, self._extra_features(xyz))
+        model_output = stage1_forward(self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k)
         required_outputs = ("embedding", "log_pmt", "mad", "dim", "loc")
         if any(not torch.isfinite(model_output[name]).all() for name in required_outputs):
             raise FloatingPointError("Stage 1 output contains NaN or Inf")

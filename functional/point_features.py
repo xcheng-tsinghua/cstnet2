@@ -9,7 +9,7 @@ def _symmetric_eigh(mat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.symeig(mat, eigenvectors=True)
 
 
-def _knn_local_pca(xyz: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+def _knn_local_pca(xyz: torch.Tensor, k: int, neighborhood=None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Return local PCA eigenvalues and neighbor distances.
 
@@ -24,10 +24,10 @@ def _knn_local_pca(xyz: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tenso
         return eigvals, knn_dist
 
     k = max(2, min(int(k), n_points - 1))
-    dist = torch.cdist(xyz, xyz)
-    knn = dist.topk(k=k + 1, dim=-1, largest=False)
-    knn_idx = knn.indices[:, :, 1:]
-    knn_dist = knn.values[:, :, 1:]
+    if neighborhood is None:
+        from functional.neighborhood import build_neighborhood
+        neighborhood = build_neighborhood(xyz, k + 1)
+    knn_idx, knn_dist = neighborhood.excluding_first(k)
 
     batch_idx = torch.arange(bsz, device=xyz.device).view(bsz, 1, 1)
     neighbors = xyz[batch_idx, knn_idx]
@@ -43,6 +43,7 @@ def build_stage1_input_features(
     use_curvature: bool = True,
     use_density: bool = True,
     k: int = 16,
+    neighborhood=None,
 ) -> torch.Tensor:
     """
     Build normal-free local geometric features from point coordinates.
@@ -57,7 +58,7 @@ def build_stage1_input_features(
     eigvals = knn_dist = None
 
     if need_pca:
-        eigvals, knn_dist = _knn_local_pca(xyz, k=k)
+        eigvals, knn_dist = _knn_local_pca(xyz, k=k, neighborhood=neighborhood)
 
     if use_curvature:
         eig_sum = eigvals.sum(dim=-1, keepdim=True)
@@ -77,3 +78,17 @@ def stage1_feature_dim(use_extra_features: bool) -> int:
     if not use_extra_features:
         return 0
     return 2
+
+
+def stage1_forward(model, xyz, *, use_extra_features=False, feature_k=16):
+    """Reuse one neighborhood across PCA features and an Attn3DGCN backbone."""
+    neighborhood = model.build_neighborhood(
+        xyz, feature_k if use_extra_features else None
+    ) if hasattr(model, "build_neighborhood") else None
+    features = None
+    if use_extra_features:
+        with torch.no_grad():
+            features = build_stage1_input_features(xyz, k=feature_k, neighborhood=neighborhood)
+    if neighborhood is not None:
+        return model(xyz, features, neighborhood=neighborhood)
+    return model(xyz, features)

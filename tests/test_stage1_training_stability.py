@@ -50,16 +50,6 @@ def checkpoint_args(phase, n_points=20):
         "w_mad": 0.02,
         "w_dim": 0.05,
         "w_loc": 0.02,
-        "w_geom": 0.02,
-        "w_inst": 0.005,
-        "enable_mad_loss": True,
-        "enable_dim_loss": True,
-        "enable_loc_loss": True,
-        "enable_geom_loss": True,
-        "enable_inst_loss": True,
-        "geom_start_epoch": 0,
-        "geom_ramp_epochs": 4,
-        "joint_backbone_lr_scale": 0.1,
         "constraint_route": "direct_mlp_v1",
     }
 
@@ -82,13 +72,9 @@ def make_trainer(
         lr=1e-4,
         save_str="stage1_stability_smoke",
         train_phase=phase,
-        enabled_losses={name: True for name in LOSS_NAMES},
         checkpoint_args=(
             checkpoint_args(phase) if args_override is None else args_override
         ),
-        geom_start_epoch=0,
-        geom_ramp_epochs=4,
-        joint_backbone_lr_scale=0.1,
         checkpoint_action=checkpoint_action,
         checkpoint_source=checkpoint_source,
     )
@@ -368,13 +354,13 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
         self.assertLess(float(dimension.grad.abs().max()), 0.02)
         self.assertLess(float(location.grad.abs().max()), 0.02)
 
-    def test_semantic_skips_unused_losses_and_clustering(self):
+    def test_semantic_skips_unused_losses_and_inference_clustering(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
             trainer = make_trainer(root, "semantic")
             with mock.patch("functional.loss.instance_consistency_loss", side_effect=AssertionError("unused")), mock.patch("functional.loss._stage1_geometry_losses", side_effect=AssertionError("unused")), mock.patch("functional.loss._parameter_observability_weights", side_effect=AssertionError("unused")):
                 loss, metrics = trainer.process_batch(synthetic_batch(), 1, True)
             self.assertGreater(float(loss["raw/cluster"]), 0)
-            self.assertEqual(float(loss["raw/inst"]), 0)
+            self.assertNotIn("raw/inst", loss)
             self.assertNotIn("cluster_ari_real", metrics)
 
     def test_stage1_checkpoint_persists_wandb_run_id(self):
@@ -485,7 +471,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                     if phase == "geometry":
                         self.assertGreater(float(loss["weighted/mad"]), 0.0)
                         self.assertAlmostEqual(
-                            float(loss["effective_weight/mad"]), 0.02
+                            float(loss["effective_weight/mad"]), 1.0
                         )
 
     def test_geometry_freezes_semantic_path(self):
@@ -501,19 +487,11 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             self.assertTrue(all(not name.startswith("emb_head.") for name in trainable))
             self.assertEqual({name.split(".")[0] for name in trainable}, {"mad_head", "dim_head", "loc_head"})
 
-    def test_joint_uses_lower_backbone_lr(self):
+    def test_joint_uses_one_lr_and_unfreezes_every_parameter(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
             trainer = make_trainer(root, "joint")
-            learning_rates = trainer.current_lrs()
-            self.assertAlmostEqual(
-                learning_rates["backbone_high"], learning_rates["heads"] * 0.1
-            )
-            frozen_backbone = [
-                parameter
-                for name, parameter in trainer.model.named_parameters()
-                if name.startswith("embedding.") and not parameter.requires_grad
-            ]
-            self.assertTrue(frozen_backbone)
+            self.assertEqual(trainer.current_lrs(), {"joint": 1e-4})
+            self.assertTrue(all(p.requires_grad for p in trainer.model.parameters()))
 
     def test_checkpoint_resume_and_previous_phase_init(self):
         with tempfile.TemporaryDirectory(dir=".") as root:
@@ -577,7 +555,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             resumed_state = torch.load(last_path, map_location="cpu")
             self.assertEqual(resumed_state["epoch"], 1)
             self.assertEqual(resumed_state["global_step"], 2)
-            self.assertAlmostEqual(resumed_state["loss_schedule"]["aux_progress"], 0.25)
+            self.assertNotIn("aux_progress", resumed_state["loss_schedule"])
 
             mismatched_args = checkpoint_args("joint")
             mismatched_args["n_points"] = 21

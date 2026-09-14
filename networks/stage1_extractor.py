@@ -10,7 +10,7 @@ from functional.constraints import (
     constraints_to_tensor,
 )
 from functional.direct_constraints import direct_constraints, validate_direct_checkpoint
-from functional.point_features import build_stage1_input_features, stage1_feature_dim
+from functional.point_features import stage1_forward, stage1_feature_dim
 from networks.cst_pred_wrapper import CstPredWrapper
 
 
@@ -77,15 +77,7 @@ class FrozenStage1ConstraintExtractor(nn.Module):
     @torch.no_grad()
     def predict_raw(self, xyz: torch.Tensor) -> Dict[str, torch.Tensor]:
         self.model.eval()
-        features = None
-        if self.use_extra_features:
-            features = build_stage1_input_features(
-                xyz,
-                use_curvature=True,
-                use_density=True,
-                k=self.feature_k,
-            )
-        return self.model(xyz, features)
+        return stage1_forward(self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k)
 
     @torch.no_grad()
     def forward(

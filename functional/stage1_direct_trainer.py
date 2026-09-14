@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
         return iterable
 
 from functional.checkpoint_io import safe_torch_save
+from functional.finite_checks import assert_finite_tensors
 from functional.stage1_direct_loss import direct_constraint_loss
 from functional.stage1_direct_metrics import Stage1DirectMetricAccumulator
 from functional.stage1_metrics import primitive_prediction_collapsed
@@ -155,15 +156,7 @@ class Stage1DirectTrainer:
         missing = sorted(required.difference(predictions))
         if missing:
             raise ValueError(f"direct model output is missing fields: {missing}")
-        non_finite = [
-            name
-            for name, value in predictions.items()
-            if torch.is_tensor(value) and not torch.isfinite(value).all()
-        ]
-        if non_finite:
-            raise FloatingPointError(
-                f"non-finite Stage 1 direct predictions: {non_finite}"
-            )
+        assert_finite_tensors(predictions, "Stage 1 direct predictions")
 
     def _backward_and_step(self, loss: torch.Tensor) -> None:
         self.scaler.scale(loss).backward()
@@ -188,10 +181,10 @@ class Stage1DirectTrainer:
     def _run_epoch(self, epoch: int) -> tuple[dict[str, float], dict[str, Any]]:
         self.model.train()
         metrics = Stage1DirectMetricAccumulator()
-        loss_totals: dict[str, float] = {}
+        loss_totals: dict[str, torch.Tensor] = {}
         sample_count = 0
         iterator = tqdm(self.train_loader, desc=f"train {epoch + 1}/{self.epochs}")
-        for raw_batch in iterator:
+        for batch_index, raw_batch in enumerate(iterator):
             xyz, pmt_gt, mad_gt, dim_gt, loc_gt = self._batch_to_device(raw_batch)
             batch_size = int(xyz.shape[0])
             self.optimizer.zero_grad(set_to_none=True)
@@ -205,17 +198,25 @@ class Stage1DirectTrainer:
             for name, value in loss_dict.items():
                 if torch.is_tensor(value) and value.numel() == 1:
                     loss_totals[name] = loss_totals.get(name, 0.0) + (
-                        float(value.detach().cpu()) * batch_size
+                        value.detach().double() * batch_size
                     )
             sample_count += batch_size
             metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt)
-            if hasattr(iterator, "set_postfix"):
+            if hasattr(iterator, "set_postfix") and batch_index % 10 == 0:
+                display_loss, display_acc = torch.stack((
+                    loss.detach().float(), metrics.last_pmt_acc
+                )).cpu().tolist()
                 iterator.set_postfix(
-                    loss=f"{float(loss.detach().cpu()):.4f}",
-                    pmt=f"{float((predictions['log_pmt'].argmax(-1) == pmt_gt).float().mean()):.3f}",
+                    loss=f"{display_loss:.4f}",
+                    pmt=f"{display_acc:.3f}",
+                    refresh=False,
                 )
 
-        loss_summary = _scalar_loss_summary(loss_totals, sample_count)
+        host_losses = {}
+        if loss_totals:
+            values = torch.stack(list(loss_totals.values())).cpu().tolist()
+            host_losses = dict(zip(loss_totals, values))
+        loss_summary = _scalar_loss_summary(host_losses, sample_count)
         metric_summary = metrics.compute()
         if primitive_prediction_collapsed(
             torch.as_tensor(metric_summary["pmt_pred_histogram"])

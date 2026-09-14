@@ -2,12 +2,14 @@
 训练约束预测模块
 """
 import os
+import math
 import argparse
 from datetime import datetime
 import torch
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
 from data_utils.huggingface_dataset import resolve_stage1_data_root
+from functional.stage1_phase_loss import TRAINING_RECIPE
 from functional.direct_constraints import CONSTRAINT_ROUTE
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
@@ -26,7 +28,7 @@ from colorama import init, Fore, Back
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=30, help='batch size in training')
-    parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
+    parser.add_argument('--epoch', default=50, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=None, type=float, help='default: 1e-4 for semantic/geometry, 1e-5 for joint')
     parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
@@ -50,7 +52,7 @@ def parse_args(argv=None):
         choices=['auto', 'txt', 'h5'],
         help='Stage 1 storage format; auto prefers HDF5 when shards are present',
     )
-    parser.add_argument('--wandb_project', type=str, default='cstnet2')
+    parser.add_argument('--wandb_project', type=str, default='cstnet2-s1')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
@@ -68,21 +70,8 @@ def parse_args(argv=None):
         choices=CHECKPOINT_POLICIES,
         help='auto-resume, restart the selected phase, or require a resume checkpoint',
     )
-    parser.add_argument('--w_pmt', default=1.0, type=float)
-    parser.add_argument('--w_cluster', default=1.0, type=float)  # 0.5
-    parser.add_argument('--w_mad', default=0.5, type=float)  # 0.02
-    parser.add_argument('--w_dim', default=0.5, type=float)  # 0.05
-    parser.add_argument('--w_loc', default=0.5, type=float)  # 0.02
-    parser.add_argument('--w_geom', default=0.5, type=float)  # 0.02
-    parser.add_argument('--w_inst', default=0.1, type=float)  # 0.005
-    parser.add_argument('--geom_start_epoch', default=0, type=int)
-    parser.add_argument('--geom_ramp_epochs', default=10, type=int)
-    parser.add_argument('--disable_mad_loss', dest='enable_mad_loss', action='store_false', default=True)
-    parser.add_argument('--disable_dim_loss', dest='enable_dim_loss', action='store_false', default=True)
-    parser.add_argument('--disable_loc_loss', dest='enable_loc_loss', action='store_false', default=True)
-    parser.add_argument('--disable_geom_loss', dest='enable_geom_loss', action='store_false', default=True)
-    parser.add_argument('--disable_inst_loss', dest='enable_inst_loss', action='store_false', default=True)
-    parser.add_argument('--joint_backbone_lr_scale', default=0.1, type=float)
+    for name in ("pmt", "cluster", "mad", "dim", "loc"):
+        parser.add_argument(f"--w_{name}", default=1.0, type=float)
     parser.add_argument(
         '--grad_clip',
         default=1.0,
@@ -93,6 +82,10 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.lr is None:
         args.lr = 1e-5 if args.train_phase == "joint" else 1e-4
+    for name in ("pmt", "cluster", "mad", "dim", "loc"):
+        weight = getattr(args, f"w_{name}")
+        if not math.isfinite(weight) or weight <= 0:
+            parser.error(f"--w_{name} must be finite and positive")
     return args
 
 
@@ -141,15 +134,6 @@ def main(args):
         'w_mad': args.w_mad,
         'w_dim': args.w_dim,
         'w_loc': args.w_loc,
-        'w_geom': args.w_geom,
-        'w_inst': args.w_inst,
-    }
-    enabled_losses = {
-        'mad': args.enable_mad_loss,
-        'dim': args.enable_dim_loss,
-        'loc': args.enable_loc_loss,
-        'geom': args.enable_geom_loss,
-        'inst': args.enable_inst_loss,
     }
     stage1_model = CstPredWrapper(
         args.model,
@@ -172,6 +156,7 @@ def main(args):
         **vars(args),
         'use_extra_features': use_extra_features,
         'constraint_route': CONSTRAINT_ROUTE,
+        'training_recipe': TRAINING_RECIPE,
         'resolved_data_root': resolved_data_root,
     }
     run = initialize_wandb_run(
@@ -205,13 +190,10 @@ def main(args):
         save_str=save_str,
         wandb_run=run,
         loss_weights=loss_weights,
-        geom_start_epoch=args.geom_start_epoch,
-        geom_ramp_epochs=args.geom_ramp_epochs,
         use_extra_features=use_extra_features,
         feature_k=args.feature_k,
         overfit_one_batch=args.overfit_one_batch,
         train_phase=args.train_phase,
-        enabled_losses=enabled_losses,
         checkpoint_action=checkpoint_resolution.action,
         checkpoint_source=(
             str(checkpoint_resolution.source)
@@ -219,7 +201,6 @@ def main(args):
             else ''
         ),
         checkpoint_args=checkpoint_args,
-        joint_backbone_lr_scale=args.joint_backbone_lr_scale,
         grad_clip=args.grad_clip,
     )
     try:

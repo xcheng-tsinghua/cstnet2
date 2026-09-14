@@ -46,7 +46,7 @@ class DirectRouteTest(unittest.TestCase):
             model.train()
             model.apply_train_phase_mode()
             before = {k: v.clone() for k, v in model.state_dict().items()}
-            with mock.patch("functional.loss.discriminative_loss", side_effect=AssertionError("disabled")):
+            with mock.patch("functional.stage1_phase_loss.discriminative_loss", side_effect=AssertionError("disabled")):
                 trainer.process_batch(batch, 1, True)
             after = model.state_dict()
             for key in before:
@@ -55,13 +55,13 @@ class DirectRouteTest(unittest.TestCase):
             for head in ("mad_head.", "dim_head.", "loc_head."):
                 self.assertTrue(any(not torch.equal(before[k], after[k]) for k in before if k.startswith(head)))
 
-    def test_all_backbones_keep_partial_joint_freeze(self):
+    def test_all_backbones_unfreeze_every_joint_parameter(self):
         for backbone in ("pointnet", "pointnet2", "attn_3dgcn"):
             model = CstPredWrapper(backbone)
             model.set_train_phase("joint")
             parameters = list(model.embedding.parameters())
             self.assertTrue(any(p.requires_grad for p in parameters))
-            self.assertTrue(any(not p.requires_grad for p in parameters))
+            self.assertTrue(all(p.requires_grad for p in model.parameters()))
 
     def test_frozen_inference_has_no_fitting_and_returns_12_channels(self):
         with tempfile.TemporaryDirectory(dir=".") as root:

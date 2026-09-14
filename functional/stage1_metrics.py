@@ -61,18 +61,13 @@ def _angular_error_sum_and_count(
         & (pred_norm > eps)
         & (target_norm > eps)
     )
-    if not bool(valid.any()):
-        zero = prediction.new_zeros((), dtype=torch.float32)
-        return zero, zero
-
-    pred_unit = F.normalize(prediction[valid].float(), dim=-1, eps=eps)
-    target_unit = F.normalize(target[valid].float(), dim=-1, eps=eps)
+    pred_unit = F.normalize(torch.where(valid[..., None], prediction.float(), 0.0), dim=-1, eps=eps)
+    target_unit = F.normalize(torch.where(valid[..., None], target.float(), 0.0), dim=-1, eps=eps)
     # Plane normals and cylinder/cone axes are unoriented. The absolute dot
     # product makes nearly antiparallel vectors robustly equivalent even near
     # the discontinuous dir_unify sign boundary.
     cosine = (pred_unit * target_unit).sum(dim=-1).abs().clamp(0.0, 1.0)
-    error_deg = prediction.new_zeros(mask.shape, dtype=torch.float32)
-    error_deg[valid] = torch.acos(cosine) * (180.0 / math.pi)
+    error_deg = torch.where(valid, torch.acos(cosine) * (180.0 / math.pi), 0.0)
     return _trimmed_error_sum_and_count(error_deg, valid, trim_ratio)
 
 
@@ -88,9 +83,8 @@ def _trimmed_error_sum_and_count(
         raise ValueError("trim_ratio must be in [0, 1)")
 
     if trim_ratio == 0.0:
-        selected = errors[valid_mask]
         return (
-            selected.sum() if selected.numel() else errors.new_zeros(()),
+            torch.where(valid_mask, errors, 0.0).sum(),
             valid_mask.sum().to(dtype=torch.float32),
         )
 

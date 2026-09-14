@@ -11,7 +11,6 @@ from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
-    evaluate_primitive_metrics,
     primitive_metrics_from_confusion,
 )
 from networks.stage1_direct_baselines import finalize_direct_constraints
@@ -37,6 +36,7 @@ class Stage1DirectMetricAccumulator:
         self.final_attributes = {
             key: 0.0 for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
         }
+        self.last_pmt_acc = torch.zeros(())
 
     @torch.no_grad()
     def update(
@@ -47,8 +47,13 @@ class Stage1DirectMetricAccumulator:
         dim_gt: torch.Tensor,
         loc_gt: torch.Tensor,
     ) -> None:
-        primitive = evaluate_primitive_metrics(predictions["log_pmt"], pmt_gt)
-        self.confusion += primitive["pmt_confusion_matrix"].detach().double().cpu()
+        pred = predictions["log_pmt"].detach().argmax(dim=-1).long()
+        confusion = torch.bincount(
+            (pmt_gt.long() * 5 + pred).reshape(-1), minlength=25
+        ).reshape(5, 5)
+        self.confusion = self.confusion.to(confusion.device)
+        self.confusion.add_(confusion)
+        self.last_pmt_acc = confusion.diag().sum().float() / max(pmt_gt.numel(), 1)
 
         raw = evaluate_constraint_attribute_metrics(
             predictions["mad"],
@@ -70,13 +75,20 @@ class Stage1DirectMetricAccumulator:
             loc_gt,
         )
         for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS:
-            self.raw_attributes[key] += float(raw[key].detach().cpu())
-            self.final_attributes[key] += float(final[key].detach().cpu())
+            self.raw_attributes[key] = self.raw_attributes[key] + raw[key].detach().double()
+            self.final_attributes[key] = self.final_attributes[key] + final[key].detach().double()
 
     def compute(self) -> dict[str, Any]:
-        primitive = primitive_metrics_from_confusion(self.confusion.float())
-        raw = aggregate_constraint_attribute_metrics([self.raw_attributes])
-        final = aggregate_constraint_attribute_metrics([self.final_attributes])
+        keys = sorted(CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS)
+        packed = torch.stack([
+            torch.as_tensor(values[key], device=self.confusion.device, dtype=torch.float64)
+            for values in (self.raw_attributes, self.final_attributes) for key in keys
+        ])
+        # One transfer at epoch end; keep the accumulator reusable after compute().
+        host = torch.cat((self.confusion.reshape(-1), packed)).cpu()
+        primitive = primitive_metrics_from_confusion(host[:25].reshape(5, 5).float())
+        raw = aggregate_constraint_attribute_metrics([dict(zip(keys, host[25:25 + len(keys)]))])
+        final = aggregate_constraint_attribute_metrics([dict(zip(keys, host[25 + len(keys):]))])
         output = {str(key): _to_python(value) for key, value in primitive.items()}
         output.update({
             key: value for key, value in raw.items()

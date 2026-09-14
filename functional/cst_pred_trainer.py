@@ -11,11 +11,11 @@ from colorama import Back, Fore
 from tqdm import tqdm
 
 from functional.direct_constraints import CONSTRAINT_ROUTE, direct_constraints, validate_direct_checkpoint
-from functional.loss import (
-    constraint_loss,
-    linear_ramp,
+from functional.stage1_phase_loss import (
+    LOSS_NAMES, TRAINING_RECIPE, stage1_active_losses, stage1_phase_loss,
 )
-from functional.point_features import build_stage1_input_features
+from functional.point_features import stage1_forward
+from functional.finite_checks import assert_finite_tensors
 from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
@@ -32,7 +32,6 @@ from functional.wandb_utils import (
 )
 
 
-LOSS_NAMES = ("pmt", "cluster", "mad", "dim", "loc", "geom", "inst")
 PRIMITIVE_CLASS_NAMES = ("plane", "cylinder", "cone", "sphere", "other")
 BEST_FILE_NAMES = {
     "pmt_miou": "best_pmt_miou.pth",
@@ -56,18 +55,14 @@ class CstPredTrainer(object):
         wandb_run=None,
         decay_rate=1e-4,
         loss_weights=None,
-        geom_start_epoch=20,
-        geom_ramp_epochs=20,
         use_extra_features=False,
         feature_k=16,
         overfit_one_batch=False,
         grad_clip=1.0,
         train_phase="semantic",
-        enabled_losses=None,
         checkpoint_action="scratch",
         checkpoint_source="",
         checkpoint_args=None,
-        joint_backbone_lr_scale=0.1,
     ):
         super().__init__()
         if checkpoint_action not in ("scratch", "resume", "init"):
@@ -85,8 +80,6 @@ class CstPredTrainer(object):
         self.wandb_run = wandb_run
         self.decay_rate = decay_rate
         self.loss_weights = {} if loss_weights is None else dict(loss_weights)
-        self.geom_start_epoch = int(geom_start_epoch)
-        self.geom_ramp_epochs = int(geom_ramp_epochs)
         self.use_extra_features = bool(use_extra_features)
         self.feature_k = int(feature_k)
         self.overfit_one_batch = overfit_one_batch
@@ -97,13 +90,15 @@ class CstPredTrainer(object):
         ):
             raise ValueError("grad_clip must be finite and non-negative")
         self.train_phase = train_phase
-        self.enabled_losses = {} if enabled_losses is None else dict(enabled_losses)
         self.checkpoint_action = checkpoint_action
         self.checkpoint_source = str(checkpoint_source) if checkpoint_source else ""
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_args = {} if checkpoint_args is None else dict(checkpoint_args)
-        self.checkpoint_args.update(constraint_route=CONSTRAINT_ROUTE, train_phase=train_phase)
-        self.joint_backbone_lr_scale = float(joint_backbone_lr_scale)
+        self.checkpoint_args.update(
+            constraint_route=CONSTRAINT_ROUTE, train_phase=train_phase,
+            training_recipe=TRAINING_RECIPE,
+            **{f"w_{name}": float(self.loss_weights.get(f"w_{name}", 1.0)) for name in LOSS_NAMES},
+        )
         self.optimizer = None
         self.scheduler = None
         self.start_epoch = 0
@@ -238,7 +233,7 @@ class CstPredTrainer(object):
             print(Fore.RED + "resume checkpoint configuration mismatch:")
             for key, saved, current in fatal_differences:
                 print(Fore.RED + f"  {key}: checkpoint={saved!r}, current={current!r}")
-            raise ValueError("resume checkpoint configuration mismatch")
+            raise ValueError("resume checkpoint configuration mismatch; use --checkpoint_policy restart to initialize from the previous phase with a fresh optimizer")
         if warning_differences:
             print(Fore.YELLOW + "resume checkpoint configuration: compatible with warnings")
         else:
@@ -273,24 +268,11 @@ class CstPredTrainer(object):
         named_trainable = [
             (name, param) for name, param in self.model.named_parameters() if param.requires_grad
         ]
-        if self.train_phase == "joint":
-            backbone_params = [p for name, p in named_trainable if name.startswith("embedding.")]
-            head_params = [p for name, p in named_trainable if not name.startswith("embedding.")]
-            param_groups = []
-            if backbone_params:
-                param_groups.append({
-                    "params": backbone_params,
-                    "lr": lr * self.joint_backbone_lr_scale,
-                    "group_name": "backbone_high",
-                })
-            if head_params:
-                param_groups.append({"params": head_params, "lr": lr, "group_name": "heads"})
-        else:
-            param_groups = [{
-                "params": [p for _, p in named_trainable],
-                "lr": lr,
-                "group_name": self.train_phase,
-            }]
+        param_groups = [{
+            "params": [p for _, p in named_trainable],
+            "lr": lr,
+            "group_name": self.train_phase,
+        }]
 
         self.optimizer = torch.optim.Adam(
             param_groups,
@@ -409,11 +391,6 @@ class CstPredTrainer(object):
                 "global_epoch": int(epoch),
                 "next_global_epoch": int(epoch) + 1,
                 "global_step": int(self.global_step),
-                "aux_progress": linear_ramp(
-                    epoch, self.geom_start_epoch, self.geom_ramp_epochs
-                ),
-                "geom_start_epoch": self.geom_start_epoch,
-                "geom_ramp_epochs": self.geom_ramp_epochs,
             },
         }
         return payload
@@ -429,11 +406,11 @@ class CstPredTrainer(object):
 
         raw_text = ", ".join(
             f"{name}={float(loss_summary.get('raw/' + name, 0.0)):.5f}"
-            for name in LOSS_NAMES
+            for name in LOSS_NAMES if self._active_losses()[name]
         )
         weighted_text = ", ".join(
             f"{name}={float(loss_summary.get('weighted/' + name, 0.0)):.5f}"
-            for name in LOSS_NAMES
+            for name in LOSS_NAMES if self._active_losses()[name]
         )
         print(
             f"{split}: loss_all={loss_summary.get('loss_all', 0.0):.6f}; "
@@ -488,9 +465,8 @@ class CstPredTrainer(object):
             metric_dict = _detach_dict(metric_dict)
             progress_bar.set_postfix({
                 "pmt_acc": f"{_scalar(metric_dict, 'pmt_acc'):.4f}",
-                "loc_loss": f"{_scalar(loss_dict, 'raw/loc'):.4f}",
-                "mad_loss": f"{_scalar(loss_dict, 'raw/mad'):.4f}",
-                "dim_loss": f"{_scalar(loss_dict, 'raw/dim'):.4f}",
+                **{f"{name}_loss": f"{_scalar(loss_dict, 'raw/' + name):.4f}"
+                   for name in LOSS_NAMES if self._active_losses()[name]},
             }, refresh=False)
             loss_batches.append(loss_dict)
             metric_batches.append(metric_dict)
@@ -499,18 +475,6 @@ class CstPredTrainer(object):
         metric_summary = _aggregate_metric_dicts(metric_batches)
         warn_if_primitive_collapsed(metric_summary, split="train", epoch=global_epoch)
         return loss_summary, metric_summary
-
-    def _build_features(self, xyz):
-        if not self.use_extra_features:
-            return None
-        with torch.no_grad():
-            features = build_stage1_input_features(
-                xyz,
-                use_curvature=True,
-                use_density=True,
-                k=self.feature_k,
-            )
-        return features.detach()
 
     @staticmethod
     def _unpack_model_output(model_output):
@@ -523,7 +487,7 @@ class CstPredTrainer(object):
         return model_output
 
     def _active_losses(self):
-        return stage1_active_losses(self.train_phase, self.enabled_losses)
+        return stage1_active_losses(self.train_phase)
 
     def process_batch(
         self,
@@ -545,27 +509,14 @@ class CstPredTrainer(object):
             dim_gt = data_batch[3].float().to(self.device, non_blocking=True)
             loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
             affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
-            extra_fea = self._build_features(xyz)
-            outputs = self._unpack_model_output(self.model(xyz, extra_fea))
+            outputs = self._unpack_model_output(stage1_forward(
+                self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k,
+            ))
             self._assert_finite_outputs(outputs)
-            active_losses = self._active_losses()
-            loss, loss_dict = constraint_loss(
-                xyz=xyz,
-                log_pmt_pred=outputs["log_pmt"].float(),
-                mad_pred=outputs["mad"].float(),
-                dim_pred=outputs["dim"].float(),
-                loc_pred=outputs["loc"].float(),
-                pmt_gt=pmt_gt,
-                mad_gt=mad_gt,
-                dim_gt=dim_gt,
-                loc_gt=loc_gt,
-                affil_idx=affiliate_idx,
-                point_emb=outputs["embedding"].float(),
-                weights=self.loss_weights,
-                global_epoch=global_epoch,
-                geom_start_epoch=self.geom_start_epoch,
-                geom_ramp_epochs=self.geom_ramp_epochs,
-                enabled_losses=active_losses,
+            loss, loss_dict = stage1_phase_loss(
+                {name: value.float() for name, value in outputs.items()},
+                pmt_gt, mad_gt, dim_gt, loc_gt, affiliate_idx,
+                train_phase=self.train_phase, weights=self.loss_weights,
             )
 
             self._assert_finite_losses(loss_dict)
@@ -606,30 +557,11 @@ class CstPredTrainer(object):
 
     @staticmethod
     def _assert_finite_outputs(outputs):
-        bad = [
-            name
-            for name, value in outputs.items()
-            if torch.is_tensor(value) and not torch.isfinite(value).all()
-        ]
-        if bad:
-            print(Fore.RED + f"non-finite model outputs: {bad}")
-            raise FloatingPointError(f"non-finite model outputs: {bad}")
+        assert_finite_tensors(outputs, "model outputs")
 
     @staticmethod
     def _assert_finite_losses(loss_dict):
-        bad = [
-            name
-            for name, value in loss_dict.items()
-            if torch.is_tensor(value) and not torch.isfinite(value).all()
-        ]
-        if bad:
-            values = {
-                name: _to_python(value.detach())
-                for name, value in loss_dict.items()
-                if torch.is_tensor(value)
-            }
-            print(Fore.RED + f"non-finite loss terms: {bad}; values={values}")
-            raise FloatingPointError(f"non-finite loss terms: {bad}")
+        assert_finite_tensors(loss_dict, "loss terms")
 
 
 def warn_if_primitive_collapsed(metric_summary, split="unknown", epoch=-1, threshold=0.95):
@@ -642,20 +574,6 @@ def warn_if_primitive_collapsed(metric_summary, split="unknown", epoch=-1, thres
         )
         return True
     return False
-
-
-def stage1_active_losses(train_phase, enabled_losses=None):
-    if train_phase not in ("semantic", "geometry", "joint"):
-        raise ValueError(f"unsupported Stage 1 train phase: {train_phase}")
-    enabled_losses = {} if enabled_losses is None else enabled_losses
-    active = {name: False for name in LOSS_NAMES}
-    if train_phase in ("semantic", "joint"):
-        active["pmt"] = True
-        active["cluster"] = True
-    for name in ("mad", "dim", "loc", "geom", "inst"):
-        phase_allows = train_phase in ("geometry", "joint")
-        active[name] = phase_allows and bool(enabled_losses.get(name, True))
-    return active
 
 
 def load_model_state_with_diagnostics(
@@ -725,15 +643,8 @@ def _extract_model_state(checkpoint):
 def _critical_checkpoint_config(args):
     args = {} if args is None else args
     weights = {
-        name: _normalize_config_value(args.get(name, "<missing>"))
-        for name in (
-            "w_pmt", "w_cluster", "w_mad", "w_dim",
-            "w_loc", "w_geom", "w_inst",
-        )
-    }
-    enabled = {
-        name: _normalize_config_value(args.get(f"enable_{name}_loss", "<missing>"))
-        for name in ("mad", "dim", "loc", "geom", "inst")
+        name: _normalize_config_value(args.get(name, 1.0))
+        for name in ("w_pmt", "w_cluster", "w_mad", "w_dim", "w_loc")
     }
     return {
         "model": _normalize_config_value(args.get("model", "<missing>")),
@@ -744,16 +655,7 @@ def _critical_checkpoint_config(args):
         "feature_k": _normalize_config_value(args.get("feature_k", "<missing>")),
         "point_count": _normalize_config_value(args.get("n_points", "<missing>")),
         "loss_weights": weights,
-        "enabled_losses": enabled,
-        "geom_start_epoch": _normalize_config_value(
-            args.get("geom_start_epoch", "<missing>")
-        ),
-        "geom_ramp_epochs": _normalize_config_value(
-            args.get("geom_ramp_epochs", "<missing>")
-        ),
-        "joint_backbone_lr_scale": _normalize_config_value(
-            args.get("joint_backbone_lr_scale", "<missing>")
-        ),
+        "training_recipe": args.get("training_recipe", "legacy_regularized_v1"),
         "constraint_route": args.get("constraint_route", CONSTRAINT_ROUTE),
     }
 

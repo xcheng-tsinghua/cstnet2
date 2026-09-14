@@ -11,6 +11,7 @@ import torch
 from colorama import Fore, init
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
+from functional.stage1_phase_loss import TRAINING_RECIPE
 from functional.direct_constraints import validate_direct_checkpoint
 from functional.cst_pred_evaluator import CstPredEvaluator
 from functional.cst_pred_trainer import load_model_state_with_diagnostics
@@ -113,29 +114,9 @@ def main(args):
     )
     feature_k = int(_checkpoint_value(checkpoint_args, "feature_k", 16))
     train_phase = str(_checkpoint_value(checkpoint_args, "train_phase", "joint"))
-    geom_start_epoch = int(
-        _checkpoint_value(checkpoint_args, "geom_start_epoch", 20)
-    )
-    geom_ramp_epochs = int(
-        _checkpoint_value(checkpoint_args, "geom_ramp_epochs", 20)
-    )
     loss_weights = {
-        name: float(_checkpoint_value(checkpoint_args, name, default))
-        for name, default in {
-            "w_pmt": 1.0,
-            "w_cluster": 0.5,
-            "w_mad": 0.02,
-            "w_dim": 0.05,
-            "w_loc": 0.02,
-            "w_geom": 0.02,
-            "w_inst": 0.005,
-        }.items()
-    }
-    enabled_losses = {
-        name: bool(
-            _checkpoint_value(checkpoint_args, f"enable_{name}_loss", True)
-        )
-        for name in ("mad", "dim", "loc", "geom", "inst")
+        name: float(_checkpoint_value(checkpoint_args, name, 1.0))
+        for name in ("w_pmt", "w_cluster", "w_mad", "w_dim", "w_loc")
     }
 
     device = _resolve_device(args.device)
@@ -163,9 +144,6 @@ def main(args):
         data_loader,
         loss_weights=loss_weights,
         train_phase=train_phase,
-        enabled_losses=enabled_losses,
-        geom_start_epoch=geom_start_epoch,
-        geom_ramp_epochs=geom_ramp_epochs,
         use_extra_features=use_extra_features,
         feature_k=feature_k,
     )
@@ -194,6 +172,7 @@ def main(args):
         "use_extra_features": use_extra_features,
         "feature_k": feature_k,
         "constraint_route": "direct_mlp_v1",
+        "evaluation_loss_recipe": TRAINING_RECIPE,
         "sampling_seed": args.seed,
         "loss": loss_summary,
         "metrics": metric_summary,

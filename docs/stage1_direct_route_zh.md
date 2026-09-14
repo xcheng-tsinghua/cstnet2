@@ -18,13 +18,17 @@ python train_cst_pred.py --data_root DATASET --train_phase geometry
 python train_cst_pred.py --data_root DATASET --train_phase joint
 ```
 
-| 阶段 | 更新的模块 | 默认学习率 |
-| --- | --- | --- |
-| semantic | 骨干 + 类型头 + 聚类特征头 | 1e-4 |
-| geometry | 仅 mad_head、dim_head、loc_head | 1e-4 |
-| joint | 原有骨干高层 + 全部预测头，底层继续冻结 | 预测头 1e-5，骨干高层 1e-6 |
+| 阶段 | 更新的模块 | 损失 | 默认学习率 |
+| --- | --- | --- | --- |
+| semantic | 骨干 + 类型头 + 聚类特征头 | pmt + cluster（2 项） | 1e-4 |
+| geometry | 仅 mad_head、dim_head、loc_head | mad + dim + loc（3 项） | 1e-4 |
+| joint | 整个骨干 + 全部预测头 | pmt + cluster + mad + dim + loc（5 项） | 全部参数统一 1e-5 |
 
-可用 --lr 显式覆盖学习率。第二步冻结骨干及语义头的权重和 BatchNorm 状态。第三步保留类型、聚类及属性监督；几何残差和实例一致性仍可作为属性训练的正则项，支持原有关闭参数，未启用的损失不执行计算。
+可用 --lr 显式覆盖学习率。geometry 冻结骨干及语义头的权重和 BatchNorm 状态；joint 全部解冻并恢复训练模式。Stage2 仍然冻结整个 Stage1。
+
+当前训练方案为 `simple_five_losses_v1`：pmt 使用 NLL（等价于对 logits 的交叉熵），cluster 保留已有判别式聚类损失；mad 使用归一化方向的正反等价 MSE，dim 和 loc 使用 MSE。属性损失只在 GT 基元类型对应的有效点上取平均，不做实例均衡或可观测性降权。各项权重默认均为 1，可通过 `--w_pmt`、`--w_cluster`、`--w_mad`、`--w_dim`、`--w_loc` 设置正权重。
+
+不计算几何残差、实例一致性和辅助损失 ramp；不提供这些参数或单项损失关闭开关。非当前阶段的损失完全跳过，日志只记录当前阶段的损失项。现有网络结构、头宽度、输入特征配置及最终约束规范化规则不变。
 
 ## 保存与续训
 
@@ -54,9 +58,17 @@ python train_cst_pred.py --data_root "https://huggingface.co/datasets/ZXCCHENGXI
 
 - 默认 auto：本阶段 last.pth 存在时续训；否则第二步从第一步最佳权重初始化，第三步从第二步 last.pth 初始化。
 - --checkpoint_policy restart：重启本阶段（第二、三步仍从前一阶段初始化）。
+- checkpoint 额外记录 `training_recipe=simple_five_losses_v1`。旧方案的 checkpoint 仍可作为前一阶段的模型权重来源，但不能恢复旧优化器并混入新方案续训。已有 semantic 权重可复用；若 geometry 已按旧方案训练，使用下面的命令从 semantic 权重重新训练 geometry。该命令会更新原 geometry 目录的 checkpoint；若要保留旧 geometry 实验，请先备份该目录。
+
+  ```shell
+  python train_cst_pred.py --data_root DATASET --train_phase geometry --checkpoint_policy restart
+  python train_cst_pred.py --data_root DATASET --train_phase joint
+  ```
+
+  若 joint 目录也已有旧方案的 checkpoint，joint 同样加 `--checkpoint_policy restart`。
 - 新结构删除了共享几何解码器，旧结构权重不能直接续训或推理，需要重新运行三步。
 - checkpoint 写入 constraint_route=direct_mlp_v1。导出和冻结提取器要求 geometry/joint 权重，拒绝尚未训练属性头的 semantic 权重。
-- 保留 last.pth、best_pmt_miou.pth、best_constraint_score.pth。constraint_score 改为当前阶段总训练损失的负值，不再使用聚类 ARI；它是训练集指标，不是验证集精度，且受损失权重和 ramp 影响。
+- 保留 last.pth、best_pmt_miou.pth、best_constraint_score.pth。constraint_score 为当前阶段总训练损失的负值，不使用聚类 ARI；它是训练集指标，不是验证集精度，且受损失权重影响。
 
 ## 最终输出与评估
 
@@ -68,5 +80,7 @@ python gen_cst_pred.py --input_dir INPUT --output_dir OUTPUT --checkpoint model_
 ```
 
 评估报告保留原始预测头属性误差，direct_* 为规范化后的最终约束误差；训练日志中的属性误差对应最终约束。方向/尺寸/位置误差仍按 GT 类型的有效属性掩码统计，类型正确率单独报告。
+
+评估损失同样使用简化五项方案，并在 JSON 中记录 `evaluation_loss_recipe`。旧方案权重也可评估，但新计算的 loss 不应与旧日志中的正则化总 loss 直接比较。
 
 导出的 TXT 保持 xyz,pmt,mad,dim,loc,affiliate_idx 共 12 列的基础格式，附加任务列按原规则保留。由于不预测实例编号，affiliate_idx 固定为 -1，不能当成实例训练标签。Stage2 仅使用四个约束分量，并始终冻结 Stage1。
