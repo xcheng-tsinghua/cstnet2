@@ -134,7 +134,9 @@ tail -f out_s1g.log
 nohup python train_cst_pred.py --train_phase joint --epoch 100 > out_s1j.log 2>&1 &
 tail -f out_s1j.log
 
-nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase semantic --epoch 100 && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
+nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase semantic --epoch 100 && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
+
+nohup bash -c "echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
 
 中断后完整续训
 默认 auto 会自动读取当前阶段 last.pth，且必须保持点数、特征设置、loss 权重和 ramp 配置一致：
