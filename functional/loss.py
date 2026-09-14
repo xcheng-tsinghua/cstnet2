@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch.nn.functional as F
 import torch
+from functional.instance_groups import instance_groups
 import numpy as np
 
 
@@ -607,9 +608,7 @@ def _primitive_mask(pmt_gt: torch.Tensor, valid_pmt: tuple[int, ...]) -> torch.T
 
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
-    if mask.any():
-        return values[mask].mean()
-    return _zero_loss(reference)
+    return torch.where(mask, values, 0.0).sum() / mask.sum().clamp_min(1)
 
 
 def _smooth_l1_zero(values: torch.Tensor, beta: float) -> torch.Tensor:
@@ -640,33 +639,17 @@ def _instance_balanced_mean(
         raise ValueError("instance-balanced loss inputs must all have shape [B, N]")
     if instance_weights is not None and instance_weights.shape != mask.shape:
         raise ValueError("instance_weights must have shape [B, N]")
-    if not bool(mask.any()):
-        return _zero_loss(reference)
-
-    batch_ids = torch.arange(
-        mask.shape[0], device=mask.device, dtype=affiliate_idx.dtype
-    ).unsqueeze(1).expand_as(affiliate_idx)
-    keys = torch.stack(
-        (batch_ids[mask], affiliate_idx[mask]), dim=-1
-    )
-    unique_keys, inverse = torch.unique(
-        keys, dim=0, sorted=True, return_inverse=True
-    )
-    instance_count = unique_keys.shape[0]
-    sums = torch.zeros(
-        instance_count, device=values.device, dtype=values.dtype
-    )
-    sums.index_add_(0, inverse, values[mask])
-    counts = torch.bincount(inverse, minlength=instance_count).to(values.dtype)
+    groups = instance_groups(affiliate_idx)
+    valid = mask.reshape(-1)
+    selected = torch.where(valid, values.reshape(-1), 0.0)
+    sums = groups.sum(selected)
+    counts = groups.sum(valid.to(values.dtype))
     terms = sums / counts.clamp_min(1.0)
     if instance_weights is not None:
-        weight_sums = torch.zeros_like(sums)
-        weight_sums.index_add_(0, inverse, instance_weights[mask].to(values.dtype))
-        # Do not renormalize the final terms by the sum of weights: a
-        # low-confidence primitive must genuinely contribute less, including
-        # when it is the only primitive of that type.
-        terms = terms * (weight_sums / counts.clamp_min(1.0))
-    return terms.mean()
+        weight_sums = groups.sum(torch.where(valid, instance_weights.reshape(-1).to(values.dtype), 0.0))
+        terms = terms * weight_sums / counts.clamp_min(1.0)
+    present = counts > 0
+    return torch.where(present, terms, 0.0).sum() / present.sum().clamp_min(1)
 
 
 @torch.no_grad()
@@ -693,17 +676,10 @@ def _parameter_observability_weights(
     if not 0 < min_weight <= 1:
         raise ValueError("min_weight must be in (0, 1]")
 
-    batch_ids = torch.arange(
-        xyz.shape[0], device=xyz.device, dtype=affiliate_idx.dtype
-    ).unsqueeze(1).expand_as(affiliate_idx)
-    keys = torch.stack(
-        (batch_ids.reshape(-1), affiliate_idx.reshape(-1)), dim=-1
-    )
-    unique_keys, inverse = torch.unique(
-        keys, dim=0, sorted=True, return_inverse=True
-    )
-    instance_count = unique_keys.shape[0]
-    counts = torch.bincount(inverse, minlength=instance_count).float().clamp_min(1.0)
+    groups = instance_groups(affiliate_idx, pmt_gt)
+    inverse = groups.inverse
+    instance_count = groups.size
+    counts = groups.counts.float().clamp_min(1.0)
 
     xyz_flat = xyz.reshape(-1, 3).float()
     xyz_sums = torch.zeros(
@@ -734,15 +710,7 @@ def _parameter_observability_weights(
     )
     patch_diameters = (2.0 * max_extents).clamp_min(1e-3)
 
-    primitive_counts = torch.zeros(
-        instance_count * 5, device=xyz.device, dtype=torch.float32
-    )
-    primitive_counts.index_add_(
-        0,
-        inverse * 5 + primitive_flat.clamp(min=0, max=4),
-        torch.ones_like(primitive_flat, dtype=torch.float32),
-    )
-    instance_primitives = primitive_counts.reshape(instance_count, 5).argmax(dim=-1)
+    instance_primitives = groups.primitive
 
     dim_sums = torch.zeros_like(max_extents)
     dim_sums.index_add_(0, inverse, dim_gt.reshape(-1).float().abs())
@@ -849,18 +817,13 @@ def _masked_vector_mse(
     mask: torch.Tensor,
     sign_invariant: bool = False,
 ) -> torch.Tensor:
-    if not mask.any():
-        return _zero_loss(pred)
-    pred_m = F.normalize(pred[mask], dim=-1, eps=1e-6)
-    target_m = F.normalize(target[mask], dim=-1, eps=1e-6)
+    pred_m = F.normalize(pred, dim=-1, eps=1e-6)
+    target_m = F.normalize(target, dim=-1, eps=1e-6)
+    direct = (pred_m - target_m).square().mean(dim=-1)
     if sign_invariant:
-        # Primitive directions are unoriented axes. Compare both equivalent
-        # representatives directly instead of relying on a discontinuous
-        # world-axis sign convention during optimization.
-        direct = (pred_m - target_m).pow(2).mean(dim=-1)
-        flipped = (pred_m + target_m).pow(2).mean(dim=-1)
-        return torch.minimum(direct, flipped).mean()
-    return F.mse_loss(pred_m, target_m)
+        flipped = (pred_m + target_m).square().mean(dim=-1)
+        direct = torch.minimum(direct, flipped)
+    return _masked_mean(direct, mask, pred)
 
 
 def _masked_scalar_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -876,13 +839,11 @@ def _masked_parallel_loss(
     affiliate_idx: torch.Tensor | None = None,
     instance_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    if not mask.any():
-        return _zero_loss(vec1)
     a = F.normalize(vec1, dim=-1, eps=1e-6)
     b = F.normalize(vec2, dim=-1, eps=1e-6)
     values = (1.0 - (a * b).sum(dim=-1).abs()).pow(2)
     if affiliate_idx is None:
-        return values[mask].mean()
+        return _masked_mean(values, mask, vec1)
     return _instance_balanced_mean(
         values, mask, affiliate_idx, vec1, instance_weights
     )
@@ -895,13 +856,11 @@ def _masked_perpendicular_loss(
     affiliate_idx: torch.Tensor | None = None,
     instance_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    if not mask.any():
-        return _zero_loss(vec1)
     a = F.normalize(vec1, dim=-1, eps=1e-6)
     b = F.normalize(vec2, dim=-1, eps=1e-6)
     values = (a * b).sum(dim=-1).pow(2)
     if affiliate_idx is None:
-        return values[mask].mean()
+        return _masked_mean(values, mask, vec1)
     return _instance_balanced_mean(
         values, mask, affiliate_idx, vec1, instance_weights
     )
@@ -921,98 +880,86 @@ def _stage1_geometry_losses(
     dim_pred = dim_pred.clamp_min(0.0)
 
     plane_mask = pmt_gt == 0
-    if plane_mask.any():
-        n = mad_pred
-        plane_residual = ((xyz - loc_pred) * n).sum(dim=-1)
-        plane_error = _smooth_l1_zero(
-            plane_residual, GEOMETRY_SMOOTH_L1_BETA
-        )
-        on_plane = _instance_balanced_mean(
-            plane_error, plane_mask, affiliate_idx, xyz
-        )
-        loc_nonzero = plane_mask & (loc_pred.norm(dim=-1) > 1e-4)
-        loc_parallel = _masked_parallel_loss(
-            loc_pred, mad_pred, loc_nonzero, affiliate_idx
-        )
-        loss_plane = on_plane + 0.2 * loc_parallel
-    else:
-        loss_plane = _zero_loss(xyz)
+    n = mad_pred
+    plane_residual = ((xyz - loc_pred) * n).sum(dim=-1)
+    plane_error = _smooth_l1_zero(
+        plane_residual, GEOMETRY_SMOOTH_L1_BETA
+    )
+    on_plane = _instance_balanced_mean(
+        plane_error, plane_mask, affiliate_idx, xyz
+    )
+    loc_nonzero = plane_mask & (loc_pred.norm(dim=-1) > 1e-4)
+    loc_parallel = _masked_parallel_loss(
+        loc_pred, mad_pred, loc_nonzero, affiliate_idx
+    )
+    loss_plane = on_plane + 0.2 * loc_parallel
 
     cylinder_mask = pmt_gt == 1
-    if cylinder_mask.any():
-        v = xyz - loc_pred
-        axis = mad_pred
-        axial = (v * axis).sum(dim=-1, keepdim=True) * axis
-        radial = (v - axial).norm(dim=-1)
-        radius_error = _smooth_l1_zero(
-            radial - dim_pred, GEOMETRY_SMOOTH_L1_BETA
-        )
-        cylinder_observability = torch.minimum(
-            dim_observability, loc_observability
-        )
-        on_cylinder = _instance_balanced_mean(
-            radius_error,
-            cylinder_mask,
-            affiliate_idx,
-            xyz,
-            cylinder_observability,
-        )
-        loc_perp_axis = _masked_perpendicular_loss(
-            loc_pred,
-            mad_pred,
-            cylinder_mask,
-            affiliate_idx,
-            cylinder_observability,
-        )
-        loss_cylinder = on_cylinder + 0.2 * loc_perp_axis
-    else:
-        loss_cylinder = _zero_loss(xyz)
+    v = xyz - loc_pred
+    axis = mad_pred
+    axial = (v * axis).sum(dim=-1, keepdim=True) * axis
+    radial = (v - axial).norm(dim=-1)
+    radius_error = _smooth_l1_zero(
+        radial - dim_pred, GEOMETRY_SMOOTH_L1_BETA
+    )
+    cylinder_observability = torch.minimum(
+        dim_observability, loc_observability
+    )
+    on_cylinder = _instance_balanced_mean(
+        radius_error,
+        cylinder_mask,
+        affiliate_idx,
+        xyz,
+        cylinder_observability,
+    )
+    loc_perp_axis = _masked_perpendicular_loss(
+        loc_pred,
+        mad_pred,
+        cylinder_mask,
+        affiliate_idx,
+        cylinder_observability,
+    )
+    loss_cylinder = on_cylinder + 0.2 * loc_perp_axis
 
     cone_mask = pmt_gt == 2
-    if cone_mask.any():
-        v = xyz - loc_pred
-        axis = mad_pred
-        signed_axial = (v * axis).sum(dim=-1)
-        radial_vec = v - signed_axial.unsqueeze(-1) * axis
-        radial = radial_vec.norm(dim=-1)
-        distance_to_apex = v.norm(dim=-1).clamp_min(1e-4)
-        semi_angle = dim_pred.clamp(min=1e-4, max=1.55)
-        # Compare normalized radial direction with sin(semi_angle). Unlike
-        # radial - axial*tan(angle), this residual and its angle derivative do
-        # not explode for a remote apex or an angle close to pi/2.
-        cone_error = _smooth_l1_zero(
-            radial / distance_to_apex - torch.sin(semi_angle),
-            GEOMETRY_SMOOTH_L1_BETA,
-        )
-        loss_cone = _instance_balanced_mean(
-            cone_error,
-            cone_mask,
-            affiliate_idx,
-            xyz,
-            loc_observability,
-        )
-    else:
-        loss_cone = _zero_loss(xyz)
+    v = xyz - loc_pred
+    axis = mad_pred
+    signed_axial = (v * axis).sum(dim=-1)
+    radial_vec = v - signed_axial.unsqueeze(-1) * axis
+    radial = radial_vec.norm(dim=-1)
+    distance_to_apex = v.norm(dim=-1).clamp_min(1e-4)
+    semi_angle = dim_pred.clamp(min=1e-4, max=1.55)
+    # Compare normalized radial direction with sin(semi_angle). Unlike
+    # radial - axial*tan(angle), this residual and its angle derivative do
+    # not explode for a remote apex or an angle close to pi/2.
+    cone_error = _smooth_l1_zero(
+        radial / distance_to_apex - torch.sin(semi_angle),
+        GEOMETRY_SMOOTH_L1_BETA,
+    )
+    loss_cone = _instance_balanced_mean(
+        cone_error,
+        cone_mask,
+        affiliate_idx,
+        xyz,
+        loc_observability,
+    )
 
     sphere_mask = pmt_gt == 3
-    if sphere_mask.any():
-        center_to_xyz = xyz - loc_pred
-        radius_error = _smooth_l1_zero(
-            center_to_xyz.norm(dim=-1) - dim_pred,
-            GEOMETRY_SMOOTH_L1_BETA,
-        )
-        sphere_observability = torch.minimum(
-            dim_observability, loc_observability
-        )
-        loss_sphere = _instance_balanced_mean(
-            radius_error,
-            sphere_mask,
-            affiliate_idx,
-            xyz,
-            sphere_observability,
-        )
-    else:
-        loss_sphere = _zero_loss(xyz)
+    center_to_xyz = xyz - loc_pred
+    radius_error = _smooth_l1_zero(
+        center_to_xyz.norm(dim=-1) - dim_pred,
+        GEOMETRY_SMOOTH_L1_BETA,
+    )
+    sphere_observability = torch.minimum(
+        dim_observability, loc_observability
+    )
+    loss_sphere = _instance_balanced_mean(
+        radius_error,
+        sphere_mask,
+        affiliate_idx,
+        xyz,
+        sphere_observability,
+    )
 
     geom_loss = loss_plane + loss_cylinder + loss_cone + loss_sphere
     return {
@@ -1023,86 +970,43 @@ def _stage1_geometry_losses(
         "loss_sphere": loss_sphere,
     }
 
-
 def instance_consistency_loss(log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt=None):
+    """Average the same valid instance/component terms as the original loop.
+
+    Direction signs use the first point of each instance as a detached reference.
+    Majority primitive ties select the lowest class, and singleton instances are
+    excluded from every component. Each valid component is one term, as before.
     """
-    log_pmt_pred: [B, P, 5] log-softmax后的基元类型预测
-    mad_pred: [B, P, 3] 主方向预测
-    dim_pred: [B, P] 尺寸预测
-    loc_pred: [B, P, 3] 主位置预测
-    affil_idx: [B, P] 每个点所属实例的索引 (int)
-    pmt_gt: [B, P] optional primitive type labels used for valid property masks
-    """
-    bs = log_pmt_pred.size(0)
-    terms = []
-    mad_pred = F.normalize(mad_pred, dim=-1, eps=1e-6)
-    probs = log_pmt_pred.exp()
+    groups = instance_groups(affil_idx, pmt_gt)
+    inverse = groups.inverse
+    primitive = groups.primitive
+    valid = groups.counts > 1
+    all_types = torch.ones_like(valid)
+    direction_valid = all_types if pmt_gt is None else primitive <= 2
+    dimension_valid = all_types if pmt_gt is None else (primitive >= 1) & (primitive <= 3)
+    location_valid = all_types if pmt_gt is None else primitive <= 3
 
-    for b in range(bs):
-        # 找到无重复的实例id
-        inst_ids = affil_idx[b].unique()
+    probs = log_pmt_pred.exp().reshape(-1, 5)
+    pmt_error = (probs - groups.mean(probs)[inverse]).square().mean(dim=-1)
 
-        for inst_id in inst_ids:
-            mask = (affil_idx[b] == inst_id)  # 当前实例的点
-            if mask.sum() <= 1:
-                continue  # 只有1个点不计算一致性
+    mad = F.normalize(mad_pred, dim=-1, eps=1e-6).reshape(-1, 3)
+    reference = mad[groups.first_indices()].detach()[inverse]
+    aligned = torch.where((mad * reference).sum(-1, keepdim=True) < 0, -mad, mad)
+    mean_mad = F.normalize(groups.mean(aligned), dim=-1, eps=1e-6)
+    mad_error = (aligned - mean_mad[inverse]).square().mean(dim=-1)
 
-            if pmt_gt is None:
-                inst_prim = None
-            else:
-                inst_labels = pmt_gt[b][mask].long()
-                inst_prim = int(torch.bincount(inst_labels, minlength=5).argmax().item())
+    dim = dim_pred.reshape(-1)
+    if pmt_gt is not None:
+        radius = ((primitive == 1) | (primitive == 3))[inverse]
+        dim = torch.where(radius, torch.log1p(dim.clamp_min(0.0)), dim)
+    dim_error = F.smooth_l1_loss(dim, groups.mean(dim)[inverse], reduction="none", beta=PARAMETER_SMOOTH_L1_BETA)
+    loc = loc_pred.reshape(-1, 3)
+    loc_error = F.smooth_l1_loss(loc, groups.mean(loc)[inverse], reduction="none", beta=PARAMETER_SMOOTH_L1_BETA).mean(-1)
 
-            # ---- 基元类型一致性（对logits取均值，再和每个点对齐）----
-            pmt_prob = probs[b][mask]   # [N, 5]
-            mean_prob = pmt_prob.mean(0, keepdim=True)  # [1, 5]
-            terms.append(F.mse_loss(pmt_prob, mean_prob.expand_as(pmt_prob)))
-
-            # ---- 主方向一致性 ----
-            if inst_prim is None or inst_prim in (0, 1, 2):
-                mad = mad_pred[b][mask]  # [N, 3]
-                # Align signs relative to one detached member before averaging.
-                # Thus v and -v reinforce the same cluster axis instead of
-                # cancelling each other around the dir_unify boundary.
-                reference = mad[:1].detach()
-                flip = (mad * reference).sum(dim=-1, keepdim=True) < 0
-                aligned_mad = torch.where(flip, -mad, mad)
-                mean_mad = F.normalize(
-                    aligned_mad.mean(0, keepdim=True), dim=-1, eps=1e-6
-                )
-                terms.append(
-                    F.mse_loss(aligned_mad, mean_mad.expand_as(aligned_mad))
-                )
-
-            # ---- 尺寸一致性 ----
-            if inst_prim is None or inst_prim in (1, 2, 3):
-                dim = dim_pred[b][mask]  # [N]
-                if inst_prim in (1, 3):
-                    dim = torch.log1p(dim.clamp_min(0.0))
-                mean_dim = dim.mean()
-                terms.append(
-                    F.smooth_l1_loss(
-                        dim,
-                        mean_dim.expand_as(dim),
-                        beta=PARAMETER_SMOOTH_L1_BETA,
-                    )
-                )
-
-            # ---- 主位置一致性 ----
-            if inst_prim is None or inst_prim in (0, 1, 2, 3):
-                loc = loc_pred[b][mask]  # [N, 3]
-                mean_loc = loc.mean(0, keepdim=True)
-                terms.append(
-                    F.smooth_l1_loss(
-                        loc,
-                        mean_loc.expand_as(loc),
-                        beta=PARAMETER_SMOOTH_L1_BETA,
-                    )
-                )
-
-    if len(terms) == 0:
-        return _zero_loss(log_pmt_pred)
-    return torch.stack(terms).mean()
+    point_errors = torch.stack((pmt_error, mad_error, dim_error, loc_error), dim=-1)
+    terms = groups.mean(point_errors)
+    enabled = torch.stack((all_types, direction_valid, dimension_valid, location_valid), dim=-1) & valid[:, None]
+    return torch.where(enabled, terms, 0.0).sum() / enabled.sum().clamp_min(1)
 
 
 def linear_ramp(global_epoch, start_epoch, ramp_epochs):
@@ -1164,6 +1068,9 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, loc_pred,
     zero = log_pmt_pred.new_zeros(())
     pmt_loss = F.nll_loss(log_pmt_pred.reshape(-1, 5), pmt_gt.reshape(-1)) if active("pmt") else zero
     cluster_loss = discriminative_loss(point_emb, affil_idx) if active("cluster") and point_emb is not None else zero
+    attribute_groups = None
+    if any(active(name) for name in ("dim", "loc", "geom", "inst")):
+        attribute_groups = instance_groups(affil_idx, pmt_gt)
     mad_pred = F.normalize(mad_pred, dim=-1, eps=eps)
     mad_gt = F.normalize(mad_gt, dim=-1, eps=eps)
     mad_loss = _masked_vector_mse(
@@ -1172,22 +1079,22 @@ def constraint_loss(xyz, log_pmt_pred, mad_pred, dim_pred, loc_pred,
     dim_observability = loc_observability = torch.zeros_like(dim_gt)
     if any(active(name) for name in ("dim", "loc", "geom")):
         dim_observability, loc_observability = _parameter_observability_weights(
-            xyz, pmt_gt, mad_gt, dim_gt, loc_gt, affil_idx
+            xyz, pmt_gt, mad_gt, dim_gt, loc_gt, attribute_groups
         )
     dim_loss = _robust_dimension_loss(
-        dim_pred, dim_gt, pmt_gt, affil_idx, dim_observability
+        dim_pred, dim_gt, pmt_gt, attribute_groups, dim_observability
     ) if active("dim") else zero
     loc_loss = _robust_location_loss(
-        loc_pred, loc_gt, pmt_gt, affil_idx, loc_observability
+        loc_pred, loc_gt, pmt_gt, attribute_groups, loc_observability
     ) if active("loc") else zero
     geom_losses = {name: zero for name in ("geom_loss", "loss_plane", "loss_cylinder", "loss_cone", "loss_sphere")}
     if active("geom"):
         geom_losses = _stage1_geometry_losses(
-            xyz, mad_pred, dim_pred, loc_pred, pmt_gt, affil_idx,
+            xyz, mad_pred, dim_pred, loc_pred, pmt_gt, attribute_groups,
             dim_observability, loc_observability,
         )
     inst_loss = instance_consistency_loss(
-        log_pmt_pred, mad_pred, dim_pred, loc_pred, affil_idx, pmt_gt
+        log_pmt_pred, mad_pred, dim_pred, loc_pred, attribute_groups, pmt_gt
     ) if active("inst") else zero
 
     aux_factor = linear_ramp(global_epoch, geom_start_epoch, geom_ramp_epochs)
