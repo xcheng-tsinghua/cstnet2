@@ -10,6 +10,7 @@ import torch
 from data_utils.stage1_dataset import Stage1ConstraintDataset
 from data_utils.huggingface_dataset import resolve_stage1_data_root
 from functional.stage1_phase_loss import TRAINING_RECIPE
+from functional.console_io import resilient_console, safe_print
 from functional.direct_constraints import CONSTRAINT_ROUTE
 from functional.cst_pred_trainer import CstPredTrainer
 from functional.point_features import stage1_feature_dim
@@ -89,6 +90,7 @@ def parse_args(argv=None):
     return args
 
 
+@resilient_console()
 def main(args):
     if not args.data_root:
         raise ValueError('--data_root must be a local dataset path or Hugging Face dataset URL')
@@ -206,7 +208,10 @@ def main(args):
     try:
         trainer.start()
     finally:
-        run.finish()
+        try:
+            run.finish()
+        except OSError as error:
+            safe_print(f"WARNING: WandB finish I/O failed: {error}")
 
 
 if __name__ == '__main__':

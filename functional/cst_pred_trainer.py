@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import math
 import os
+import sys
 import warnings
 from time import time
 
@@ -24,7 +24,8 @@ from functional.stage1_metrics import (
     primitive_metrics_from_confusion,
     primitive_prediction_collapsed,
 )
-from functional.checkpoint_io import safe_torch_save
+from functional.checkpoint_io import safe_torch_save, safe_json_save
+from functional.console_io import ResilientTextStream, safe_print as print
 from functional.wandb_utils import (
     flatten_wandb_summary_metrics,
     wandb_confusion_matrix,
@@ -321,14 +322,18 @@ class CstPredTrainer(object):
             self.scheduler.step()
             self.save(global_epoch, improved)
             if self.wandb_run is not None:
-                wandb_payload["confusion_matrix/primitive"] = (
-                    wandb_confusion_matrix(
-                        train_metrics["pmt_confusion_matrix"],
-                        PRIMITIVE_CLASS_NAMES,
-                        title="Train Primitive Confusion Matrix",
+                try:
+                    wandb_payload["confusion_matrix/primitive"] = (
+                        wandb_confusion_matrix(
+                            train_metrics["pmt_confusion_matrix"],
+                            PRIMITIVE_CLASS_NAMES,
+                            title="Train Primitive Confusion Matrix",
+                        )
                     )
-                )
-                self.wandb_run.log(wandb_payload, step=global_epoch)
+                    self.wandb_run.log(wandb_payload, step=global_epoch)
+                except OSError as error:
+                    print(f"WARNING: WandB logging I/O failed at epoch {global_epoch}: "
+                          f"{error}; continuing training and retrying logging next epoch")
 
     def _update_best_metrics(self, epoch, train_metrics):
         candidates = {
@@ -370,8 +375,7 @@ class CstPredTrainer(object):
             },
             "train": self.save_dict_train,
         }
-        with open(self.log_savepth, "w", encoding="utf-8") as file:
-            json.dump(log_payload, file, ensure_ascii=False, indent=4)
+        safe_json_save(log_payload, self.log_savepth)
         return status
 
     def _checkpoint_payload(self, epoch):
@@ -456,7 +460,8 @@ class CstPredTrainer(object):
         loader, total_override = self._epoch_iterable()
         total = total_override if total_override is not None else len(loader)
         progress_bar = tqdm(
-            loader, total=total, desc=f"[{global_epoch}/{self.max_epoch}]{self.save_str}"
+            loader, total=total, desc=f"[{global_epoch}/{self.max_epoch}]{self.save_str}",
+            file=ResilientTextStream(sys.stderr),
         )
         for data in progress_bar:
             loss_dict, metric_dict = self.process_batch(data, global_epoch, True)
