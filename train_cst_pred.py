@@ -82,7 +82,7 @@ def parse_args(argv=None):
 
     args = parser.parse_args(argv)
     if args.lr is None:
-        args.lr = 1e-4 if args.train_phase == "joint" else 1e-4
+        args.lr = 1e-5 if args.train_phase == "joint" else 1e-4
     for name in ("pmt", "cluster", "mad", "dim", "loc"):
         weight = getattr(args, f"w_{name}")
         if not math.isfinite(weight) or weight <= 0:
@@ -159,6 +159,7 @@ def main(args):
         'use_extra_features': use_extra_features,
         'constraint_route': CONSTRAINT_ROUTE,
         'training_recipe': TRAINING_RECIPE,
+        'loc_input': stage1_model.loc_input,
         'resolved_data_root': resolved_data_root,
     }
     run = initialize_wandb_run(

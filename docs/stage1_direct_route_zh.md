@@ -6,6 +6,21 @@
 - 聚类特征头：仅用于 affiliate_idx 监督下的判别损失。
 - 三个独立 MLP：mad（方向）、dim（尺寸）、loc（位置）。
 
+loc 头采用方案 A：将共享骨干的逐点特征与输入点的 XYZ 拼接，默认维度为 `128 + 3 → 20 → 3`。XYZ 是送入模型的同一坐标系下的坐标；不额外编码或归一化，不接聚类头的 32 维特征。mad、dim 仍仅接骨干特征。损失、冻结规则和最终位置投影不变。
+
+### 从未拼接 XYZ 的版本迁移
+
+semantic 不需要重新训练。运行 geometry 时使用 `--checkpoint_policy restart`，程序会从已有 semantic checkpoint 加载权重，仅扩展 loc 第一层的输入：保留原有 128 通道权重，为新增 3 个 XYZ 通道保留新初始化权重。其余参数严格加载，使用新优化器从 geometry 第 0 轮开始。
+
+geometry 和 joint 均需按新结构重新训练；已有旧版 joint checkpoint 时，joint 也必须指定 `restart`，从新 geometry 权重初始化。新 checkpoint 记录 `loc_input=backbone_xyz_v1`，防止误恢复旧结构的优化器。评估、导出和 Stage2 提取器共用更新后的结构，应使用新 geometry/joint 权重；旧版 geometry/joint 权重不能直接加载。
+
+```shell
+python train_cst_pred.py --data_root DATASET --model attn_3dgcn --train_phase geometry --checkpoint_policy restart
+python train_cst_pred.py --data_root DATASET --model attn_3dgcn --train_phase joint --checkpoint_policy restart --lr 1e-5
+```
+
+保留原训练的数据、点数和输入特征等参数。以上命令使用原 checkpoint_root，运行前备份需保留的旧 geometry/joint 目录；无需改动 semantic 目录。
+
 已删除主流程中的共享 geometry_decoder、AMP、训练期真实/Oracle 聚类指标、每轮全量拟合评估，以及训练/评估/导出/冻结提取器中的拟合参数。最终输出不依赖聚类结果。已有独立基线实验和历史几何工具保留，不属于该入口的执行路径。
 
 ## 训练
@@ -28,7 +43,7 @@ python train_cst_pred.py --data_root DATASET --train_phase joint
 
 当前训练方案为 `simple_five_losses_v1`：pmt 使用 NLL（等价于对 logits 的交叉熵），cluster 保留已有判别式聚类损失；mad 使用归一化方向的正反等价 MSE，dim 和 loc 使用 MSE。属性损失只在 GT 基元类型对应的有效点上取平均，不做实例均衡或可观测性降权。各项权重默认均为 1，可通过 `--w_pmt`、`--w_cluster`、`--w_mad`、`--w_dim`、`--w_loc` 设置正权重。
 
-不计算几何残差、实例一致性和辅助损失 ramp；不提供这些参数或单项损失关闭开关。非当前阶段的损失完全跳过，日志只记录当前阶段的损失项。现有网络结构、头宽度、输入特征配置及最终约束规范化规则不变。
+不计算几何残差、实例一致性和辅助损失 ramp；不提供这些参数或单项损失关闭开关。非当前阶段的损失完全跳过，日志只记录当前阶段的损失项。除上述 loc 头新增 XYZ 输入外，骨干结构、头隐藏层宽度、输入特征配置及最终约束规范化规则不变。
 
 ## 保存与续训
 

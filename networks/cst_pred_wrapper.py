@@ -2,9 +2,13 @@
 用于包装约束提取器，给出统一表达形式
 """
 import math
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from networks import utils, attn_3dgcn, point_net, point_net2
+
+
+LOC_INPUT = "backbone_xyz_v1"
 
 
 def get_embedding_model(name, channel_coord=3, channel_fea=0, channel_mid=128,):
@@ -53,6 +57,7 @@ class CstPredWrapper(nn.Module):
                  ):
         super().__init__()
 
+        self.loc_input = LOC_INPUT
         self.embedding = get_embedding_model(embedding_model_name, channel_coord, channel_fea, channel_mid)
         self.emb_head = utils.MLP(1, (channel_mid, math.ceil((channel_out*channel_mid)**0.5), channel_out))
         self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))
@@ -60,7 +65,7 @@ class CstPredWrapper(nn.Module):
         dim_mid = math.ceil(channel_mid ** 0.5)
         self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
         self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
-        self.loc_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
+        self.loc_head = utils.MLP(1, (channel_mid + channel_coord, attr_mid, 3), dropout=0.0)
 
     def build_neighborhood(self, xyz, feature_k=None):
         if not isinstance(self.embedding, attn_3dgcn.Attn3DGcnPointEmbedding):
@@ -100,7 +105,7 @@ class CstPredWrapper(nn.Module):
         pnt_fea_l2norm, pmt_log_softmax = pnt_fea_l2norm.permute(0, 2, 1), pmt_log_softmax.permute(0, 2, 1)
         mad_pred = F.normalize(self.mad_head(embedding), dim=1, eps=1e-6).permute(0, 2, 1)
         dim_pred = F.softplus(self.dim_head(embedding)).squeeze(1)
-        loc_pred = self.loc_head(embedding).permute(0, 2, 1)
+        loc_pred = self.loc_head(torch.cat([embedding, xyz], dim=1)).permute(0, 2, 1)
 
         return {
             "embedding": pnt_fea_l2norm,

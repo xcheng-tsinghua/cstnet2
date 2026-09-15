@@ -98,6 +98,7 @@ class CstPredTrainer(object):
         self.checkpoint_args.update(
             constraint_route=CONSTRAINT_ROUTE, train_phase=train_phase,
             training_recipe=TRAINING_RECIPE,
+            loc_input=self.model.loc_input,
             **{f"w_{name}": float(self.loss_weights.get(f"w_{name}", 1.0)) for name in LOSS_NAMES},
         )
         self.optimizer = None
@@ -140,7 +141,7 @@ class CstPredTrainer(object):
             init_state = self._load_checkpoint_file(self.checkpoint_source)
             self._validate_checkpoint_mode(init_state, self.checkpoint_source)
             self._load_model_state(
-                _extract_model_state(init_state),
+                self._initial_model_state(init_state),
                 require_complete=True,
                 source=self.checkpoint_source,
             )
@@ -175,6 +176,30 @@ class CstPredTrainer(object):
                 + Back.CYAN
                 + f"initialized model only from {self.checkpoint_source}; optimizer is new"
             )
+
+    def _initial_model_state(self, checkpoint):
+        """Reuse an old semantic checkpoint, expanding only the untrained loc input."""
+        state = _extract_model_state(checkpoint)
+        key = "loc_head.linear_layers.0.weight"
+        current = self.model.state_dict()[key]
+        incoming = state.get(key)
+        if torch.is_tensor(incoming) and incoming.shape != current.shape:
+            if not (self.train_phase == "geometry"
+                    and checkpoint.get("args", {}).get("train_phase") == "semantic"
+                    and incoming.shape == (current.shape[0], current.shape[1] - 3, 1)):
+                raise RuntimeError(
+                    "loc head input is incompatible with backbone + XYZ; "
+                    "restart geometry from a semantic checkpoint, then retrain joint"
+                )
+            # Preserve all old weights; only the three new XYZ columns use fresh
+            # initialization. The semantic phase never trained this attribute head.
+            expanded = current.clone()
+            expanded[:, :-3, :] = incoming
+            state = dict(state)
+            state[key] = expanded
+            print("Initializing geometry from legacy semantic weights: "
+                  "expanded loc input with 3 new XYZ channels; optimizer starts fresh")
+        return state
 
     @staticmethod
     def _load_checkpoint_file(path):
@@ -661,6 +686,7 @@ def _critical_checkpoint_config(args):
         "point_count": _normalize_config_value(args.get("n_points", "<missing>")),
         "loss_weights": weights,
         "training_recipe": args.get("training_recipe", "legacy_regularized_v1"),
+        "loc_input": args.get("loc_input", "backbone_only_v1"),
         "constraint_route": args.get("constraint_route", CONSTRAINT_ROUTE),
     }
 
