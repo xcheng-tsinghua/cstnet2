@@ -166,6 +166,27 @@ nohup bash -c '
 tail -f s1_baseline.log
 
 
+nohup bash -c '
+  python train_stage1_direct_baseline.py --model=pointtransformer 2>&1 | tee s1_baseline2.log
+  python train_stage1_direct_baseline.py --model=pointmamba 2>&1 | tee s1_baseline2.log
+  python train_stage1_direct_baseline.py --model=pointnext 2>&1 | tee s1_baseline2.log
+  python train_stage1_direct_baseline.py --model=pointmlp 2>&1 | tee s1_baseline2.log
+' > /dev/null 2>&1 &
+
+tail -f s1_baseline2.log
+
+
+nohup bash -c '
+  python train_stage1_direct_baseline.py --model=attn3dgcn --bs=30 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointnet 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointnet2 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=dgcnn 2>&1 | tee s1_baseline.log
+' > /dev/null 2>&1 &
+
+tail -f s1_baseline.log
+
+
+
 中断续训（按 model 和 seed 自动查找 last.pth）：
 python train_stage1_direct_baseline.py --model pointnet2 --data_root /path/to/stage1_train --resume auto --use_amp
 
