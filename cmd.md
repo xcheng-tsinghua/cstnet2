@@ -151,17 +151,18 @@ python train_cst_pred.py --epoch 20 --bs 20 --train_phase joint --overfit_one_ba
 
 ------------------------------- stage1 direct baseline（只输入 XYZ，不聚类/拟合）
 
-先做三个同骨干对照：
-python train_stage1_direct_baseline.py --model pointnet --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model pointnet2 --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model attn3dgcn --data_root /path/to/stage1_train --use_amp
+stage1 8个骨干对照：
+nohup bash -c '
+  python train_stage1_direct_baseline.py --model attn3dgcn 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointnet 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointnet2 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model dgcnn 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointtransformer 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointmamba 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointnext 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model pointmlp 2>&1 | tee s1_baseline.log
+' > /dev/null 2>&1 &
 
-其余五个模型：
-python train_stage1_direct_baseline.py --model dgcnn --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model pointtransformer --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model pointmamba --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model pointnext --data_root /path/to/stage1_train --use_amp
-python train_stage1_direct_baseline.py --model pointmlp --data_root /path/to/stage1_train --use_amp
 
 中断续训（按 model 和 seed 自动查找 last.pth）：
 python train_stage1_direct_baseline.py --model pointnet2 --data_root /path/to/stage1_train --resume auto --use_amp
@@ -177,15 +178,15 @@ tail -f out_s2cls.log
 训练baseline
 
 nohup bash -c '
-  python train_cls.py --model pointnet --batch_size=100 --epoch=70 2>&1 | tee pointnet.log
-  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 2>&1 | tee pointnet2.log
-  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 2>&1 | tee dgcnn.log
-  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 2>&1 | tee attn3dgcn.log
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 2>&1 | tee cls_baseline.log
+  python train_cls.py --model pointnet --batch_size=100 --epoch=70 2>&1 | tee cls_baseline.log
+  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 2>&1 | tee cls_baseline.log
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 2>&1 | tee cls_baseline.log
 
-  python train_cls.py --model pointnet --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet_cst.log
-  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee pointnet2_cst.log
-  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee dgcnn_cst.log
-  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee attn3dgcn_cst.log
+  python train_cls.py --model pointnet --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_baseline.log
+  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_baseline.log
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_baseline.log
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_baseline.log
 ' > /dev/null 2>&1 &
 
 nohup bash -c '

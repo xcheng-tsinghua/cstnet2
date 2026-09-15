@@ -44,7 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="dataset format; auto prefers HDF5 when shards are present",
     )
     parser.add_argument("--n_points", type=int, default=2048)
-    parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=30)
+    parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=70)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--epoch", "--epochs", dest="epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-4)
