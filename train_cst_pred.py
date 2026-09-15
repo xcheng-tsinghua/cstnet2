@@ -29,7 +29,7 @@ from colorama import init, Fore, Back
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--bs', type=int, default=30, help='batch size in training')
-    parser.add_argument('--epoch', default=50, type=int, help='number of epoch in training')
+    parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
     parser.add_argument('--lr', default=None, type=float, help='default: 1e-4 for semantic/geometry, 1e-5 for joint')
     parser.add_argument('--n_points', type=int, default=2048, help='Point Number')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
