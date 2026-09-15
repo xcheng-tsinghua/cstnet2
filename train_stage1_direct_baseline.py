@@ -46,7 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n_points", type=int, default=2048)
     parser.add_argument("--bs", "--batch_size", dest="bs", type=int, default=70)
     parser.add_argument("--workers", type=int, default=16)
-    parser.add_argument("--epoch", "--epochs", dest="epochs", type=int, default=200)
+    parser.add_argument("--epoch", "--epochs", dest="epochs", type=int, default=120)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--scheduler_step", type=int, default=20)
