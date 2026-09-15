@@ -153,14 +153,14 @@ python train_cst_pred.py --epoch 20 --bs 20 --train_phase joint --overfit_one_ba
 
 stage1 8个骨干对照：
 nohup bash -c '
-  python train_stage1_direct_baseline.py --model attn3dgcn 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointnet 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointnet2 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model dgcnn 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointtransformer 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointmamba 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointnext 2>&1 | tee s1_baseline.log
-  python train_stage1_direct_baseline.py --model pointmlp 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=attn3dgcn --bs=30 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointnet 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointnet2 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=dgcnn 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointtransformer 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointmamba 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointnext 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointmlp 2>&1 | tee s1_baseline.log
 ' > /dev/null 2>&1 &
 
 tail -f s1_baseline.log
