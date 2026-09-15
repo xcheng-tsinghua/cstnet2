@@ -6,9 +6,9 @@ import argparse
 import os
 import random
 from pathlib import Path
-
 import numpy as np
 import torch
+from colorama import init
 
 from data_utils.stage1_dataset import Stage1ConstraintDataset
 from data_utils.huggingface_dataset import resolve_stage1_data_root
@@ -213,4 +213,5 @@ def main(args: argparse.Namespace) -> dict:
 
 
 if __name__ == "__main__":
+    init(autoreset=True)
     main(parse_args())
