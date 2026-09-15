@@ -84,7 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="",
         help="Checkpoint path, or 'auto' to use the selected run's last.pth",
     )
-    parser.add_argument("--wandb_project", default="cstnet2")
+    parser.add_argument("--wandb_project", default="cstnet2-s1-baseline")
     parser.add_argument("--wandb_entity", default="")
     parser.add_argument("--wandb_run_name", default="")
     args = parser.parse_args(argv)
