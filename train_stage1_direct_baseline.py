@@ -82,7 +82,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--resume",
         default="auto",
-        help="Checkpoint path, ''(empty) or 'auto' to use the selected run's last.pth",
+        help="Checkpoint path; '' (empty) starts fresh; 'auto' resumes from the selected run's last.pth if present, otherwise starts fresh",
     )
     parser.add_argument("--wandb_project", default="cstnet2-s1-baseline")
     parser.add_argument("--wandb_entity", default="")
@@ -131,9 +131,11 @@ def resolve_output_and_resume(
     resume = str(args.resume or "").strip()
     if resume.lower() == "auto":
         candidate = output_dir / "last.pth"
-        if not candidate.is_file():
-            raise FileNotFoundError(f"auto-resume checkpoint not found: {candidate}")
-        resume = str(candidate)
+        if candidate.is_file():
+            resume = str(candidate)
+        else:
+            print(f"Auto-resume checkpoint not found: {candidate}; starting training from scratch.")
+            resume = ""
     elif resume:
         candidate = Path(resume).expanduser()
         if not candidate.is_file():
