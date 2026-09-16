@@ -263,8 +263,9 @@ The `affiliate_idx` field should be treated as the primitive instance label and 
 The final representation is primitive_type (five-class one-hot), direction,
 dimension, and location predicted directly from the shared point backbone.
 Three independent MLP heads predict mad, dim, and loc.
-The loc head concatenates shared backbone features with the input XYZ coordinates
-(default 128 + 3 -> 20 -> 3); mad and dim still take backbone features only.
+All three attribute heads concatenate shared backbone features with input XYZ.
+Default mad/loc widths are 128 + 3 -> 20 -> 3; dim is 128 + 3 -> 12 -> 1.
+The three MLPs are independent; semantic heads still use backbone features only.
 There is no shared geometry decoder and no clustering or geometric fitting during inference.
 Canonicalize directions with dir_unify; project plane/cylinder locations to
 their canonical foot-point representations; restrict dimensions to valid

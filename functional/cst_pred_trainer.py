@@ -99,6 +99,8 @@ class CstPredTrainer(object):
             constraint_route=CONSTRAINT_ROUTE, train_phase=train_phase,
             training_recipe=TRAINING_RECIPE,
             loc_input=self.model.loc_input,
+            mad_input=self.model.mad_input,
+            dim_input=self.model.dim_input,
             **{f"w_{name}": float(self.loss_weights.get(f"w_{name}", 1.0)) for name in LOSS_NAMES},
         )
         self.optimizer = None
@@ -178,27 +180,28 @@ class CstPredTrainer(object):
             )
 
     def _initial_model_state(self, checkpoint):
-        """Reuse an old semantic checkpoint, expanding only the untrained loc input."""
-        state = _extract_model_state(checkpoint)
-        key = "loc_head.linear_layers.0.weight"
-        current = self.model.state_dict()[key]
-        incoming = state.get(key)
-        if torch.is_tensor(incoming) and incoming.shape != current.shape:
-            if not (self.train_phase == "geometry"
-                    and checkpoint.get("args", {}).get("train_phase") == "semantic"
-                    and incoming.shape == (current.shape[0], current.shape[1] - 3, 1)):
-                raise RuntimeError(
-                    "loc head input is incompatible with backbone + XYZ; "
-                    "restart geometry from a semantic checkpoint, then retrain joint"
-                )
-            # Preserve all old weights; only the three new XYZ columns use fresh
-            # initialization. The semantic phase never trained this attribute head.
-            expanded = current.clone()
-            expanded[:, :-3, :] = incoming
-            state = dict(state)
-            state[key] = expanded
-            print("Initializing geometry from legacy semantic weights: "
-                  "expanded loc input with 3 new XYZ channels; optimizer starts fresh")
+        """Reuse semantic weights, expanding only missing XYZ input columns."""
+        state = dict(_extract_model_state(checkpoint))
+        current_state = self.model.state_dict()
+        for head in ("mad_head", "dim_head", "loc_head"):
+            key = f"{head}.linear_layers.0.weight"
+            current = current_state[key]
+            incoming = state.get(key)
+            if torch.is_tensor(incoming) and incoming.shape != current.shape:
+                if not (self.train_phase == "geometry"
+                        and checkpoint.get("args", {}).get("train_phase") == "semantic"
+                        and incoming.shape == (current.shape[0], current.shape[1] - 3, 1)):
+                    raise RuntimeError(
+                        f"{head} input is incompatible with backbone + XYZ; "
+                        "restart geometry from a semantic checkpoint, then retrain joint"
+                    )
+                # Semantic training never updated attribute heads. Preserve their
+                # existing weights, with fresh initialization only for new columns.
+                expanded = current.clone()
+                expanded[:, :-3, :] = incoming
+                state[key] = expanded
+                print(f"Initializing geometry from legacy semantic weights: "
+                      f"expanded {head} input with 3 new XYZ channels; optimizer starts fresh")
         return state
 
     @staticmethod
@@ -687,6 +690,8 @@ def _critical_checkpoint_config(args):
         "loss_weights": weights,
         "training_recipe": args.get("training_recipe", "legacy_regularized_v1"),
         "loc_input": args.get("loc_input", "backbone_only_v1"),
+        "mad_input": args.get("mad_input", "backbone_only_v1"),
+        "dim_input": args.get("dim_input", "backbone_only_v1"),
         "constraint_route": args.get("constraint_route", CONSTRAINT_ROUTE),
     }
 

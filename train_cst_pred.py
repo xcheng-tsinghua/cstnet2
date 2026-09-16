@@ -160,6 +160,8 @@ def main(args):
         'constraint_route': CONSTRAINT_ROUTE,
         'training_recipe': TRAINING_RECIPE,
         'loc_input': stage1_model.loc_input,
+        'mad_input': stage1_model.mad_input,
+        'dim_input': stage1_model.dim_input,
         'resolved_data_root': resolved_data_root,
     }
     run = initialize_wandb_run(

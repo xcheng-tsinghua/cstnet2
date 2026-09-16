@@ -58,13 +58,15 @@ class CstPredWrapper(nn.Module):
         super().__init__()
 
         self.loc_input = LOC_INPUT
+        self.mad_input = "backbone_xyz_v1"
+        self.dim_input = "backbone_xyz_v1"
         self.embedding = get_embedding_model(embedding_model_name, channel_coord, channel_fea, channel_mid)
         self.emb_head = utils.MLP(1, (channel_mid, math.ceil((channel_out*channel_mid)**0.5), channel_out))
         self.cls_head = utils.MLP(1, (channel_mid, math.ceil((n_prim_type*channel_mid)**0.5), n_prim_type))
         attr_mid = math.ceil((3 * channel_mid) ** 0.5)
         dim_mid = math.ceil(channel_mid ** 0.5)
-        self.mad_head = utils.MLP(1, (channel_mid, attr_mid, 3), dropout=0.0)
-        self.dim_head = utils.MLP(1, (channel_mid, dim_mid, 1), dropout=0.0)
+        self.mad_head = utils.MLP(1, (channel_mid + channel_coord, attr_mid, 3), dropout=0.0)
+        self.dim_head = utils.MLP(1, (channel_mid + channel_coord, dim_mid, 1), dropout=0.0)
         self.loc_head = utils.MLP(1, (channel_mid + channel_coord, attr_mid, 3), dropout=0.0)
 
     def build_neighborhood(self, xyz, feature_k=None):
@@ -103,9 +105,10 @@ class CstPredWrapper(nn.Module):
 
         # -> [bs, n, fea]
         pnt_fea_l2norm, pmt_log_softmax = pnt_fea_l2norm.permute(0, 2, 1), pmt_log_softmax.permute(0, 2, 1)
-        mad_pred = F.normalize(self.mad_head(embedding), dim=1, eps=1e-6).permute(0, 2, 1)
-        dim_pred = F.softplus(self.dim_head(embedding)).squeeze(1)
-        loc_pred = self.loc_head(torch.cat([embedding, xyz], dim=1)).permute(0, 2, 1)
+        attribute_input = torch.cat([embedding, xyz], dim=1)
+        mad_pred = F.normalize(self.mad_head(attribute_input), dim=1, eps=1e-6).permute(0, 2, 1)
+        dim_pred = F.softplus(self.dim_head(attribute_input)).squeeze(1)
+        loc_pred = self.loc_head(attribute_input).permute(0, 2, 1)
 
         return {
             "embedding": pnt_fea_l2norm,
