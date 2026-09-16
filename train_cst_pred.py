@@ -40,7 +40,7 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5',
+        default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd_mf30_h5',
         help='local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL',
     )
     parser.add_argument(
