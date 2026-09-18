@@ -1,5 +1,9 @@
 # Global Rules for the Point Cloud Constraint Project
 
+## 0. Language
+
+Thinking in English, reply in Chinese.
+
 ## 1. Project Overview
 
 This project is a point cloud learning project for mechanical parts. Its core idea is to use explicit geometric constraints extracted from CAD-derived point clouds to improve point cloud classification and point cloud segmentation.
