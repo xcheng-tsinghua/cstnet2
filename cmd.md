@@ -105,8 +105,8 @@ git branch 2026_09_16 origin/main
 3. 将备份分支推送到 GitHub，并强制将本地分支关联到远程同名分支
 git push -u origin 2026_09_16
 
-
-
+## 批量结束进程
+pkill -f train_stage1_direct_baseline.py
 
 
 
@@ -137,6 +137,28 @@ tail -f out_s1j.log
 nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase semantic --epoch 50 && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
 
 nohup bash -c "echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
+
+nohup bash -c "
+echo '=== Semantic Start ===' && 
+python train_cst_pred.py \
+--wandb_project=cstnet2-s1-mfcad-T-3xyz \
+--data_root=/opt/data/private/data_set/pcd_cstnet2/stage1_mfcad_T_h5 \
+--train_phase=semantic \
+--epoch=50 && 
+echo '=== Geometry Start ===' && 
+python train_cst_pred.py \
+--wandb_project=cstnet2-s1-mfcad-T-3xyz \
+--data_root=/opt/data/private/data_set/pcd_cstnet2/stage1_mfcad_T_h5 \
+--train_phase=geometry \
+--epoch=50 \
+--bs=80 && 
+echo '=== Joint Start ===' && 
+python train_cst_pred.py \
+--wandb_project=cstnet2-s1-mfcad-T-3xyz \
+--data_root=/opt/data/private/data_set/pcd_cstnet2/stage1_mfcad_T_h5 \
+--train_phase=joint \
+--epoch=100" > train_123.log 2>&1 &
+
 
 中断后完整续训
 默认 auto 会自动读取当前阶段 last.pth，且必须保持点数、特征设置、loss 权重和 ramp 配置一致：
@@ -184,6 +206,20 @@ nohup bash -c '
 ' > /dev/null 2>&1 &
 
 tail -f s1_baseline.log
+
+
+python train_stage1_direct_baseline.py --bs=300 --model=pointnet2 --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5
+
+nohup bash -c '
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=attn3dgcn 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointnet 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointnet2 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=dgcnn 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointtransformer 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointmamba 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointnext 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --wandb_project=cstnet2-s1-baseline-abcmf30 --data_root=/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5 --bs=100 --model=pointmlp 2>&1 | tee s1_baseline.log
+' > /dev/null 2>&1 &
 
 
 
