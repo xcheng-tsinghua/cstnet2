@@ -32,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model", default="pointnet2", choices=DIRECT_BASELINE_MODEL_NAMES
     )
     parser.add_argument(
-        "--data_root", default="/opt/data/private/data_set/pcd_cstnet2/stage1_small2_h5",
+        "--data_root", default="/opt/data/private/data_set/pcd_cstnet2/abc_pcd_mf30_h5",
         help="local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL",
     )
     parser.add_argument(
@@ -81,10 +81,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--resume",
-        default="auto",
+        default="",
         help="Checkpoint path; '' (empty) starts fresh; 'auto' resumes from the selected run's last.pth if present, otherwise starts fresh",
     )
-    parser.add_argument("--wandb_project", default="cstnet2-s1-baseline")
+    parser.add_argument("--wandb_project", default="cstnet2-s1-baseline-abcmf30")
     parser.add_argument("--wandb_entity", default="")
     parser.add_argument("--wandb_run_name", default="")
     args = parser.parse_args(argv)
