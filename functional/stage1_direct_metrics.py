@@ -9,6 +9,7 @@ import torch
 
 from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
+    TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
     primitive_metrics_from_confusion,
@@ -34,7 +35,8 @@ class Stage1DirectMetricAccumulator:
             key: 0.0 for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
         }
         self.final_attributes = {
-            key: 0.0 for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
+            key: 0.0 for key in
+            CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS | TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS
         }
         self.last_pmt_acc = torch.zeros(())
 
@@ -73,29 +75,33 @@ class Stage1DirectMetricAccumulator:
             mad_gt,
             dim_gt,
             loc_gt,
+            include_trimmed=True,
         )
         for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS:
             self.raw_attributes[key] = self.raw_attributes[key] + raw[key].detach().double()
+        for key in self.final_attributes:
             self.final_attributes[key] = self.final_attributes[key] + final[key].detach().double()
 
     def compute(self) -> dict[str, Any]:
         keys = sorted(CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS)
+        final_keys = sorted(self.final_attributes)
         packed = torch.stack([
             torch.as_tensor(values[key], device=self.confusion.device, dtype=torch.float64)
-            for values in (self.raw_attributes, self.final_attributes) for key in keys
+            for values, group_keys in ((self.raw_attributes, keys), (self.final_attributes, final_keys))
+            for key in group_keys
         ])
         # One transfer at epoch end; keep the accumulator reusable after compute().
         host = torch.cat((self.confusion.reshape(-1), packed)).cpu()
         primitive = primitive_metrics_from_confusion(host[:25].reshape(5, 5).float())
         raw = aggregate_constraint_attribute_metrics([dict(zip(keys, host[25:25 + len(keys)]))])
-        final = aggregate_constraint_attribute_metrics([dict(zip(keys, host[25 + len(keys):]))])
+        final = aggregate_constraint_attribute_metrics([dict(zip(final_keys, host[25 + len(keys):]))])
         output = {str(key): _to_python(value) for key, value in primitive.items()}
         output.update({
             key: value for key, value in raw.items()
             if not key.endswith("_valid_points")
         })
         output.update({
-            f"final/{key}": value
+            (key if key.startswith("trim") else f"final/{key}"): value
             for key, value in final.items()
             if not key.endswith("_valid_points")
         })

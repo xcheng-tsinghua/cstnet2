@@ -37,6 +37,22 @@ CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS = frozenset(
     for key in (sum_key, count_key)
 )
 
+ATTRIBUTE_TRIM_RATIOS = {"trim1p": 0.01, "trim5p": 0.05, "trim10p": 0.10}
+TRIMMED_ATTRIBUTE_METRIC_SPECS = {
+    f"{section}/{name}": (
+        sum_key.replace("/", f"/{section}/", 1),
+        count_key.replace("/", f"/{section}/", 1),
+        f"{section}/{valid_count_name}",
+    )
+    for section in ATTRIBUTE_TRIM_RATIOS
+    for name, (sum_key, count_key, valid_count_name)
+    in CONSTRAINT_ATTRIBUTE_METRIC_SPECS.items()
+}
+TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS = frozenset(
+    key for sum_key, count_key, _ in TRIMMED_ATTRIBUTE_METRIC_SPECS.values()
+    for key in (sum_key, count_key)
+)
+
 
 def _primitive_mask(pmt_gt: torch.Tensor, valid_types: tuple[int, ...]) -> torch.Tensor:
     mask = torch.zeros_like(pmt_gt, dtype=torch.bool)
@@ -88,27 +104,12 @@ def _trimmed_error_sum_and_count(
             valid_mask.sum().to(dtype=torch.float32),
         )
 
-    total_sum = errors.new_zeros((), dtype=torch.float32)
-    total_count = errors.new_zeros((), dtype=torch.float32)
-    for cloud_errors, cloud_mask in zip(errors, valid_mask):
-        selected = cloud_errors[cloud_mask].float()
-        point_count = int(selected.numel())
-        if point_count == 0:
-            continue
-        remove_count = int(math.floor(point_count * trim_ratio))
-        if remove_count > 0:
-            largest = torch.topk(
-                selected,
-                k=remove_count,
-                largest=True,
-                sorted=False,
-            ).values
-            kept_sum = (selected.sum() - largest.sum()).clamp_min(0.0)
-        else:
-            kept_sum = selected.sum()
-        total_sum = total_sum + kept_sum
-        total_count = total_count + float(point_count - remove_count)
-    return total_sum, total_count
+    counts = valid_mask.sum(dim=1)
+    retained = counts - (counts.double() * trim_ratio).floor().long()
+    ordered = errors.float().masked_fill(~valid_mask, float("inf")).sort(dim=1).values
+    keep = torch.arange(errors.shape[1], device=errors.device)[None, :] < retained[:, None]
+    # Sum retained errors directly: subtracting huge outliers can erase small errors.
+    return torch.where(keep, ordered, 0.0).sum(), retained.sum().float()
 
 
 @torch.no_grad()
@@ -121,6 +122,7 @@ def evaluate_constraint_attribute_metrics(
     dim_gt: torch.Tensor,
     loc_gt: torch.Tensor,
     trim_ratio: float = 0.0,
+    include_trimmed: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Return additive accumulators for exact epoch-level constraint errors.
 
@@ -157,7 +159,7 @@ def evaluate_constraint_attribute_metrics(
         trim_ratio,
     )
 
-    return {
+    output = {
         "_constraint_attribute_sum/direction_angular_error_deg": direction_sum,
         "_constraint_attribute_count/direction": direction_count,
         "_constraint_attribute_sum/dimension_absolute_error": dimension_sum,
@@ -165,6 +167,17 @@ def evaluate_constraint_attribute_metrics(
         "_constraint_attribute_sum/location_distance_error": location_sum,
         "_constraint_attribute_count/location": location_count,
     }
+    if include_trimmed:
+        for section, ratio in ATTRIBUTE_TRIM_RATIOS.items():
+            trimmed = evaluate_constraint_attribute_metrics(
+                mad_pred, dim_pred, loc_pred, pmt_gt, mad_gt, dim_gt, loc_gt,
+                trim_ratio=ratio,
+            )
+            output.update({
+                key.replace("/", f"/{section}/", 1): value
+                for key, value in trimmed.items()
+            })
+    return output
 
 
 def aggregate_constraint_attribute_metrics(
@@ -174,7 +187,7 @@ def aggregate_constraint_attribute_metrics(
     batches = list(metric_batches)
     output: Dict[str, float] = {}
     for metric_name, (sum_key, count_key, valid_count_name) in (
-        CONSTRAINT_ATTRIBUTE_METRIC_SPECS.items()
+        (CONSTRAINT_ATTRIBUTE_METRIC_SPECS | TRIMMED_ATTRIBUTE_METRIC_SPECS).items()
     ):
         available = [
             batch for batch in batches if sum_key in batch and count_key in batch

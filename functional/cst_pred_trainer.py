@@ -18,6 +18,8 @@ from functional.point_features import stage1_forward
 from functional.finite_checks import assert_finite_tensors
 from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
+    ATTRIBUTE_TRIM_RATIOS,
+    TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
     evaluate_primitive_metrics,
@@ -339,9 +341,13 @@ class CstPredTrainer(object):
             wandb_payload.update(
                 flatten_wandb_summary_metrics("loss", train_loss)
             )
-            wandb_payload.update(
-                flatten_wandb_summary_metrics("metric", train_metrics)
-            )
+            for key, value in train_metrics.items():
+                is_trimmed = key.split("/", 1)[0] in ATTRIBUTE_TRIM_RATIOS
+                if is_trimmed and key.endswith("_valid_points"):
+                    continue
+                wandb_payload.update(flatten_wandb_summary_metrics(
+                    key if is_trimmed else f"metric/{key}", value,
+                ))
 
             # The checkpoint contains the LR that will be used by the next epoch.
             self.scheduler.step()
@@ -573,6 +579,7 @@ class CstPredTrainer(object):
                     mad_gt=mad_gt,
                     dim_gt=dim_gt,
                     loc_gt=loc_gt,
+                    include_trimmed=True,
                 )
 
             metric_dict = {}
@@ -743,7 +750,10 @@ def _aggregate_metric_dicts(dicts):
         "pmt_per_class_precision", "pmt_per_class_f1", "pmt_macro_f1",
         "pmt_per_class_iou", "pmt_miou",
     }
-    excluded_keys = primitive_keys | CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
+    excluded_keys = (
+        primitive_keys | CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
+        | TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS
+    )
     filtered = [
         {key: value for key, value in item.items() if key not in excluded_keys}
         for item in dicts
