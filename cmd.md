@@ -100,10 +100,10 @@ git reset --hard origin/main
 git fetch origin
 
 2. 基于远程 main 创建本地备份分支
-git branch 2026_09_16 origin/main
+git branch 2026_09_19 (3xyz) origin/main
 
 3. 将备份分支推送到 GitHub，并强制将本地分支关联到远程同名分支
-git push -u origin 2026_09_16
+git push -u origin 2026_09_19 (3xyz)
 
 ## 批量结束进程
 pkill -f train_stage1_direct_baseline.py
