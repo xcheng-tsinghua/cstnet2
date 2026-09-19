@@ -182,7 +182,7 @@ class Stage1DirectBaselineTest(unittest.TestCase):
                 "loss/dim_loss", "loss/loc_loss",
                 "pmt_acc", "pmt_macro_f1", "pmt_miou",
                 *geometry_keys, *(f"final/{key}" for key in geometry_keys),
-                *(f"{section}/{key}" for section in ("trim1p", "trim5p", "trim10p") for key in geometry_keys),
+                *(f"{section}/{key}" for section in ("trim1p", "trim5p", "trim10p", "inrange") for key in geometry_keys),
             })
             self.assertEqual(run.log.call_args.kwargs, {"step": 1})
             self.assertEqual(confusion.call_args.args[0], summary["train"]["pmt_confusion_matrix"])

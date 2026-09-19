@@ -1,9 +1,11 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
 from functional.cst_pred_trainer import _aggregate_metric_dicts
 from functional.stage1_direct_metrics import Stage1DirectMetricAccumulator
+from functional.stage1_direct_loss import geometry_loss_masks
 from functional.stage1_metrics import (
     ATTRIBUTE_TRIM_RATIOS,
     _trimmed_error_sum_and_count,
@@ -12,6 +14,41 @@ from functional.stage1_metrics import (
 
 
 class TrimmedMetricsTest(unittest.TestCase):
+    def test_inrange_uses_joint_gt_masks_and_retained_point_counts(self):
+        loader = SimpleNamespace(dataset=SimpleNamespace(loc_abs_limit=3., dim_max=6.))
+        accumulator = Stage1DirectMetricAccumulator()
+        batches = []
+        for size in (1, 2):
+            pmt = torch.ones(size, 4, dtype=torch.long)
+            direction = torch.zeros(size, 4, 3)
+            direction[..., 2] = 1
+            dim_gt = torch.tensor([[100., 1., 2., 6.]]) if size == 1 else torch.tensor([[100., 0., 0., 0.]] * 2)
+            loc_gt = torch.tensor([[[100., 0., 0.], [3., -3., 3.], [0., 0., 0.], [-4., 0., 0.]]]) if size == 1 else torch.full((2, 4, 3), 100.)
+            affiliate = torch.arange(4).expand(size, 4)
+            masks = geometry_loss_masks(loader, dim_gt, loc_gt, affiliate)
+            pred = {
+                "log_pmt": torch.nn.functional.one_hot(pmt, 5).float(),
+                "mad": direction, "dim": torch.zeros_like(dim_gt), "loc": torch.zeros_like(loc_gt),
+            }
+            accumulator.update(pred, pmt, direction, dim_gt, loc_gt, range_masks=masks)
+            batches.append(evaluate_constraint_attribute_metrics(
+                direction, pred["dim"], pred["loc"], pmt, direction, dim_gt, loc_gt,
+                include_trimmed=True, range_masks=masks,
+            ))
+        own = _aggregate_metric_dicts(batches)
+        baseline = accumulator.compute()
+        for summary in (own, baseline):
+            self.assertAlmostEqual(summary["inrange/location_mean_distance_error"], 27 ** .5 / 2, places=6)
+            self.assertAlmostEqual(summary["inrange/dimension_mean_absolute_error"], 1.5)
+            self.assertEqual(summary["inrange/direction_mean_angular_error_deg"], 0.)
+            self.assertGreater(summary["location_mean_distance_error"], 100.)
+            self.assertGreater(summary["trim10p/location_mean_distance_error"], 100.)
+            self.assertAlmostEqual(summary["dimension_mean_absolute_error"], 309 / 12)
+        self.assertEqual(own["inrange/location_valid_points"], 2)
+        self.assertEqual(own["inrange/dimension_valid_points"], 2)
+        self.assertEqual(own["inrange/direction_valid_points"], 2)
+        self.assertFalse(any(key.startswith("_constraint") for key in own))
+
     def test_per_cloud_trimming_and_weighted_epoch_means(self):
         # Two clouds have 100 and 20 valid points, plus an entirely invalid cloud.
         # Their error ranges differ, distinguishing per-cloud from global trimming.

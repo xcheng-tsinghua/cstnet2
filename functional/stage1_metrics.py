@@ -53,6 +53,21 @@ TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS = frozenset(
     for key in (sum_key, count_key)
 )
 
+INRANGE_ATTRIBUTE_METRIC_SPECS = {
+    f"inrange/{name}": (
+        sum_key.replace("/", "/inrange/", 1),
+        count_key.replace("/", "/inrange/", 1),
+        f"inrange/{valid_count_name}",
+    )
+    for name, (sum_key, count_key, valid_count_name)
+    in CONSTRAINT_ATTRIBUTE_METRIC_SPECS.items()
+}
+INRANGE_ATTRIBUTE_ACCUMULATOR_KEYS = frozenset(
+    key for sum_key, count_key, _ in INRANGE_ATTRIBUTE_METRIC_SPECS.values()
+    for key in (sum_key, count_key)
+)
+ATTRIBUTE_METRIC_SECTIONS = frozenset((*ATTRIBUTE_TRIM_RATIOS, "inrange"))
+
 
 def _primitive_mask(pmt_gt: torch.Tensor, valid_types: tuple[int, ...]) -> torch.Tensor:
     mask = torch.zeros_like(pmt_gt, dtype=torch.bool)
@@ -123,11 +138,14 @@ def evaluate_constraint_attribute_metrics(
     loc_gt: torch.Tensor,
     trim_ratio: float = 0.0,
     include_trimmed: bool = False,
+    range_masks: Mapping[str, torch.Tensor] | None = None,
 ) -> Dict[str, torch.Tensor]:
     """Return additive accumulators for exact epoch-level constraint errors.
 
     When ``trim_ratio`` is nonzero, the largest errors are removed separately
     from each point cloud before the retained sums and counts are aggregated.
+    ``range_masks`` additionally emits inrange metrics using the dataset's
+    primitive-instance range masks. Original and trimmed metrics are unaffected.
     """
     direction_sum, direction_count = _angular_error_sum_and_count(
         mad_pred,
@@ -177,6 +195,29 @@ def evaluate_constraint_attribute_metrics(
                 key.replace("/", f"/{section}/", 1): value
                 for key, value in trimmed.items()
             })
+    if range_masks is not None:
+        for mask in range_masks.values():
+            if mask.shape != pmt_gt.shape or mask.dtype != torch.bool:
+                raise ValueError("range masks must be boolean with shape [B, N]")
+        dim_inrange = dimension_mask & range_masks.get("dim_valid_mask", torch.ones_like(dimension_mask))
+        loc_inrange = location_mask & range_masks.get("loc_valid_mask", torch.ones_like(location_mask))
+        dim_sum, dim_count = _trimmed_error_sum_and_count(dimension_errors, dim_inrange, 0.0)
+        loc_sum, loc_count = _trimmed_error_sum_and_count(location_errors, loc_inrange, 0.0)
+        dir_inrange = _primitive_mask(pmt_gt, (0, 1, 2))
+        if "mad_valid_mask" in range_masks:
+            dir_inrange = dir_inrange & range_masks["mad_valid_mask"]
+        if "mad_valid_mask" not in range_masks and trim_ratio == 0:
+            dir_sum, dir_count = direction_sum, direction_count
+        else:
+            dir_sum, dir_count = _angular_error_sum_and_count(mad_pred, mad_gt, dir_inrange)
+        output.update({
+            "_constraint_attribute_sum/inrange/direction_angular_error_deg": dir_sum,
+            "_constraint_attribute_count/inrange/direction": dir_count,
+            "_constraint_attribute_sum/inrange/dimension_absolute_error": dim_sum,
+            "_constraint_attribute_count/inrange/dimension": dim_count,
+            "_constraint_attribute_sum/inrange/location_distance_error": loc_sum,
+            "_constraint_attribute_count/inrange/location": loc_count,
+        })
     return output
 
 
@@ -187,7 +228,8 @@ def aggregate_constraint_attribute_metrics(
     batches = list(metric_batches)
     output: Dict[str, float] = {}
     for metric_name, (sum_key, count_key, valid_count_name) in (
-        (CONSTRAINT_ATTRIBUTE_METRIC_SPECS | TRIMMED_ATTRIBUTE_METRIC_SPECS).items()
+        (CONSTRAINT_ATTRIBUTE_METRIC_SPECS | TRIMMED_ATTRIBUTE_METRIC_SPECS
+         | INRANGE_ATTRIBUTE_METRIC_SPECS).items()
     ):
         available = [
             batch for batch in batches if sum_key in batch and count_key in batch

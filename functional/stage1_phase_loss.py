@@ -9,7 +9,7 @@ from functional.loss import discriminative_loss
 from functional.stage1_direct_loss import (
     _masked_direction_mse,
     _masked_mse,
-    _primitive_mask,
+    _attribute_mask,
 )
 
 
@@ -30,7 +30,8 @@ def stage1_active_losses(train_phase):
 
 
 def stage1_phase_loss(predictions, pmt_gt, mad_gt, dim_gt, loc_gt,
-                      affiliate_idx, *, train_phase, weights=None):
+                      affiliate_idx, *, train_phase, weights=None,
+                      mad_valid_mask=None, dim_valid_mask=None, loc_valid_mask=None):
     """Direct point means only; inactive terms are never evaluated."""
     weights = {} if weights is None else weights
     active = stage1_active_losses(train_phase)
@@ -43,15 +44,15 @@ def stage1_phase_loss(predictions, pmt_gt, mad_gt, dim_gt, loc_gt,
         raw["cluster"] = discriminative_loss(predictions["embedding"], affiliate_idx)
     if active["mad"]:
         raw["mad"] = _masked_direction_mse(
-            predictions["mad"], mad_gt, _primitive_mask(pmt_gt, (0, 1, 2))
+            predictions["mad"], mad_gt, _attribute_mask(pmt_gt, (0, 1, 2), mad_valid_mask)
         )
     if active["dim"]:
         raw["dim"] = _masked_mse(
-            predictions["dim"], dim_gt, _primitive_mask(pmt_gt, (1, 2, 3))
+            predictions["dim"], dim_gt, _attribute_mask(pmt_gt, (1, 2, 3), dim_valid_mask)
         )
     if active["loc"]:
         raw["loc"] = _masked_mse(
-            predictions["loc"], loc_gt, _primitive_mask(pmt_gt, (0, 1, 2, 3))
+            predictions["loc"], loc_gt, _attribute_mask(pmt_gt, (0, 1, 2, 3), loc_valid_mask)
         )
     logs = {}
     total = pmt_gt.new_zeros((), dtype=torch.float32)

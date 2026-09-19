@@ -10,6 +10,8 @@ import torch
 from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
     TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS,
+    INRANGE_ATTRIBUTE_ACCUMULATOR_KEYS,
+    ATTRIBUTE_METRIC_SECTIONS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
     primitive_metrics_from_confusion,
@@ -37,6 +39,7 @@ class Stage1DirectMetricAccumulator:
         self.final_attributes = {
             key: 0.0 for key in
             CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS | TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS
+            | INRANGE_ATTRIBUTE_ACCUMULATOR_KEYS
         }
         self.last_pmt_acc = torch.zeros(())
 
@@ -48,6 +51,8 @@ class Stage1DirectMetricAccumulator:
         mad_gt: torch.Tensor,
         dim_gt: torch.Tensor,
         loc_gt: torch.Tensor,
+        *,
+        range_masks: Mapping[str, torch.Tensor] | None = None,
     ) -> None:
         pred = predictions["log_pmt"].detach().argmax(dim=-1).long()
         confusion = torch.bincount(
@@ -76,6 +81,7 @@ class Stage1DirectMetricAccumulator:
             dim_gt,
             loc_gt,
             include_trimmed=True,
+            range_masks={} if range_masks is None else range_masks,
         )
         for key in CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS:
             self.raw_attributes[key] = self.raw_attributes[key] + raw[key].detach().double()
@@ -101,7 +107,7 @@ class Stage1DirectMetricAccumulator:
             if not key.endswith("_valid_points")
         })
         output.update({
-            (key if key.startswith("trim") else f"final/{key}"): value
+            (key if key.split("/", 1)[0] in ATTRIBUTE_METRIC_SECTIONS else f"final/{key}"): value
             for key, value in final.items()
             if not key.endswith("_valid_points")
         })

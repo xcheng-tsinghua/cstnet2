@@ -15,6 +15,7 @@ from functional.cst_pred_trainer import (
     warn_if_primitive_collapsed,
 )
 from functional.stage1_phase_loss import stage1_phase_loss
+from functional.stage1_direct_loss import geometry_loss_masks
 from functional.point_features import stage1_forward
 from functional.finite_checks import assert_finite_tensors
 from functional.stage1_metrics import (
@@ -89,6 +90,7 @@ class CstPredEvaluator:
         dim_gt = data_batch[3].float().to(self.device, non_blocking=True)
         loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
         affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
+        range_masks = geometry_loss_masks(self.data_loader, dim_gt, loc_gt, affiliate_idx)
 
         outputs = stage1_forward(self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k)
         self._validate_outputs(outputs)
@@ -96,6 +98,7 @@ class CstPredEvaluator:
             {name: value.float() for name, value in outputs.items()},
             pmt_gt, mad_gt, dim_gt, loc_gt, affiliate_idx,
             train_phase=self.train_phase, weights=self.loss_weights,
+            **range_masks,
         )
         self._validate_losses(loss_dict)
 
@@ -124,6 +127,7 @@ class CstPredEvaluator:
             mad_gt=mad_gt,
             dim_gt=dim_gt,
             loc_gt=loc_gt,
+            range_masks=range_masks,
         ))
 
         aggregation_weight = torch.tensor(

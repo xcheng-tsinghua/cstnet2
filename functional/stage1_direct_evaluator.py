@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover
     def tqdm(iterable, **_kwargs):
         return iterable
 
-from functional.stage1_direct_loss import direct_constraint_loss
+from functional.stage1_direct_loss import direct_constraint_loss, geometry_loss_masks
 from functional.stage1_direct_metrics import Stage1DirectMetricAccumulator
 
 
@@ -54,6 +54,8 @@ class Stage1DirectEvaluator:
             mad_gt = batch[2].float().to(self.device, non_blocking=True)
             dim_gt = batch[3].float().to(self.device, non_blocking=True)
             loc_gt = batch[4].float().to(self.device, non_blocking=True)
+            affiliate_idx = batch[5].long().to(self.device, non_blocking=True) if len(batch) > 5 else None
+            range_masks = geometry_loss_masks(self.data_loader, dim_gt, loc_gt, affiliate_idx)
             with self._autocast():
                 predictions = self.model(xyz)
                 _, loss_dict = direct_constraint_loss(
@@ -62,6 +64,7 @@ class Stage1DirectEvaluator:
                     mad_gt,
                     dim_gt,
                     loc_gt,
+                    **range_masks,
                 )
             batch_size = int(xyz.shape[0])
             sample_count += batch_size
@@ -70,7 +73,7 @@ class Stage1DirectEvaluator:
                     loss_totals[name] = loss_totals.get(name, 0.0) + (
                         float(value.detach().cpu()) * batch_size
                     )
-            metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt)
+            metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt, range_masks=range_masks)
         summary = metrics.compute()
         summary["loss"] = {
             name: total / max(sample_count, 1)

@@ -282,6 +282,19 @@ Stage 1 has three separate training phases:
 The simple_five_losses_v1 recipe uses primitive NLL, the existing discriminative
 clustering loss, and valid-point MSE for direction, dimension, and location.
 Direction MSE is sign-invariant. All five loss weights default to 1.0.
+Stage1ConstraintDataset keeps original geometry labels and defines constructor
+defaults loc_abs_limit=3.0 and dim_max=6.0. In both Stage 1 training routes,
+exclude an entire primitive instance from direction, dimension, and location
+losses if any of its GT location coordinates is outside
+[-loc_abs_limit, loc_abs_limit] or its GT dimension exceeds dim_max. Group by
+affiliate_idx within each point cloud, never across clouds. Combine this shared
+instance mask with each attribute's primitive validity and average each loss
+over its own retained points. Do not replace
+out-of-range labels with zero; real zero labels remain valid. Other losses
+are unaffected. Original and trimmed metrics still use the original labels.
+Additional inrange metrics use the same GT primitive-instance mask for all
+three attributes and are logged under the top-level inrange/ W&B section.
+Aggregate using each attribute's retained count.
 Do not compute losses inactive in the selected phase. No geometric residual,
 instance consistency, instance-balanced attribute reduction, observability
 weighting, or auxiliary loss ramp is used in this training/evaluation route.

@@ -38,7 +38,12 @@ def _has_at_least_n_points(path: Path, n_points: int) -> bool:
 
 
 class Stage1ConstraintDataset(Dataset):
-    """Read Stage 1 TXT samples or typed HDF5 shards."""
+    """Read Stage 1 TXT/HDF5 data with bounded geometry supervision.
+
+    Keep original geometry targets for metrics. Trainers use loc_abs_limit and
+    dim_max to exclude all three geometry losses for any primitive instance
+    whose loc or dim is out of range. Original targets remain available.
+    """
 
     def __init__(
         self,
@@ -47,8 +52,16 @@ class Stage1ConstraintDataset(Dataset):
         data_augmentation: bool = False,
         sample_seed: int | None = None,
         storage_format: str = "auto",
+        loc_abs_limit: float = 3.0,
+        dim_max: float = 6.0,
     ):
         self.root = Path(root)
+        self.loc_abs_limit = float(loc_abs_limit)
+        self.dim_max = float(dim_max)
+        for name in ("loc_abs_limit", "dim_max"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
         self.n_points = int(n_points)
         if self.n_points <= 0:
             raise ValueError("n_points must be positive")
@@ -237,12 +250,17 @@ class Stage1ConstraintDataset(Dataset):
         is_sample=False,
         sample_seed=None,
         storage_format="auto",
+        loc_abs_limit=None,
+        dim_max=None,
     ):
         dataset = Stage1ConstraintDataset(
             root=root,
             n_points=n_points,
             sample_seed=sample_seed,
             storage_format=storage_format,
+            **{name: value for name, value in (
+                ("loc_abs_limit", loc_abs_limit), ("dim_max", dim_max)
+            ) if value is not None},
         )
         loader_kwargs = {
             "batch_size": bs,

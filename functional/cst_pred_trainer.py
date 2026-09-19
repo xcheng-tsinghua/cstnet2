@@ -16,9 +16,11 @@ from functional.stage1_phase_loss import (
 )
 from functional.point_features import stage1_forward
 from functional.finite_checks import assert_finite_tensors
+from functional.stage1_direct_loss import geometry_loss_masks
 from functional.stage1_metrics import (
     CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS,
-    ATTRIBUTE_TRIM_RATIOS,
+    ATTRIBUTE_METRIC_SECTIONS,
+    INRANGE_ATTRIBUTE_ACCUMULATOR_KEYS,
     TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS,
     aggregate_constraint_attribute_metrics,
     evaluate_constraint_attribute_metrics,
@@ -342,11 +344,11 @@ class CstPredTrainer(object):
                 flatten_wandb_summary_metrics("loss", train_loss)
             )
             for key, value in train_metrics.items():
-                is_trimmed = key.split("/", 1)[0] in ATTRIBUTE_TRIM_RATIOS
-                if is_trimmed and key.endswith("_valid_points"):
+                separate_section = key.split("/", 1)[0] in ATTRIBUTE_METRIC_SECTIONS
+                if separate_section and key.endswith("_valid_points"):
                     continue
                 wandb_payload.update(flatten_wandb_summary_metrics(
-                    key if is_trimmed else f"metric/{key}", value,
+                    key if separate_section else f"metric/{key}", value,
                 ))
 
             # The checkpoint contains the LR that will be used by the next epoch.
@@ -545,6 +547,7 @@ class CstPredTrainer(object):
             dim_gt = data_batch[3].float().to(self.device, non_blocking=True)
             loc_gt = data_batch[4].float().to(self.device, non_blocking=True)
             affiliate_idx = data_batch[-1].long().to(self.device, non_blocking=True)
+            range_masks = geometry_loss_masks(self.train_loader, dim_gt, loc_gt, affiliate_idx)
             outputs = self._unpack_model_output(stage1_forward(
                 self.model, xyz, use_extra_features=self.use_extra_features, feature_k=self.feature_k,
             ))
@@ -553,6 +556,7 @@ class CstPredTrainer(object):
                 {name: value.float() for name, value in outputs.items()},
                 pmt_gt, mad_gt, dim_gt, loc_gt, affiliate_idx,
                 train_phase=self.train_phase, weights=self.loss_weights,
+                **range_masks,
             )
 
             self._assert_finite_losses(loss_dict)
@@ -580,6 +584,7 @@ class CstPredTrainer(object):
                     dim_gt=dim_gt,
                     loc_gt=loc_gt,
                     include_trimmed=True,
+                    range_masks=range_masks,
                 )
 
             metric_dict = {}
@@ -753,6 +758,7 @@ def _aggregate_metric_dicts(dicts):
     excluded_keys = (
         primitive_keys | CONSTRAINT_ATTRIBUTE_ACCUMULATOR_KEYS
         | TRIMMED_ATTRIBUTE_ACCUMULATOR_KEYS
+        | INRANGE_ATTRIBUTE_ACCUMULATOR_KEYS
     )
     filtered = [
         {key: value for key, value in item.items() if key not in excluded_keys}

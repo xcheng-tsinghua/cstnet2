@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover
 
 from functional.checkpoint_io import safe_torch_save
 from functional.finite_checks import assert_finite_tensors
-from functional.stage1_direct_loss import direct_constraint_loss
+from functional.stage1_direct_loss import direct_constraint_loss, geometry_loss_masks
 from functional.stage1_direct_metrics import Stage1DirectMetricAccumulator
 from functional.stage1_metrics import primitive_prediction_collapsed
 from functional.wandb_utils import (
@@ -186,13 +186,16 @@ class Stage1DirectTrainer:
         iterator = tqdm(self.train_loader, desc=f"train {epoch + 1}/{self.epochs}")
         for batch_index, raw_batch in enumerate(iterator):
             xyz, pmt_gt, mad_gt, dim_gt, loc_gt = self._batch_to_device(raw_batch)
+            affiliate_idx = raw_batch[5].long().to(self.device, non_blocking=True) if len(raw_batch) > 5 else None
+            range_masks = geometry_loss_masks(self.train_loader, dim_gt, loc_gt, affiliate_idx)
             batch_size = int(xyz.shape[0])
             self.optimizer.zero_grad(set_to_none=True)
             with self._autocast():
                 predictions = self.model(xyz)
                 self._assert_finite_predictions(predictions)
                 loss, loss_dict = direct_constraint_loss(
-                    predictions, pmt_gt, mad_gt, dim_gt, loc_gt
+                    predictions, pmt_gt, mad_gt, dim_gt, loc_gt,
+                    **range_masks,
                 )
             self._backward_and_step(loss)
             for name, value in loss_dict.items():
@@ -201,7 +204,7 @@ class Stage1DirectTrainer:
                         value.detach().double() * batch_size
                     )
             sample_count += batch_size
-            metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt)
+            metrics.update(predictions, pmt_gt, mad_gt, dim_gt, loc_gt, range_masks=range_masks)
             if hasattr(iterator, "set_postfix") and batch_index % 10 == 0:
                 display_loss, display_acc = torch.stack((
                     loss.detach().float(), metrics.last_pmt_acc

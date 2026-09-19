@@ -30,6 +30,55 @@ def _sample(point_count: int, marker: float) -> np.ndarray:
 
 @unittest.skipUnless(H5PY_AVAILABLE, "h5py is required for HDF5 tests")
 class Stage1H5DatasetTest(unittest.TestCase):
+    def test_geometry_range_limits_preserve_txt_and_h5_targets(self):
+        import h5py
+
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            txt_root = root / "txt"
+            txt_root.mkdir()
+            sample = _sample(8, 1.0)
+            sample[:, 3] = 1  # Cylinder: both dimension and location are valid.
+            sample[:, 11] = np.arange(8)
+            just_above_three = np.nextafter(np.float32(3), np.float32(4))
+            just_above_six = np.nextafter(np.float32(6), np.float32(7))
+            sample[:, 8:11] = [
+                [3, -3, 3], [just_above_three, 1, 2],
+                [1, -just_above_three, 2], [1, 2, just_above_three],
+                [0, 0, 0], [1, 2, 3], [-3, 0, 0], [1000, 0, 1],
+            ]
+            sample[:, 7] = [6, 2, 3, 4, just_above_six, 1000, 0, 5]
+            source = txt_root / "sample.txt"
+            np.savetxt(source, sample)
+            original_txt = source.read_bytes()
+            shard = convert_stage1_txt_to_h5(
+                txt_root, root / "h5", compression="none"
+            )[0]
+            expected_loc = sample[:, 8:11].copy()
+            expected_dim = sample[:, 7].copy()
+            for storage, path in (("txt", txt_root), ("h5", shard)):
+                with self.subTest(storage=storage):
+                    dataset = Stage1ConstraintDataset(
+                        path, n_points=8, sample_seed=19, storage_format=storage
+                    )
+                    try:
+                        self.assertEqual(dataset.loc_abs_limit, 3.0)
+                        self.assertEqual(dataset.dim_max, 6.0)
+                        xyz, pmt, direction, dimension, location, affiliate = dataset[0]
+                        order = np.argsort(affiliate)
+                        np.testing.assert_array_equal(location[order], expected_loc)
+                        np.testing.assert_array_equal(dimension[order], expected_dim)
+                        np.testing.assert_array_equal(xyz[order], sample[:, :3])
+                        np.testing.assert_array_equal(pmt[order], sample[:, 3])
+                        np.testing.assert_array_equal(direction[order], sample[:, 4:7])
+                        np.testing.assert_array_equal(affiliate[order], sample[:, 11])
+                    finally:
+                        dataset.close()
+            self.assertEqual(source.read_bytes(), original_txt)
+            with h5py.File(shard, "r") as h5_file:
+                np.testing.assert_array_equal(h5_file["location"][:], sample[:, 8:11])
+                np.testing.assert_array_equal(h5_file["dimension"][:], sample[:, 7])
+
     def test_conversion_accepts_multiple_input_directories(self):
         import h5py
 

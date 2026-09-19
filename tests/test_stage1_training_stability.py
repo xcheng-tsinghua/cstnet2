@@ -398,7 +398,7 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
                     "pmt_confusion_matrix": torch.eye(5),
                     **{
                         f"{section}/{name}": 0.25
-                        for section in ("trim1p", "trim5p", "trim10p")
+                        for section in ("trim1p", "trim5p", "trim10p", "inrange")
                         for name in (
                             "direction_mean_angular_error_deg",
                             "dimension_mean_absolute_error",
@@ -421,11 +421,12 @@ class Stage1TrainingStabilityTest(unittest.TestCase):
             payload = run.log.call_args.args[0]
             self.assertIn("loss/loss_all", payload)
             self.assertIn("metric/pmt_miou", payload)
-            for section in ("trim1p", "trim5p", "trim10p"):
+            for section in ("trim1p", "trim5p", "trim10p", "inrange"):
                 keys = [key for key in payload if key.startswith(section + "/")]
                 self.assertEqual(len(keys), 3)
                 self.assertFalse(any(key.endswith("_valid_points") for key in keys))
             self.assertFalse(any(key.startswith("metric/trim") for key in payload))
+            self.assertFalse(any(key.startswith("metric/inrange") for key in payload))
             self.assertFalse(any("fitted" in key for key in payload))
             self.assertIn("confusion_matrix/primitive", payload)
             self.assertFalse(

@@ -18,6 +18,45 @@ def _primitive_mask(
     return mask
 
 
+def geometry_loss_masks(data_loader, dim_gt, loc_gt, affiliate_idx=None):
+    """Read range limits from the dataset; preserve the six-field batch format.
+
+    A loc or dim outlier excludes all three attributes of its primitive
+    instance, grouped by (cloud, affiliate_idx). Subset wrappers inherit the
+    underlying dataset's policy. Legacy/custom
+    loaders without this policy retain primitive-only loss masking.
+    """
+    dataset = getattr(data_loader, "dataset", None)
+    while dataset is not None and not hasattr(dataset, "loc_abs_limit"):
+        dataset = getattr(dataset, "dataset", None)
+    if dataset is None:
+        return {}
+    valid = (
+        torch.isfinite(dim_gt) & (dim_gt <= dataset.dim_max)
+        & torch.isfinite(loc_gt).all(dim=-1)
+        & (loc_gt.abs() <= dataset.loc_abs_limit).all(dim=-1)
+    )
+    if affiliate_idx is not None:
+        if affiliate_idx.shape != valid.shape:
+            raise ValueError("affiliate_idx must have shape [B, N]")
+        cloud = torch.arange(valid.shape[0], device=valid.device)[:, None].expand_as(affiliate_idx)
+        keys = torch.stack((cloud, affiliate_idx.long()), dim=-1).reshape(-1, 2)
+        _, inverse = torch.unique(keys, dim=0, return_inverse=True)
+        invalid_counts = torch.zeros(inverse.numel(), device=valid.device, dtype=torch.long)
+        invalid_counts.scatter_add_(0, inverse, (~valid).reshape(-1).long())
+        valid = (invalid_counts[inverse] == 0).reshape_as(valid)
+    return {name: valid for name in ("mad_valid_mask", "dim_valid_mask", "loc_valid_mask")}
+
+
+def _attribute_mask(primitive, valid_types, valid_mask=None):
+    mask = _primitive_mask(primitive, valid_types)
+    if valid_mask is not None:
+        if valid_mask.shape != primitive.shape or valid_mask.dtype != torch.bool:
+            raise ValueError("attribute validity masks must be boolean with shape [B, N]")
+        mask = mask & valid_mask
+    return mask
+
+
 def _masked_direction_mse(
     prediction: torch.Tensor,
     target: torch.Tensor,
@@ -58,6 +97,10 @@ def direct_constraint_loss(
     mad_gt: torch.Tensor,
     dim_gt: torch.Tensor,
     loc_gt: torch.Tensor,
+    *,
+    mad_valid_mask: torch.Tensor | None = None,
+    dim_valid_mask: torch.Tensor | None = None,
+    loc_valid_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute only direct component losses, with no clustering regularizers."""
     required = {"log_pmt", "mad", "dim", "loc"}
@@ -91,9 +134,9 @@ def direct_constraint_loss(
         raise ValueError(f"direct prediction/target shape mismatch: {mismatched}")
 
     pmt_loss = F.nll_loss(log_pmt.reshape(-1, 5), pmt_gt.reshape(-1).long())
-    mad_mask = _primitive_mask(pmt_gt, (0, 1, 2))
-    dim_mask = _primitive_mask(pmt_gt, (1, 2, 3))
-    loc_mask = _primitive_mask(pmt_gt, (0, 1, 2, 3))
+    mad_mask = _attribute_mask(pmt_gt, (0, 1, 2), mad_valid_mask)
+    dim_mask = _attribute_mask(pmt_gt, (1, 2, 3), dim_valid_mask)
+    loc_mask = _attribute_mask(pmt_gt, (0, 1, 2, 3), loc_valid_mask)
     mad_loss = _masked_direction_mse(mad_pred, mad_gt, mad_mask)
     dim_loss = _masked_mse(dim_pred, dim_gt, dim_mask)
     loc_loss = _masked_mse(loc_pred, loc_gt, loc_mask)
