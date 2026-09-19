@@ -59,7 +59,7 @@ def parse_args(argv=None):
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
-    parser.add_argument('--disable_extra_features', action='store_true', default=False)
+    parser.add_argument('--use_extra_features', action='store_true', default=False)
     parser.add_argument('--feature_k', default=16, type=int)
     parser.add_argument('--overfit_one_batch', action='store_true', default=False)
     parser.add_argument(
@@ -130,7 +130,7 @@ def main(args):
 
     # trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    use_extra_features = not args.disable_extra_features
+    use_extra_features = args.use_extra_features
     channel_fea = stage1_feature_dim(use_extra_features)
     loss_weights = {
         'w_pmt': args.w_pmt,
