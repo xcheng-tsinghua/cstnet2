@@ -40,10 +40,10 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='~/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5',
+        default='/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5',
         help='local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL',
     )
-    # 英博云：'~/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5'
+    # 英博云：'/root/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5'
     # 服务器：'/opt/data/private/data_set/pcd_cstnet2/abc_pcd_mf30_h5'
     parser.add_argument(
         '--hf_cache_dir', default=None, type=str,
