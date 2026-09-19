@@ -1,4 +1,5 @@
 cd /opt/data/private/networks/cstnet2/ && conda activate dp
+cd ~/blockdata/cstnet2 && conda activate dp
 
 # 常用命令行
 
@@ -134,7 +135,7 @@ tail -f out_s1g.log
 nohup python train_cst_pred.py --train_phase joint --epoch 100 > out_s1j.log 2>&1 &
 tail -f out_s1j.log
 
-nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase semantic --epoch 50 && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
+nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase=semantic --epoch=75 --bs=80 && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase=geometry --epoch=75 --bs=80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase=joint --epoch 100" --bs=80 > train_123.log 2>&1 &
 
 nohup bash -c "echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
 

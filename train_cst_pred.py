@@ -40,9 +40,11 @@ def parse_args(argv=None):
     parser.add_argument(
         '--data_root',
         type=str,
-        default='/opt/data/private/data_set/pcd_cstnet2/abc_pcd_mf30_h5',
+        default='~/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5',
         help='local Stage 1 directory/HDF5 file or Hugging Face dataset repository/tree URL',
     )
+    # 英博云：'~/blockdata/dataset/pcd_cstnet2/abc_pcd_mf30_h5'
+    # 服务器：'/opt/data/private/data_set/pcd_cstnet2/abc_pcd_mf30_h5'
     parser.add_argument(
         '--hf_cache_dir', default=None, type=str,
         help='optional Hugging Face cache directory; defaults to the standard HF cache',
@@ -53,7 +55,7 @@ def parse_args(argv=None):
         choices=['auto', 'txt', 'h5'],
         help='Stage 1 storage format; auto prefers HDF5 when shards are present',
     )
-    parser.add_argument('--wandb_project', type=str, default='cstnet2-s1')
+    parser.add_argument('--wandb_project', type=str, default='cstnet2-s1-abcmf30')
     parser.add_argument('--wandb_entity', type=str, default='')
     parser.add_argument('--wandb_run_name', type=str, default='')
     parser.add_argument('--train_phase', default='semantic', choices=['semantic', 'geometry', 'joint'])
