@@ -176,7 +176,6 @@ nohup bash -c '
 
 tail -f s1_baseline2.log
 
-
 nohup bash -c '
   python train_stage1_direct_baseline.py --model=attn3dgcn --bs=30 2>&1 | tee s1_baseline.log
   python train_stage1_direct_baseline.py --model=pointnet 2>&1 | tee s1_baseline.log
@@ -185,6 +184,21 @@ nohup bash -c '
 ' > /dev/null 2>&1 &
 
 tail -f s1_baseline.log
+
+
+nohup bash -c '
+  python train_stage1_direct_baseline.py --model=pointtransformer 2>&1 | tee s1_baseline.log
+  python train_stage1_direct_baseline.py --model=pointmamba 2>&1 | tee s1_baseline.log
+' > /dev/null 2>&1 &
+
+tail -f s1_baseline.log
+
+nohup bash -c '
+  python train_stage1_direct_baseline.py --model=pointnext 2>&1 | tee s1_baseline2.log
+  python train_stage1_direct_baseline.py --model=pointmlp 2>&1 | tee s1_baseline2.log
+' > /dev/null 2>&1 &
+
+tail -f s1_baseline2.log
 
 
 
