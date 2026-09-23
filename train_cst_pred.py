@@ -85,6 +85,11 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.lr is None:
         args.lr = 1e-5 if args.train_phase == "joint" else 1e-4
+
+    # 实测 joint 阶段不使用 0 衰减率会跑飞
+    if args.train_phase == "joint":
+        args.decay_rate = 0
+
     for name in ("pmt", "cluster", "mad", "dim", "loc"):
         weight = getattr(args, f"w_{name}")
         if not math.isfinite(weight) or weight <= 0:

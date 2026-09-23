@@ -135,7 +135,7 @@ tail -f out_s1g.log
 nohup python train_cst_pred.py --train_phase joint --epoch 100 > out_s1j.log 2>&1 &
 tail -f out_s1j.log
 
-nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase=semantic --epoch=75 --bs=80 --checkpoint_policy=restart && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase=geometry --epoch=75 --bs=80 --checkpoint_policy=restart && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase=joint --epoch 100" --bs=80 --checkpoint_policy=restart > train_123.log 2>&1 &
+nohup bash -c "echo '=== Semantic Start ===' && python train_cst_pred.py --train_phase=semantic --epoch=75 --bs=80 --checkpoint_policy=restart && echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase=geometry --epoch=75 --bs=80 --checkpoint_policy=restart && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase=joint --epoch 100 --bs=80 --checkpoint_policy=restart" > train_123.log 2>&1 &
 
 nohup bash -c "echo '=== Geometry Start ===' && python train_cst_pred.py --train_phase geometry --epoch 50 --bs 80 && echo '=== Joint Start ===' && python train_cst_pred.py --train_phase joint --epoch 100" > train_123.log 2>&1 &
 
@@ -310,3 +310,87 @@ nohup bash -c '
 ' > /dev/null 2>&1 &
 
 
+python - <<'PY'
+import json
+from pathlib import Path
+import torch
+
+root = Path("/root/blockdata/cstnet2/model_trained/stage1_direct/attn_3dgcn")
+checkpoints = {}
+states = {}
+
+def stats(x):
+    x = x.detach().double().flatten()
+    finite = torch.isfinite(x)
+    out = {"nonfinite": int((~finite).sum())}
+    if finite.any():
+        q = torch.quantile(x[finite], torch.tensor(
+            [0., .1, .5, .9, 1.], dtype=torch.float64))
+        out.update(zip(["min", "p10", "median", "p90", "max"], q.tolist()))
+    return out
+
+for phase in ("geometry", "joint"):
+    path = root / phase / "last.pth"
+    c = torch.load(path, map_location="cpu", weights_only=False)
+    checkpoints[phase] = c
+    states[phase] = c["model"]
+    args = c.get("args", {})
+    print("\nCHECKPOINT", phase, path)
+    print(json.dumps({
+        "epoch": c.get("epoch"),
+        "global_step": c.get("global_step"),
+        "config": {k: args.get(k) for k in (
+            "bs", "lr", "decay_rate", "grad_clip", "data_root",
+            "training_recipe", "use_extra_features")},
+        "actual_optimizer": [
+            {k: g.get(k) for k in ("lr", "weight_decay", "eps", "betas")}
+            for g in c.get("optimizer", {}).get("param_groups", [])
+        ]
+    }, ensure_ascii=False))
+
+before, after = states["geometry"], states["joint"]
+blocks = {}
+
+for name, a in before.items():
+    if not torch.is_tensor(a) or not a.is_floating_point():
+        continue
+    b = after.get(name)
+    if b is None or a.shape != b.shape:
+        print("INCOMPATIBLE", name)
+        continue
+    a, b = a.double(), b.double()
+    if not torch.isfinite(b).all():
+        print("NONFINITE", name)
+    if name.endswith(".directions"):
+        na, nb = a.norm(dim=0), b.norm(dim=0)
+        print("\nDIRECTION", name)
+        print("geometry_norm", stats(na))
+        print("joint_norm   ", stats(nb))
+        print("norm_ratio   ", stats(nb / na.clamp_min(1e-30)))
+    if name.endswith(("running_mean", "running_var")):
+        continue
+    parts = name.split(".")
+    block = ".".join(parts[:2]) if parts[0] == "embedding" else parts[0]
+    totals = blocks.setdefault(block, [0., 0., 0.])
+    totals[0] += a.square().sum().item()
+    totals[1] += b.square().sum().item()
+    totals[2] += (b-a).square().sum().item()
+
+print("\nMODULE_CHANGES")
+for name, (a2, b2, d2) in blocks.items():
+    print(name, {
+        "geometry_norm": a2**0.5,
+        "joint_norm": b2**0.5,
+        "relative_change": d2**0.5 / max(a2**0.5, 1e-30)
+    })
+PY
+
+nohup python train_cst_pred.py \
+  --train_phase joint \
+  --epoch 100 \
+  --bs 80 \
+  --lr 1e-5 \
+  --decay_rate 0 \
+  --checkpoint_policy restart \
+  --wandb_run_name attn_3dgcn_direct_joint_wd0 \
+  > "$EXP_ROOT/train_joint.log" 2>&1 &
