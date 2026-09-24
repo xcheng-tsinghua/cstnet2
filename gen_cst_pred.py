@@ -34,8 +34,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Run Stage 1 offline and mirror point clouds with predicted constraints."
     )
-    parser.add_argument("--input_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd", type=str)
-    parser.add_argument("--output_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd_pred", type=str)
+    parser.add_argument("--input_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd", type=str)
+    parser.add_argument("--output_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd_pred", type=str)
     parser.add_argument(
         "--checkpoint",
         default=str(DEFAULT_CHECKPOINT),
