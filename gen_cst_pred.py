@@ -1,14 +1,8 @@
 """Generate point-cloud files containing offline Stage 1 constraint predictions.
 
-Only the first three columns of every input point are used for inference.  The
-output core follows the shared 12-column constraint point layout exactly:
-
-    xyz, pmt, mad, dim, loc, affiliate_idx
-
-The affiliate_idx column is -1: direct inference does not predict instances.
-
-Unknown input columns are treated as opaque task attributes and are preserved
-after that 12-column core. Relative paths below the input directory are kept.
+Only XYZ is used for inference. Replace columns 3:11 (pmt, mad, dim, loc),
+preserving XYZ and every column from index 11 onward. TXT files retain their
+relative paths. No clustering or fitting is run.
 """
 
 from __future__ import annotations
@@ -29,20 +23,24 @@ from networks.cst_pred_wrapper import CstPredWrapper
 
 
 MODEL_NAMES = ("pointnet2", "pointnet", "attn_3dgcn")
-GT_CORE_COLUMNS = 12
+GT_CORE_COLUMNS = 11
+DEFAULT_CHECKPOINT = (
+    Path(__file__).resolve().parent
+    / "model_trained/stage1_direct/attn_3dgcn/joint/last.pth"
+)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Run Stage 1 offline and mirror point clouds with predicted constraints."
     )
-    parser.add_argument("--input_dir", required=True, type=str)
-    parser.add_argument("--output_dir", required=True, type=str)
+    parser.add_argument("--input_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd", type=str)
+    parser.add_argument("--output_dir", default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd_pred", type=str)
     parser.add_argument(
         "--checkpoint",
-        required=True,
+        default=str(DEFAULT_CHECKPOINT),
         type=str,
-        help="Stage 1 .pth file or checkpoint directory.",
+        help="Stage 1 .pth file or directory; defaults to stage1_direct/attn_3dgcn/joint/last.pth.",
     )
     parser.add_argument(
         "--model", default="auto", choices=("auto",) + MODEL_NAMES,
@@ -52,15 +50,7 @@ def parse_args(argv=None):
         "--device", default="auto", type=str,
         help="auto, cpu, cuda, or an explicit device such as cuda:1.",
     )
-    parser.add_argument(
-        "--extensions", default=".txt", type=str,
-        help="Comma-separated extensions, for example .txt,.xyz,.npy.",
-    )
-    parser.add_argument(
-        "--input_layout", default="auto", choices=("auto", "raw", "gt"),
-        help="raw appends all input columns after xyz; gt replaces columns 3:15.",
-    )
-    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files.")
     return parser.parse_args(argv)
 
 
@@ -169,41 +159,19 @@ class Stage1Predictor:
             "mad": constraints["direction"][0].cpu().numpy(),
             "dim": constraints["dimension"][0].cpu().numpy(),
             "loc": constraints["location"][0].cpu().numpy(),
-            "affiliate_idx": np.full(len(xyz_array), -1, dtype=np.int64),
         }
-
-
-def _looks_like_gt_layout(array: np.ndarray) -> bool:
-    if array.shape[1] < GT_CORE_COLUMNS:
-        return False
-    pmt = array[:, 3]
-    affiliate = array[:, 11]
-    return bool(
-        np.isfinite(pmt).all()
-        and np.isfinite(affiliate).all()
-        and np.all((pmt >= 0) & (pmt <= 4) & (pmt == np.floor(pmt)))
-        and np.all(affiliate == np.floor(affiliate))
-    )
 
 
 def build_output_array(
     input_array: np.ndarray,
     prediction: dict[str, np.ndarray],
-    input_layout: str = "auto",
 ) -> np.ndarray:
+    if input_array.ndim != 2 or input_array.shape[1] < GT_CORE_COLUMNS:
+        raise ValueError("expected at least 11 columns (xyz,pmt,mad,dim,loc)")
     count = input_array.shape[0]
-    for name in ("pmt", "mad", "dim", "loc", "affiliate_idx"):
+    for name in ("pmt", "mad", "dim", "loc"):
         if len(prediction[name]) != count:
             raise ValueError(f"prediction {name} has {len(prediction[name])} rows, expected {count}")
-
-    if input_layout == "gt" or (
-        input_layout == "auto" and _looks_like_gt_layout(input_array)
-    ):
-        suffix = input_array[:, GT_CORE_COLUMNS:]
-    elif input_layout in ("auto", "raw"):
-        suffix = input_array[:, 3:]
-    else:
-        raise ValueError(f"unsupported input_layout: {input_layout}")
 
     pmt = np.asarray(prediction["pmt"]).reshape(count)
     mad, dim = zero_invalid_constraint_components(
@@ -218,32 +186,24 @@ def build_output_array(
             mad,
             dim.reshape(count, 1),
             np.asarray(prediction["loc"]).reshape(count, 3),
-            np.asarray(prediction["affiliate_idx"]).reshape(count, 1),
         ],
         axis=1,
     )
-    return np.concatenate([core, suffix], axis=1)
+    return np.concatenate([core, input_array[:, GT_CORE_COLUMNS:]], axis=1)
 
 
 def load_point_file(path: Path) -> tuple[np.ndarray, str]:
-    if path.suffix.lower() == ".npy":
-        array = np.load(path, allow_pickle=False)
-        delimiter = " "
-    else:
-        delimiter = " "
+    delimiter = " "
+    try:
+        array = np.loadtxt(path, dtype=np.float64, ndmin=2)
+    except ValueError as whitespace_error:
         try:
-            array = np.loadtxt(path, dtype=np.float64)
-        except ValueError as whitespace_error:
-            try:
-                array = np.loadtxt(path, dtype=np.float64, delimiter=",")
-                delimiter = ","
-            except ValueError:
-                raise whitespace_error
-    array = np.asarray(array)
-    if array.ndim == 1:
-        array = array.reshape(1, -1)
-    if array.ndim != 2 or array.shape[1] < 3:
-        raise ValueError(f"expected a 2D point array with at least 3 columns: {path}")
+            array = np.loadtxt(path, dtype=np.float64, delimiter=",", ndmin=2)
+            delimiter = ","
+        except ValueError:
+            raise whitespace_error
+    if array.shape[1] < GT_CORE_COLUMNS:
+        raise ValueError(f"expected a 2D point array with at least 11 columns: {path}")
     if array.shape[0] < 3:
         raise ValueError(f"at least 3 points are required: {path}")
     if not np.isfinite(array[:, :3]).all():
@@ -259,35 +219,19 @@ def save_point_file(path: Path, array: np.ndarray, delimiter: str) -> None:
             dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
         ) as temporary:
             temporary_path = Path(temporary.name)
-            if path.suffix.lower() == ".npy":
-                np.save(temporary, array)
-            else:
-                formats = ["%.9g"] * array.shape[1]
-                formats[3] = "%d"
-                formats[11] = "%d"
-                np.savetxt(temporary, array, fmt=formats, delimiter=delimiter)
+            formats = ["%.6f"] * array.shape[1]
+            formats[3] = "%d"
+            np.savetxt(temporary, array, fmt=formats, delimiter=delimiter)
         os.replace(temporary_path, path)
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
 
 
-def parse_extensions(value: str) -> set[str]:
-    extensions = set()
-    for item in value.split(","):
-        item = item.strip().lower()
-        if not item:
-            continue
-        extensions.add(item if item.startswith(".") else f".{item}")
-    if not extensions:
-        raise ValueError("at least one file extension is required")
-    return extensions
-
-
-def iter_point_files(root: Path, extensions: set[str]) -> Iterable[Path]:
+def iter_point_files(root: Path) -> Iterable[Path]:
     return (
         path for path in sorted(root.rglob("*"))
-        if path.is_file() and path.suffix.lower() in extensions
+        if path.is_file() and path.suffix.lower() == ".txt"
     )
 
 
@@ -304,15 +248,14 @@ def generate_dataset(args) -> None:
     input_dir = Path(args.input_dir).expanduser()
     output_dir = Path(args.output_dir).expanduser()
     validate_roots(input_dir, output_dir)
-    extensions = parse_extensions(args.extensions)
-    files = list(iter_point_files(input_dir, extensions))
+    files = list(iter_point_files(input_dir))
     if not files:
         raise FileNotFoundError(
-            f"no files with extensions {sorted(extensions)} found below {input_dir}"
+            f"no .txt point cloud files found below {input_dir}"
         )
 
     # Reproduce the whole directory tree, including empty directories. Files
-    # outside the selected point-cloud extensions are intentionally not copied.
+    # other than TXT point clouds are intentionally not copied.
     output_dir.mkdir(parents=True, exist_ok=True)
     for directory in sorted(path for path in input_dir.rglob("*") if path.is_dir()):
         (output_dir / directory.relative_to(input_dir)).mkdir(
@@ -329,7 +272,7 @@ def generate_dataset(args) -> None:
         "Stage 1 predictor: "
         f"checkpoint={predictor.checkpoint_path}; model={predictor.model_name}; "
         f"device={device}; "
-        "constraint_route=direct_mlp_v1; affiliate_idx=-1 (not predicted)"
+        "constraint_route=direct_mlp_v1; preserve XYZ and extra attributes"
     )
     print(f"input files: {len(files)}; input={input_dir}; output={output_dir}")
 
@@ -343,9 +286,7 @@ def generate_dataset(args) -> None:
             continue
         input_array, delimiter = load_point_file(input_path)
         prediction = predictor.predict(input_array[:, :3])
-        output_array = build_output_array(
-            input_array, prediction, input_layout=args.input_layout
-        )
+        output_array = build_output_array(input_array, prediction)
         save_point_file(output_path, output_array, delimiter)
         written += 1
         print(

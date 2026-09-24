@@ -104,4 +104,17 @@ python gen_cst_pred.py --input_dir INPUT --output_dir OUTPUT --checkpoint model_
 
 评估损失同样使用简化五项方案，并在 JSON 中记录 `evaluation_loss_recipe`。旧方案权重也可评估，但新计算的 loss 不应与旧日志中的正则化总 loss 直接比较。
 
-导出的 TXT 保持 xyz,pmt,mad,dim,loc,affiliate_idx 共 12 列的基础格式，附加任务列按原规则保留。由于不预测实例编号，affiliate_idx 固定为 -1，不能当成实例训练标签。Stage2 仅使用四个约束分量，并始终冻结 Stage1。
+`gen_cst_pred.py` 仅递归读取 `.txt` 文件，保持相对目录和文件名。
+默认权重为脚本所在目录下的 `model_trained/stage1_direct/attn_3dgcn/joint/last.pth`，因此可以只传两个目录：
+
+```shell
+python gen_cst_pred.py --input_dir INPUT --output_dir OUTPUT
+```
+
+每个点至少有 11 列：`0:3` 为 xyz，`3` 为整数基元类型，`4:7` 为方向，`7` 为尺寸，`8:11` 为位置。
+只用 xyz 推理，只替换 `3:11` 的约束；xyz、点顺序、点数、列数及索引 11 起的所有附加属性均保留。
+索引 11 即使是 `affiliate_idx` 也照原值复制，不再用 -1 覆盖。输入旧约束的数值不参与格式识别或预测。
+TXT 的基元类型输出整数，其余数值固定六位小数（xyz 和附加属性也只做这一精度的文本格式化），支持空白或逗号分隔。
+
+默认跳过输出目录中已存在的文件，`--overwrite` 可重新生成。输入统一遵循上述至少 11 列的固定定义。
+Stage2 仅使用四个约束分量，并始终冻结 Stage1。

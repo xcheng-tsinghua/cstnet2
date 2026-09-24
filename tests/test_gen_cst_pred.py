@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import torch
@@ -23,63 +24,74 @@ def prediction(count: int) -> dict[str, np.ndarray]:
         "mad": np.full((count, 3), 0.25, dtype=np.float32),
         "dim": np.arange(count, dtype=np.float32),
         "loc": np.full((count, 3), -0.5, dtype=np.float32),
-        "affiliate_idx": np.arange(count) // 2,
     }
 
 
 class GenerateConstraintPredictionsTest(unittest.TestCase):
-    def test_raw_layout_preserves_opaque_suffix_after_constraint_core(self):
-        source = np.arange(20, dtype=np.float64).reshape(4, 5)
-        output = gen_cst_pred.build_output_array(
-            source, prediction(4), input_layout="raw"
-        )
-
-        self.assertEqual(output.shape, (4, 14))
-        np.testing.assert_array_equal(output[:, :3], source[:, :3])
-        np.testing.assert_array_equal(output[:, 12:], source[:, 3:])
-        np.testing.assert_array_equal(output[:, 3], prediction(4)["pmt"])
-        np.testing.assert_array_equal(output[:, 11], prediction(4)["affiliate_idx"])
-
-    def test_auto_layout_replaces_gt_constraints_and_keeps_task_columns(self):
+    def test_replaces_constraints_and_keeps_xyz_and_task_columns(self):
         source = np.zeros((4, 14), dtype=np.float64)
         source[:, :3] = np.arange(12).reshape(4, 3)
         source[:, 3] = (np.arange(4) + 1) % 5
-        source[:, 11] = np.arange(4) // 2
+        source[:, 11] = np.arange(4) + 0.123456
         source[:, 12:] = np.array([[10, 20], [10, 20], [11, 21], [11, 21]])
 
         output = gen_cst_pred.build_output_array(source, prediction(4))
 
         self.assertEqual(output.shape, (4, 14))
-        np.testing.assert_array_equal(output[:, 12:], source[:, 12:])
+        np.testing.assert_array_equal(output[:, :3], source[:, :3])
+        np.testing.assert_array_equal(output[:, 11:], source[:, 11:])
         np.testing.assert_array_equal(output[:, 3], prediction(4)["pmt"])
 
+    def test_exactly_11_columns_and_unknown_old_types_are_replaced(self):
+        source = np.full((4, 11), -100.25)
+        source[:, :3] = np.arange(12).reshape(4, 3)
+        predicted = prediction(4)
+        output = gen_cst_pred.build_output_array(source, predicted)
+        self.assertEqual(output.shape, source.shape)
+        np.testing.assert_array_equal(output[:, :3], source[:, :3])
+        np.testing.assert_array_equal(output[:, 3], predicted["pmt"])
+
+    def test_default_layout_does_not_silently_insert_columns(self):
+        with self.assertRaisesRegex(ValueError, "at least 11 columns"):
+            gen_cst_pred.build_output_array(np.zeros((4, 10)), prediction(4))
+
+    def test_text_uses_six_decimal_places_without_truncating_extra_attribute(self):
+        source = np.full((4, 12), 1.23456789)
+        output = gen_cst_pred.build_output_array(source, prediction(4))
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            path = Path(temporary) / "cloud.txt"
+            gen_cst_pred.save_point_file(path, output, " ")
+            tokens = path.read_text().splitlines()[0].split()
+            self.assertEqual(tokens[3], "0")
+            self.assertEqual(tokens[0], "1.234568")
+            self.assertEqual(tokens[11], "1.234568")
+            for index, token in enumerate(tokens):
+                if index != 3:
+                    self.assertRegex(token, r"^-?\d+\.\d{6}$")
+
     def test_output_zeroes_invalid_direction_and_dimension(self):
-        source = np.zeros((5, 3), dtype=np.float32)
-        output = gen_cst_pred.build_output_array(
-            source, prediction(5), input_layout="raw"
-        )
+        source = np.zeros((5, 11), dtype=np.float32)
+        output = gen_cst_pred.build_output_array(source, prediction(5))
 
         np.testing.assert_array_equal(output[3:5, 4:7], np.zeros((2, 3)))
         self.assertEqual(float(output[0, 7]), 0.0)
         self.assertEqual(float(output[4, 7]), 0.0)
         np.testing.assert_array_equal(output[0:3, 4:7], np.full((3, 3), 0.25))
 
-    def test_text_and_npy_round_trip(self):
+    def test_text_round_trip(self):
         array = gen_cst_pred.build_output_array(
-            np.arange(15, dtype=np.float64).reshape(3, 5),
+            np.arange(39, dtype=np.float64).reshape(3, 13),
             prediction(3),
-            input_layout="raw",
         )
         with tempfile.TemporaryDirectory(dir=".") as temporary:
             root = Path(temporary)
-            for name, delimiter in (("cloud.txt", " "), ("cloud.csv", ","), ("cloud.npy", " ")):
+            for name, delimiter in (("space.txt", " "), ("comma.txt", ",")):
                 with self.subTest(name=name):
                     path = root / "nested" / name
                     gen_cst_pred.save_point_file(path, array, delimiter)
                     loaded, loaded_delimiter = gen_cst_pred.load_point_file(path)
                     np.testing.assert_allclose(loaded, array, rtol=1e-6, atol=1e-6)
-                    if path.suffix != ".npy":
-                        self.assertEqual(loaded_delimiter, delimiter)
+                    self.assertEqual(loaded_delimiter, delimiter)
 
     def test_constraint_assembly_returns_cluster_affiliations(self):
         xyz = torch.tensor(
@@ -274,26 +286,25 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
             ):
                 Stage1ConstraintDataset(root, n_points=4)
 
-    def test_cli_defaults_to_checkpoint_metadata_and_xyz_text_files(self):
+    def test_cli_defaults_to_joint_checkpoint(self):
         args = gen_cst_pred.parse_args(
-            ["--input_dir", "input", "--output_dir", "output", "--checkpoint", "weights.pth"]
+            ["--input_dir", "input", "--output_dir", "output"]
         )
         self.assertEqual(args.model, "auto")
         self.assertFalse(hasattr(args, "stage1_mode"))
-        self.assertEqual(args.extensions, ".txt")
-        self.assertEqual(args.input_layout, "auto")
+        self.assertEqual(Path(args.checkpoint), gen_cst_pred.DEFAULT_CHECKPOINT)
         self.assertFalse(hasattr(args, "cluster_method"))
         self.assertFalse(args.overwrite)
 
     def test_real_stage1_checkpoint_xyz_inference_smoke(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
             checkpoint_path = Path(temporary) / "last.pth"
-            model = CstPredWrapper("pointnet")
+            model = CstPredWrapper("attn_3dgcn")
             torch.save(
                 {
                     "model": model.state_dict(),
                     "args": {
-                        "model": "pointnet",
+                        "model": "attn_3dgcn",
                         "constraint_route": "direct_mlp_v1",
                         "train_phase": "joint",
                         "use_extra_features": False,
@@ -312,9 +323,37 @@ class GenerateConstraintPredictionsTest(unittest.TestCase):
 
         self.assertEqual(predicted["pmt"].shape, (32,))
         self.assertEqual(predicted["mad"].shape, (32, 3))
-        self.assertEqual(predicted["affiliate_idx"].shape, (32,))
+        self.assertEqual(set(predicted), {"pmt", "mad", "dim", "loc"})
         self.assertTrue(np.isfinite(predicted["loc"]).all())
-        np.testing.assert_array_equal(predicted["affiliate_idx"], np.full(32, -1))
+
+    def test_generate_mixed_directory_preserves_paths_and_skips_existing_files(self):
+        with tempfile.TemporaryDirectory(dir=".") as temporary:
+            root = Path(temporary)
+            input_dir, output_dir = root / "input", root / "output"
+            (input_dir / "nested" / "empty").mkdir(parents=True)
+            source = np.arange(4 * 13, dtype=np.float64).reshape(4, 13) + 0.123456
+            np.savetxt(input_dir / "nested" / "part.txt", source)
+            np.savetxt(input_dir / "part.TXT", source)
+            for name in ("ignored.h5", "ignored.hdf5", "ignored.npy", "ignored.csv"):
+                (input_dir / name).write_bytes(b"not a TXT point cloud")
+            args = gen_cst_pred.parse_args(["--input_dir", str(input_dir), "--output_dir", str(output_dir)])
+            with mock.patch.object(gen_cst_pred, "Stage1Predictor") as factory:
+                predictor = factory.return_value
+                predictor.predict.side_effect = lambda xyz: prediction(len(xyz))
+                gen_cst_pred.generate_dataset(args)
+                self.assertEqual(predictor.predict.call_count, 2)
+                gen_cst_pred.generate_dataset(args)
+                self.assertEqual(predictor.predict.call_count, 2)
+                args.overwrite = True
+                gen_cst_pred.generate_dataset(args)
+                self.assertEqual(predictor.predict.call_count, 4)
+            self.assertTrue((output_dir / "nested" / "empty").is_dir())
+            txt = np.loadtxt(output_dir / "nested" / "part.txt")
+            np.testing.assert_array_equal(txt[:, 11:], source[:, 11:])
+            self.assertEqual(
+                {path.relative_to(output_dir).as_posix() for path in output_dir.rglob("*") if path.is_file()},
+                {"part.TXT", "nested/part.txt"},
+            )
 
     def test_frozen_extractor_rejects_semantic_only_geometry_initialization(self):
         with tempfile.TemporaryDirectory(dir=".") as temporary:
