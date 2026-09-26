@@ -41,9 +41,14 @@ def segmentation_run_name(model_config: dict[str, object]) -> str:
 
 
 def segmentation_wandb_run_name(
-    model_config: dict[str, object], requested_name: str = ""
+    model_config: dict[str, object],
+    requested_name: str = "",
+    save_name: str = "stage2_seg",
 ) -> str:
-    return requested_name.strip() or segmentation_run_name(model_config)
+    save_stem = save_name
+    if save_name in ("stage2_seg", "stage2_seg_cstpred"):
+        save_stem = f"{save_name}_{segmentation_run_name(model_config)}"
+    return requested_name or save_stem
 
 
 def resolve_training_paths(
@@ -69,7 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--data_root",
         type=str,
-        default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd",
+        default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd_pred",
         help="MFCAD++ root containing the train/val/test split directories",
     )
     parser.add_argument(
@@ -133,14 +138,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Ignore cached class statistics and scan the training split again",
     )
     parser.add_argument(
-        "--wandb_project", type=str, default="cstnet2", help="WandB project name",
+        "--wandb_project", type=str, default="cstnet2-s2", help="WandB project name",
     )
     parser.add_argument(
         "--wandb_entity", type=str, default="", help="Optional WandB entity/team",
     )
     parser.add_argument(
+        "--save_name", type=str, default="stage2_seg",
+        help="Fallback WandB name; stage2_seg and stage2_seg_cstpred append the model name",
+    )
+    parser.add_argument(
         "--wandb_run_name", type=str, default="",
-        help="Optional WandB run name; defaults to the resolved segmentation model name",
+        help="Optional WandB run name; overrides the name derived from --save_name",
     )
     return parser.parse_args(argv)
 
@@ -249,7 +258,7 @@ def main(args: argparse.Namespace) -> None:
                 "a new WandB Run will be created for this legacy checkpoint"
             )
         resolved_run_name = segmentation_wandb_run_name(
-            model_config, args.wandb_run_name
+            model_config, args.wandb_run_name, args.save_name
         )
         wandb_run = initialize_wandb_run(
             project=args.wandb_project,

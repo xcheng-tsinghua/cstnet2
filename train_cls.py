@@ -43,7 +43,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2048)
     parser.add_argument("--is_sample", action="store_true", default=False)
     parser.add_argument("--local", action="store_true", default=False)
-    parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd")
+    parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd_pred")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
 
     parser.add_argument(
@@ -68,7 +68,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--stream_dropout", type=float, default=0.1)
     parser.add_argument("--use_stats_token", action="store_true", default=False)
 
-    parser.add_argument("--save_name", type=str, default="stage2_cls")
+    parser.add_argument("--save_name", type=str, default="stage2_cls_cstpred")
     parser.add_argument(
         "--test_ratio",
         type=float,
@@ -81,7 +81,7 @@ def parse_args(argv: list[str] | None = None):
         default=42,
         help="Random seed used only when first creating split_file.json",
     )
-    parser.add_argument("--wandb_project", type=str, default="cstnet2")
+    parser.add_argument("--wandb_project", type=str, default="cstnet2-s2")
     parser.add_argument("--wandb_entity", type=str, default="")
     parser.add_argument("--wandb_run_name", type=str, default="")
     parser.add_argument(
@@ -248,7 +248,7 @@ def main(args):
 
     model = build_classification_model(n_classes, model_config).to(device)
     save_stem = args.save_name
-    if args.save_name == "stage2_cls":
+    if args.save_name == "stage2_cls" or args.save_name == "stage2_cls_cstpred":
         save_stem = f"{args.save_name}_{classification_run_name(model_config)}"
     save_path = os.path.join("model_trained", f"{save_stem}.pth")
     parameter_count = sum(parameter.numel() for parameter in model.parameters())

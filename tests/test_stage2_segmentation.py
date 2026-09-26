@@ -131,7 +131,7 @@ class Stage2SegmentationTest(unittest.TestCase):
         self.assertFalse(hasattr(default_args, "dgcnn_k"))
         self.assertFalse(hasattr(default_args, "pointmamba_tokens"))
         self.assertFalse(hasattr(default_args, "use_wandb"))
-        self.assertEqual(default_args.wandb_project, "cstnet2")
+        self.assertEqual(default_args.wandb_project, "cstnet2-s2")
         self.assertTrue(train_seg.parse_args(["--not_resume"]).not_resume)
         config = {
             "model": "pointnet2",
@@ -139,7 +139,7 @@ class Stage2SegmentationTest(unittest.TestCase):
         }
         self.assertEqual(
             train_seg.segmentation_wandb_run_name(config),
-            "pointnet2_constraints",
+            "stage2_seg_pointnet2_constraints",
         )
         self.assertEqual(
             train_seg.segmentation_wandb_run_name(config, "custom-run"),
