@@ -144,7 +144,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--wandb_entity", type=str, default="", help="Optional WandB entity/team",
     )
     parser.add_argument(
-        "--save_name", type=str, default="stage2_seg",
+        "--save_name", type=str, default="stage2_seg_cstpred",
         help="Fallback WandB name; stage2_seg and stage2_seg_cstpred append the model name",
     )
     parser.add_argument(
