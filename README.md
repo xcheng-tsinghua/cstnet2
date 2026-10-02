@@ -598,6 +598,47 @@ Existing outputs are skipped unless `--overwrite` is supplied. TXT is processed 
 `--extensions .txt,.npy` when required.
 
 
+### Stage 2 HDF5 Data
+
+Both `train_cls.py` and `train_seg.py` accept `--data_format auto|txt|h5`
+(default: `auto`, preferring HDF5 when present). Convert each task separately:
+
+```bash
+python -m tools.convert_classification_txt_to_h5 --input_dir /path/to/cls_txt --output_dir /path/to/cls_h5
+python train_cls.py --data_root /path/to/cls_h5 --data_format h5
+
+python -m tools.convert_segmentation_txt_to_h5 --input_dir /path/to/seg_txt --output_dir /path/to/seg_h5
+python train_seg.py --data_root /path/to/seg_h5 --data_format h5 --not_resume
+```
+
+The classification converter supports both `root/{train,test}/class/**/*.txt`
+and `root/class/**/*.txt`. It preserves the existing `split_file.json` (or
+legacy `split_file`) and class ids. If no split file exists for the class-root
+layout, it creates one using `--test_ratio` (default 0.2) and `--split_seed`
+(default 42), exactly as the TXT dataset does. `--data_root` overrides the
+existing classification `--root_local`/`--root_sever` options, which remain supported.
+
+The segmentation converter expects `train` and `val` (or `validation`)
+directories, plus an optional `test` directory. All 14 columns, including Face ID
+and segmentation labels, are preserved. For a custom label map, pass the same
+JSON to conversion (`--label_map_path`) and training (`--label_map`). The reader
+checks it against metadata embedded in the HDF5 files. Class statistics scan all
+training points, independently of `--n_points`.
+
+Both converters retain every original point without sampling or changing
+constraints. They write variable-length samples using offsets, with split and
+class/label metadata inside each shard. Training needs only the converted
+folder; original TXT paths are retained for sample identification, not reading.
+HDF5 handles are opened lazily per worker and support Windows DataLoader workers.
+`--use_npy_cache` applies only to TXT segmentation data.
+
+Conversion options: `--samples_per_shard 2000`, `--compression lzf|gzip|none`
+(default `lzf`), and `--overwrite` to replace earlier output shards. Use a
+separate output folder for each task. Stage 1 HDF5 files are incompatible with
+Stage 2 because they do not carry class/split or segmentation-label metadata.
+Python conversion APIs are `convert_classification_txt_to_h5` and
+`convert_segmentation_txt_to_h5` in `data_utils/stage2_h5.py`.
+
 ### Train Stage 2 Classification
 
 Stage 1 must first traverse the classification point-cloud dataset and write

@@ -43,6 +43,10 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2048)
     parser.add_argument("--is_sample", action="store_true", default=False)
     parser.add_argument("--local", action="store_true", default=False)
+    parser.add_argument("--data_root", type=str, default=None,
+                        help="TXT/HDF5 dataset root; overrides --root_local/--root_sever")
+    parser.add_argument("--data_format", choices=("auto", "txt", "h5"), default="auto",
+                        help="Storage backend; auto prefers HDF5 when shards are present")
     parser.add_argument("--root_sever", type=str, default=r"/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd_pred")
     parser.add_argument("--root_local", type=str, default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
 
@@ -221,7 +225,7 @@ def restore_classification_training_state(
 def main(args):
     os.makedirs("model_trained", exist_ok=True)
 
-    data_root = args.root_local if args.local else args.root_sever
+    data_root = args.data_root or (args.root_local if args.local else args.root_sever)
     train_loader, test_loader = Stage2ClassificationDataset.create_dataloaders(
         root=data_root,
         bs=args.bs,
@@ -230,6 +234,7 @@ def main(args):
         is_sample=args.is_sample,
         test_ratio=args.test_ratio,
         split_seed=args.split_seed,
+        storage_format=args.data_format,
     )
     n_classes = train_loader.dataset.n_classes()
     class_names = [f"class_{index}" for index in range(n_classes)]

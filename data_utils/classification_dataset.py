@@ -16,6 +16,7 @@ from data_utils.constraint_dataset_common import (
     sample_without_replacement,
     split_constraint_columns,
 )
+from data_utils.stage2_h5 import Stage2H5Store, resolve_storage_format
 
 
 SPLIT_FILE_NAME = "split_file.json"
@@ -204,7 +205,7 @@ def _flat_layout(
 class Stage2ClassificationDataset(Dataset):
     """Read Stage 2 classification data from split or class-root layouts.
 
-    Supported layouts are ``root/{train,test}/class/**/*.txt`` and
+    Supports HDF5 shards and ``root/{train,test}/class/**/*.txt`` and
     ``root/class/**/*.txt``. The latter is governed by ``split_file.json``.
     """
 
@@ -217,10 +218,9 @@ class Stage2ClassificationDataset(Dataset):
         data_augmentation: bool = False,
         test_ratio: float = DEFAULT_TEST_RATIO,
         split_seed: int = DEFAULT_SPLIT_SEED,
+        storage_format: str = "auto",
     ):
         self.root = Path(root)
-        if not self.root.is_dir():
-            raise FileNotFoundError(f"dataset directory not found: {self.root}")
         self.split = str(split).lower()
         if self.split not in {"train", "test"}:
             raise ValueError(
@@ -229,6 +229,24 @@ class Stage2ClassificationDataset(Dataset):
             )
         self.n_points = int(n_points)
         self.data_augmentation = bool(data_augmentation)
+        self.storage_format = resolve_storage_format(self.root, storage_format)
+        self._h5_store = None
+        if self.storage_format == "h5":
+            self._h5_store = Stage2H5Store(self.root, "classification", self.split)
+            stored_classes = self._h5_store.metadata["classes"]
+            self.classes = dict(stored_classes if classes is None else classes)
+            unknown = set(stored_classes) - set(self.classes)
+            if unknown:
+                raise ValueError(f"unknown classes in {self.split} split: {sorted(unknown)}")
+            id_to_name = {value: name for name, value in stored_classes.items()}
+            self.datapath = [
+                (self.classes[id_to_name[class_id]], path)
+                for class_id, path in zip(self._h5_store.class_ids, self._h5_store.source_paths)
+            ]
+            print(f"Stage 2 classification HDF5 [{self.split}]: {self.root}, samples={len(self)}")
+            return
+        if not self.root.is_dir():
+            raise FileNotFoundError(f"dataset directory not found: {self.root}")
 
         train_dir = self.root / "train"
         test_dir = self.root / "test"
@@ -288,9 +306,9 @@ class Stage2ClassificationDataset(Dataset):
 
     def __getitem__(self, index):
         class_index, path = self.datapath[index]
-        point_set = load_constraint_point_file(
-            path,
-            task_name="Stage 2 classification",
+        point_set = (
+            self._h5_store.load(index) if self._h5_store is not None
+            else load_constraint_point_file(path, task_name="Stage 2 classification")
         )
         point_set = sample_without_replacement(
             point_set,
@@ -314,6 +332,10 @@ class Stage2ClassificationDataset(Dataset):
     def n_classes(self):
         return len(self.classes)
 
+    def close(self):
+        if self._h5_store is not None:
+            self._h5_store.close()
+
     @staticmethod
     def create_dataloaders(
         root,
@@ -323,6 +345,7 @@ class Stage2ClassificationDataset(Dataset):
         is_sample=False,
         test_ratio=DEFAULT_TEST_RATIO,
         split_seed=DEFAULT_SPLIT_SEED,
+        storage_format="auto",
     ):
         train_set = Stage2ClassificationDataset(
             root=root,
@@ -330,6 +353,7 @@ class Stage2ClassificationDataset(Dataset):
             n_points=n_points,
             test_ratio=test_ratio,
             split_seed=split_seed,
+            storage_format=storage_format,
         )
         test_set = Stage2ClassificationDataset(
             root=root,
@@ -338,6 +362,7 @@ class Stage2ClassificationDataset(Dataset):
             classes=train_set.classes,
             test_ratio=test_ratio,
             split_seed=split_seed,
+            storage_format=storage_format,
         )
         loader_kwargs = {
             "batch_size": bs,

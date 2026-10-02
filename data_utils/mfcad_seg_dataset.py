@@ -11,6 +11,9 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
+from data_utils.stage2_h5 import Stage2H5Store, resolve_storage_format
+
+
 DEFAULT_LABEL_MAP = Path(__file__).with_name("mfcad_label_map.json")
 COMPONENT_NAMES = ("primitive_type", "direction", "dimension", "location")
 EXPECTED_COLUMNS = 14
@@ -82,9 +85,10 @@ class Stage2SegmentationDataset(Dataset):
         label_map_path: str | os.PathLike[str] = DEFAULT_LABEL_MAP,
         use_npy_cache: bool = False,
         validate_face_labels: bool = True,
+        storage_format: str = "auto",
     ):
         self.root = Path(root)
-        self.split, self.split_dir = _resolve_split_dir(self.root, split)
+        self.split = "val" if split.lower() == "validation" else split.lower()
         self.n_points = n_points
         if n_points is not None and n_points <= 0:
             raise ValueError("n_points must be positive or None")
@@ -93,12 +97,32 @@ class Stage2SegmentationDataset(Dataset):
         self.label_map_path = str(Path(label_map_path).resolve())
         self.label_map = load_label_map(label_map_path)
         self.num_classes = len(self.label_map["labels"])
+        self.storage_format = resolve_storage_format(self.root, storage_format)
+        self._h5_store = None
+        if self.storage_format == "h5":
+            self._h5_store = Stage2H5Store(self.root, "segmentation", self.split)
+            if self._h5_store.metadata["label_map"] != self.label_map:
+                raise ValueError("HDF5 segmentation label map differs from label_map_path")
+            self.split_dir = self.root if self.root.is_dir() else self.root.parent
+            self.files = self._h5_store.source_paths
+            return
+        self.split, self.split_dir = _resolve_split_dir(self.root, split)
         self.files = sorted(self.split_dir.glob("*.txt"), key=_numeric_path_key)
         if not self.files:
             raise FileNotFoundError(f"no point cloud .txt files found in {self.split_dir}")
 
     def __len__(self) -> int:
         return len(self.files)
+
+    def close(self):
+        if self._h5_store is not None:
+            self._h5_store.close()
+
+    def load_raw_sample(self, index: int) -> np.ndarray:
+        """Load every point, including labels, without training/evaluation sampling."""
+        if self._h5_store is not None:
+            return self._h5_store.load(index)
+        return self._load_array(self.files[index])
 
     def _load_array(self, path: Path) -> np.ndarray:
         if self.use_npy_cache:
@@ -138,7 +162,7 @@ class Stage2SegmentationDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         path = self.files[index]
-        point_set = self._load_array(path)
+        point_set = self.load_raw_sample(index)
         point_set = point_set[self._point_indices(point_set.shape[0])]
 
         xyz = point_set[:, 0:3].copy()
@@ -214,12 +238,14 @@ class Stage2SegmentationDataset(Dataset):
         distributed: bool = False,
         pin_memory: bool = True,
         drop_last: bool = True,
+        storage_format: str = "auto",
     ) -> tuple[DataLoader, DataLoader, DataLoader | None]:
         common = {
             "root": root,
             "n_points": n_points,
             "label_map_path": label_map_path,
             "use_npy_cache": use_npy_cache,
+            "storage_format": storage_format,
         }
         train_dataset = Stage2SegmentationDataset(split="train", **common)
         val_dataset = Stage2SegmentationDataset(split="val", **common)

@@ -53,12 +53,11 @@ def compute_training_class_statistics(
 
     counts = np.zeros(dataset.num_classes, dtype=np.int64)
     for file_id, path in enumerate(dataset.files):
-        if dataset.use_npy_cache:
-            array = dataset._load_array(path)
-            labels = array[:, 16].astype(np.int64)
-        else:
-            labels = np.loadtxt(path, dtype=np.int64, usecols=(16,))
-            labels = np.atleast_1d(labels)
+        array = dataset.load_raw_sample(file_id)
+        raw_labels = array[:, 13]
+        labels = raw_labels.astype(np.int64)
+        if not np.array_equal(raw_labels, labels):
+            raise ValueError(f"non-integer segmentation label while scanning {path}")
         if np.any((labels < 0) | (labels >= dataset.num_classes)):
             raise ValueError(f"out-of-range segmentation label while scanning {path}")
         counts += np.bincount(labels, minlength=dataset.num_classes)

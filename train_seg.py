@@ -75,8 +75,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--data_root",
         type=str,
         default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd_pred",
-        help="MFCAD++ root containing the train/val/test split directories",
+        help="MFCAD++ TXT split root or converted HDF5 shard directory",
     )
+    parser.add_argument("--data_format", choices=("auto", "txt", "h5"), default="auto",
+                        help="Storage backend; auto prefers HDF5 when shards are present")
     parser.add_argument(
         "--label_map", type=str, default=str(DEFAULT_LABEL_MAP),
         help="JSON label metadata used by the dataset and checkpoints",
@@ -214,6 +216,7 @@ def main(args: argparse.Namespace) -> None:
         label_map_path=args.label_map,
         use_npy_cache=args.use_npy_cache,
         distributed=distributed,
+        storage_format=args.data_format,
     )
     statistics_path = Path(args.class_statistics_path)
     if rank == 0:

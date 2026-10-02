@@ -240,6 +240,17 @@ nohup bash -c '
 ' > /dev/null 2>&1 &
 
 
+nohup bash -c '
+  python train_cls.py --model attn3dgcn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model pointnet2 --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model dgcnn --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model pointtransformer --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model pointmamba --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model pointnext --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+  python train_cls.py --model pointmlp --batch_size=100 --epoch=70 --baseline_use_constraints 2>&1 | tee cls_cst.log
+' > /dev/null 2>&1 &
+
+
 ------------------------------- stage 2 seg
 
 -- stage2 seg
@@ -276,6 +287,22 @@ nohup bash -c '
   python train_seg.py --model pointnet2 --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointnet2_cst_gt.log
   python train_seg.py --model dgcnn --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee dgcnn_cst_gt.log
   python train_seg.py --model attn3dgcn --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee attn3dgcn_cst_gt.log
+' > /dev/null 2>&1 &
+
+nohup bash -c '
+  python train_seg.py --model pointnet --batch_size=50 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg1.log
+  python train_seg.py --model pointnet2 --batch_size=50 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg1.log
+  python train_seg.py --model dgcnn --batch_size=50 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg1.log
+  python train_seg.py --model attn3dgcn --batch_size=20 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg1.log
+' > /dev/null 2>&1 &
+
+
+
+nohup bash -c '
+  python train_seg.py --model pointtransformer --batch_size=20 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg2.log
+  python train_seg.py --model pointmamba --batch_size=10 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg2.log
+  python train_seg.py --model pointnext --batch_size=20 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg2.log
+  python train_seg.py --model pointmlp --batch_size=10 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg2.log
 ' > /dev/null 2>&1 &
 
 nohup bash -c '
