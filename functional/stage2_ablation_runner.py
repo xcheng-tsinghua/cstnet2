@@ -199,12 +199,21 @@ def protocol_config(args, experiment, seed, metadata):
             "intervention": EXPERIMENTS[experiment].to_dict(), "dataset": metadata}
 
 
+def clear_run_outputs(directory):
+    """Remove this run's generated files before a fresh training run."""
+    names = {"config.json", "parameters.json", "last.pth", "best.pth",
+             "result.json", "evaluation_test.json"}
+    for path in directory.iterdir():
+        epoch_log = (path.suffix == ".json" and path.stem.startswith("epoch_")
+                     and path.stem[6:].isdigit())
+        if path.is_file() and (path.name in names or epoch_log):
+            path.unlink()
+
+
 def run_experiment(args, experiment, seed):
     directory = run_directory(args, experiment, seed)
     directory.mkdir(parents=True, exist_ok=True)
     last_path, best_path = directory / "last.pth", directory / "best.pth"
-    if args.mode == "train" and not args.resume and any(directory.iterdir()):
-        raise FileExistsError(f"run already exists; use --resume or another --output_dir: {directory}")
     if args.mode == "evaluate":
         saved = load_checkpoint(best_path)
         # Reconstruct training configuration instead of silently applying CLI defaults.
@@ -251,9 +260,6 @@ def run_experiment(args, experiment, seed):
         start, best, best_epoch = saved["epoch"] + 1, saved["best"], saved["best_epoch"]
         restore_rng_state(saved["rng"])
         resume_id = str(saved.get("wandb_run_id", "") or "")
-    else:
-        write_json(directory / "config.json", protocol)
-    write_json(directory / "parameters.json", parameters)
     primary = "instance_accuracy"
     print(f"{directory}: parameters={parameters}; train={len(train)}, test={len(test)}")
     class_names = [name for name, _ in sorted(metadata["classes"].items(), key=lambda item: item[1])]
@@ -269,6 +275,13 @@ def run_experiment(args, experiment, seed):
     )
     restore_rng_state(rng_before_wandb)
     try:
+        if not args.resume:
+            # Reset only after data/model/W&B initialization succeeds. In
+            # particular, remove old higher-epoch logs and completed results
+            # so a shorter or interrupted new run cannot expose stale output.
+            clear_run_outputs(directory)
+            write_json(directory / "config.json", protocol)
+        write_json(directory / "parameters.json", parameters)
         for epoch in range(start, args.epochs):
             epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
             train_metrics = run_epoch(model, make_loader(train, args, True, epoch), device, args,

@@ -50,7 +50,8 @@ def parse_args(argv=None):
     parser.add_argument("--label_smoothing", type=float, default=0.05)
     parser.add_argument("--aux_loss_weight", type=float, default=0.1)
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda or cuda:0")
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume last.pth and its W&B Run; otherwise restart and overwrite existing local results")
     parser.add_argument("--list", action="store_true", help="List experiments without loading PyTorch")
     parser.add_argument("--dry_run", action="store_true", help="Print resolved experiment settings only")
     args = parser.parse_args(argv)

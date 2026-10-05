@@ -76,7 +76,9 @@ python train_cls_ablation.py --mode evaluate --experiments no_location --seed 42
 python train_cls_ablation.py --mode summarize --seed 42
 ```
 
-恢复时每个指定实验须有 last.pth；补跑未启动的实验不加 resume。数据、划分、超参数不匹配时拒绝恢复。旧版曾留出验证集的消融 checkpoint 不符合当前协议，请在新 output_dir 重新训练，避免混用结果。
+不传 `--resume` 时（默认 false），即使已有结果也从第 1 轮重新训练，覆盖当前实验目录的 checkpoint、配置和结果，并清除旧的逐轮日志与评估文件。重新训练创建新的 W&B Run，已有线上 Run 保留；其他实验目录不受影响。
+
+传入 `--resume` 时，每个指定实验须有 last.pth；数据、划分、超参数不匹配时拒绝恢复。旧版曾留出验证集的消融 checkpoint 不符合当前协议，可不传 --resume 重新训练并覆盖本地结果。
 
 ```text
 model_trained/stage2_ablation/cls/constraint_aware/<source>/<experiment>/seed_<n>/

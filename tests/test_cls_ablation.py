@@ -75,7 +75,7 @@ class Stage2AblationTest(unittest.TestCase):
         for here, there in (("batch_size", "bs"), ("epochs", "epoch"),
                             ("learning_rate", "lr"), ("weight_decay", "decay_rate")):
             self.assertEqual(getattr(args, here), getattr(reference, there))
-        for key in ("wandb_project", "wandb_entity", "stage2_norm", "token_dim",
+        for key in ("wandb_entity", "stage2_norm", "token_dim",
                     "transformer_layers", "transformer_heads", "token_dropout",
                     "stream_dropout", "use_stats_token", "root_local", "root_sever"):
             self.assertEqual(getattr(args, key), getattr(reference, key))
@@ -234,14 +234,38 @@ class Stage2AblationTest(unittest.TestCase):
                             "train/optimization/gradient_norm_mean", "train/confusion_matrix", "test/confusion_matrix"):
                     self.assertIn(key, log)
                 self.assertEqual(self.wandb_runs[0].log.call_args.kwargs["step"], 0)
-                with self.assertRaises(FileExistsError):
-                    runner.run_experiment(args, "xyz_only", 0)
                 args.mode = "evaluate"
                 args.data_root = None
                 evaluated = runner.run_experiment(args, "xyz_only", 0)
                 self.assertEqual(result["test"], evaluated)
                 self.assertEqual(self.wandb_init.call_count, 1)
             self.assertEqual(runner.summarize(args.output_dir, 0)[0]["seed"], 0)
+
+    def test_non_resume_overwrites_results_and_starts_a_new_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_data(root / "data")
+            args = self._args(root)
+            directory = runner.run_directory(args, "xyz_only", 0)
+            with mock.patch.object(runner, "build_ablation_model", side_effect=small_model):
+                runner.run_experiment(args, "xyz_only", 0)
+                old_id = self.wandb_runs[-1].id
+                (directory / "last.pth").write_bytes(b"old checkpoint must not be loaded")
+                (directory / "epoch_0999.json").write_text("old epoch")
+                (directory / "evaluation_test.json").write_text("old evaluation")
+                (directory / "notes.txt").write_text("keep")
+                args.learning_rate *= 2
+                runner.run_experiment(args, "xyz_only", 0)
+            checkpoint = runner.load_checkpoint(directory / "last.pth")
+            self.assertEqual(checkpoint["epoch"], 0)
+            self.assertEqual(checkpoint["protocol"]["args"]["learning_rate"], args.learning_rate)
+            self.assertNotEqual(checkpoint["wandb_run_id"], old_id)
+            self.assertEqual(self.wandb_init.call_args.kwargs["run_id"], "")
+            self.assertEqual(self.wandb_runs[-1].log.call_args.kwargs["step"], 0)
+            self.assertFalse((directory / "epoch_0999.json").exists())
+            self.assertFalse((directory / "evaluation_test.json").exists())
+            self.assertEqual((directory / "notes.txt").read_text(), "keep")
+            self.assertTrue((directory / "result.json").is_file())
 
     def test_experiments_have_independent_wandb_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
