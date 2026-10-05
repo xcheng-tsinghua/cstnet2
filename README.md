@@ -1,5 +1,7 @@
 > Stage1 主流程已改为三阶段直接预测，运行方式与 checkpoint 兼容性见 [使用说明](docs/stage1_direct_route_zh.md)。
 
+> Stage2 四分量消融统一入口：`train_cls_ablation.py`，实验设计、参数与运行示例见 [Stage2 消融实验](docs/stage2_ablation_zh.md)。
+
 # CstNet2: Constraint-Aware Point Cloud Learning
 
 CstNet2 is a two-stage point cloud learning project for mechanical parts. The
