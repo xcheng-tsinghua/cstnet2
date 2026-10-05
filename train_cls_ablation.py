@@ -16,7 +16,7 @@ from functional.stage2_ablation_config import EXPERIMENTS, SUITES, expand_experi
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--mode", choices=("train", "evaluate", "summarize"), default="train")
-    parser.add_argument("--experiments", nargs="+", default=["xyz_only"], choices=(*EXPERIMENTS, *SUITES))
+    parser.add_argument("--experiments", nargs="+", default=["all"], choices=(*EXPERIMENTS, *SUITES))
     parser.add_argument("--seed", type=int, default=42, help="Single training seed shared by all selected experiments")
     parser.set_defaults(model="constraint_aware", task="cls")
     parser.add_argument("--data_root", default=None, help="Existing frozen Stage 1 prediction cache")
