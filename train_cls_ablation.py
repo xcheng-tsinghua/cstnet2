@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from colorama import init
 
 from functional.stage2_ablation_config import EXPERIMENTS, SUITES, expand_experiments
 
@@ -25,7 +26,7 @@ def parse_args(argv=None):
     parser.add_argument("--root_local", default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
     parser.add_argument("--is_sample", action="store_true")
     parser.add_argument("--save_name", default="stage2_cls_ablation")
-    parser.add_argument("--wandb_project", default="cstnet2-s2")
+    parser.add_argument("--wandb_project", default="cstnet2-s2-ablation")
     parser.add_argument("--wandb_entity", default="")
     parser.add_argument("--wandb_run_name", default="")
     parser.add_argument("--stage2_norm", choices=("ln", "bn"), default="ln")
@@ -90,4 +91,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    init(autoreset=True)
     main()
