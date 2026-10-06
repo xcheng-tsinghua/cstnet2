@@ -61,7 +61,7 @@ python train_cls_ablation.py --data_root /data/param20k_pred --experiments all -
 
 默认 2048 点、batch=20、200 epochs、FP32；Adam + StepLR(20,0.7)，lr=1e-4、weight decay=1e-4，label smoothing=0.05，两个辅助头权重各 0.1。可通过参数调整，同组保持一致。
 
-数据支持现有 12 列分类 TXT/HDF5，文件中的 primitive_type ID 会转为五维 one-hot，模型约束总维数为 12。所有对照应使用同一冻结 Stage 1 和预处理生成的预测缓存。constraint_cache_id 可记录缓存版本；constraint_source 仅是来源声明，不会生成或转换约束。
+数据支持现有 12 列分类 TXT/HDF5，文件中的 primitive_type ID 会转为五维 one-hot，模型约束总维数为 12。所有对照应使用同一冻结 Stage 1 和预处理生成的预测缓存。约束直接读取自 data_root 指定的数据文件。
 
 ## 恢复、评估与结果
 
@@ -81,7 +81,7 @@ python train_cls_ablation.py --mode summarize --seed 42
 传入 `--resume` 时，每个指定实验须有 last.pth；数据、划分、超参数不匹配时拒绝恢复。旧版曾留出验证集的消融 checkpoint 不符合当前协议，可不传 --resume 重新训练并覆盖本地结果。
 
 ```text
-model_trained/stage2_ablation/cls/constraint_aware/<source>/<experiment>/seed_<n>/
+model_trained/stage2_ablation/cls/constraint_aware/<experiment>/seed_<n>/
   config.json              实验与已有数据划分信息
   parameters.json          参数量
   epoch_0001.json ...       每轮 train/test 指标
@@ -106,7 +106,7 @@ python -m unittest discover -s tests -p test_cls_ablation.py -v
 
 分类损失和约束组装直接复用 train_cls.py 的 classification_loss 与 constraints_from_dataset_batch。优化器、StepLR、辅助损失、label smoothing、梯度裁剪、按 batch 平均的 loss 及 test OA 选优规则一致。仍严格使用已有 train/test，不自行划分。
 
-支持相同参数名 --bs、--epoch、--lr、--decay_rate、--n_point，同时兼容旧消融入口的 --batch_size、--epochs、--learning_rate、--weight_decay。默认 batch=20。支持 --local、--root_local、--root_sever、--is_sample，以及相同的 token/Transformer、stage2_norm、stream_dropout、use_stats_token 设置。--is_sample 仅用于抽样快速调试，不改变已有数据划分；正式实验默认读取全部数据。
+支持相同参数名 --bs、--epoch、--lr、--decay_rate、--n_point，同时兼容旧消融入口的 --batch_size、--epochs、--learning_rate、--weight_decay。默认 batch=20。数据集路径统一使用 --data_root。支持 --is_sample，以及相同的 token/Transformer、stage2_norm、stream_dropout、use_stats_token 设置。--is_sample 仅用于抽样快速调试，不改变已有数据划分；正式实验默认读取全部数据。
 
 训练强制通过与 train_cls.py 相同的 initialize_wandb_run 读取项目 .env 中的 WANDB_API_KEY 并创建在线 Run。每个实验独立创建 Run，默认项目 cstnet2-s2；可设置 --wandb_project、--wandb_entity、--wandb_run_name。Run 名称始终附加实验名和 seed，避免九项实验混在同一条曲线中。
 
@@ -119,3 +119,5 @@ python train_cls_ablation.py --data_root /data/param20k_pred --experiments all -
 ```
 
 每个实验仍使用独立 checkpoint 目录及单个可设置的 seed；原 train_cls.py 无需修改。W&B 验证测试使用 mock，不会将合成测试数据上传到真实项目。
+
+本地检查点、JSON 日志或汇总写入失败时，打印提示并跳过该次输出，继续训练；后续输出仍会尝试保存。W&B 的 checkpoint/last_saved 和 checkpoint/best_saved 记录本轮实际保存状态（未尝试或失败为 0）。最佳轮次的测试指标保留在内存并写入后续检查点，训练结束不再依赖重新读取 best.pth。写盘失败期间的模型可能无法恢复；显式 resume/evaluate 仍要求能够读取相应检查点。

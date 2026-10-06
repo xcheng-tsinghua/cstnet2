@@ -17,13 +17,22 @@ from functional.stage2_ablation_config import EXPERIMENTS, SUITES, expand_experi
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--mode", choices=("train", "evaluate", "summarize"), default="train")
-    parser.add_argument("--experiments", nargs="+", default=["all"], choices=(*EXPERIMENTS, *SUITES))
+    parser.add_argument(
+        "--experiments", nargs="+", default=["all"], choices=(*EXPERIMENTS, *SUITES),
+        help=("Select one or more experiments; XYZ is always retained. "
+              "all: run all nine experiments; "
+              "xyz_only: use XYZ without constraints; "
+              "no_primitive_type: remove primitive type; "
+              "no_direction: remove direction; "
+              "no_dimension: remove dimension; "
+              "no_location: remove location; "
+              "only_primitive_type: keep only primitive type constraints; "
+              "only_direction: keep only direction constraints; "
+              "only_dimension: keep only dimension constraints; "
+              "only_location: keep only location constraints."))
     parser.add_argument("--seed", type=int, default=42, help="Single training seed shared by all selected experiments")
     parser.set_defaults(model="constraint_aware", task="cls")
-    parser.add_argument("--data_root", default=None, help="Existing frozen Stage 1 prediction cache")
-    parser.add_argument("--local", action="store_true")
-    parser.add_argument("--root_sever", default="/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd_pred")
-    parser.add_argument("--root_local", default=r"D:\document\DeepLearning\DataSet\pcd_cstnet2\Param20K_Extend")
+    parser.add_argument("--data_root", default="/opt/data/private/data_set/pcd_cstnet2/tmcad_pcd", help="Existing frozen Stage 1 prediction cache")
     parser.add_argument("--is_sample", action="store_true")
     parser.add_argument("--save_name", default="stage2_cls_ablation")
     parser.add_argument("--wandb_project", default="cstnet2-s2-ablation")
@@ -37,9 +46,6 @@ def parse_args(argv=None):
     parser.add_argument("--stream_dropout", type=float, default=0.1)
     parser.add_argument("--use_stats_token", action="store_true")
     parser.add_argument("--data_format", choices=("auto", "txt", "h5"), default="auto")
-    parser.add_argument("--constraint_source", choices=("predicted", "gt"), default="predicted",
-                        help="Declared cache provenance; gt is an optional oracle experiment")
-    parser.add_argument("--constraint_cache_id", default="", help="Record Stage 1 checkpoint ID/hash or cache version")
     parser.add_argument("--output_dir", default="model_trained/stage2_ablation")
     parser.add_argument("--bs", "--batch_size", dest="batch_size", type=int, default=20)
     parser.add_argument("--n_points", "--n_point", dest="n_points", type=int, default=2048)
@@ -62,7 +68,6 @@ def parse_args(argv=None):
         parser.error("seed must lie in [0, 2**32)")
     if args.list or args.mode == "summarize":
         return args
-    args.data_root = args.data_root or (args.root_local if args.local else args.root_sever)
     if args.batch_size < 2 or args.n_points < 2 or args.epochs < 1 or args.workers < 0:
         parser.error("batch_size/n_points must be >=2, epochs >=1, workers >=0")
     if args.learning_rate <= 0 or args.weight_decay < 0 or args.aux_loss_weight < 0:

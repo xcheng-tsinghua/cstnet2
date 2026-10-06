@@ -77,7 +77,7 @@ class Stage2AblationTest(unittest.TestCase):
             self.assertEqual(getattr(args, here), getattr(reference, there))
         for key in ("wandb_entity", "stage2_norm", "token_dim",
                     "transformer_layers", "transformer_heads", "token_dropout",
-                    "stream_dropout", "use_stats_token", "root_local", "root_sever"):
+                    "stream_dropout", "use_stats_token"):
             self.assertEqual(getattr(args, key), getattr(reference, key))
         aliases = parse_args(["--bs", "3", "--epoch", "2", "--lr", "0.002", "--decay_rate", "0.003"])
         self.assertEqual((aliases.batch_size, aliases.epochs, aliases.learning_rate, aliases.weight_decay),
@@ -198,7 +198,7 @@ class Stage2AblationTest(unittest.TestCase):
                 path = root / str(index)
                 path.mkdir()
                 runner.write_json(path / "result.json", {
-                    "task": "cls", "model": "constraint_aware", "constraint_source": "predicted",
+                    "task": "cls", "model": "constraint_aware",
                     "experiment": "xyz_only", "seed": seed, "best_epoch": 1,
                     "test": {"instance_accuracy": score}, "parameters": {"total": 10},
                     "protocol": {"args": {"learning_rate": lr}, "seed": seed,
@@ -267,6 +267,43 @@ class Stage2AblationTest(unittest.TestCase):
             self.assertEqual((directory / "notes.txt").read_text(), "keep")
             self.assertTrue((directory / "result.json").is_file())
 
+    def test_disk_replace_failures_do_not_stop_training_or_reload_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_data(root / "data")
+            args = self._args(root, epochs=2)
+            real_evaluate = runner.evaluate
+            scores = iter((0.9, 0.1))
+
+            def evaluate_with_declining_accuracy(*pos, **kw):
+                metrics = real_evaluate(*pos, **kw)
+                metrics["instance_accuracy"] = next(scores)
+                return metrics
+
+            with mock.patch.object(runner, "build_ablation_model", side_effect=small_model), \
+                 mock.patch.object(Path, "replace", side_effect=OSError(5, "Input/output error")), \
+                 mock.patch.object(runner, "load_checkpoint") as load, \
+                 mock.patch.object(runner, "evaluate", side_effect=evaluate_with_declining_accuracy):
+                result = runner.run_experiment(args, "xyz_only", 0)
+            load.assert_not_called()
+            self.assertEqual(result["best_epoch"], 1)
+            self.assertEqual(result["test"]["instance_accuracy"], 0.9)
+            self.assertEqual(self.wandb_runs[0].log.call_count, 2)
+            for call in self.wandb_runs[0].log.call_args_list:
+                self.assertEqual(call.args[0]["checkpoint/last_saved"], 0)
+                self.assertEqual(call.args[0]["checkpoint/best_saved"], 0)
+            self.wandb_runs[0].finish.assert_called_once()
+
+    def test_torch_writer_failure_is_skipped_but_programming_error_propagates(self):
+        for error in (OSError(28, "No space left on device"),
+                      RuntimeError("PytorchStreamWriter failed writing file data/0: file write failed"),
+                      RuntimeError("unexpected pos 64 vs 0")):
+            with self.subTest(error=error), mock.patch.object(torch, "save", side_effect=error):
+                self.assertFalse(runner.save_checkpoint(Path("unused.pth"), {}))
+        with mock.patch.object(torch, "save", side_effect=RuntimeError("invalid tensor")):
+            with self.assertRaisesRegex(RuntimeError, "invalid tensor"):
+                runner.save_checkpoint(Path("unused.pth"), {})
+
     def test_experiments_have_independent_wandb_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -309,8 +346,8 @@ class Stage2AblationTest(unittest.TestCase):
                 self.assertEqual(self.wandb_init.call_args.kwargs["run_id"], interrupted_id)
                 self.assertEqual(self.wandb_runs[-1].log.call_args.kwargs["step"], 1)
                 self.wandb_runs[-1].finish.assert_called_once()
-                state1 = runner.load_checkpoint(root / "complete/cls/constraint_aware/predicted/no_location/seed_0/last.pth")
-                state2 = runner.load_checkpoint(root / "resumed/cls/constraint_aware/predicted/no_location/seed_0/last.pth")
+                state1 = runner.load_checkpoint(root / "complete/cls/constraint_aware/no_location/seed_0/last.pth")
+                state2 = runner.load_checkpoint(root / "resumed/cls/constraint_aware/no_location/seed_0/last.pth")
                 for key in state1["model"]:
                     torch.testing.assert_close(state1["model"][key], state2["model"][key], rtol=0, atol=0)
                 args.learning_rate *= 2

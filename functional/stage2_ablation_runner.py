@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import copy
+from functools import wraps
 import hashlib
 import json
 import random
@@ -23,6 +25,30 @@ from networks.stage2_ablation import build_ablation_model
 from networks.utils import all_metric_cls
 
 
+def optional_disk_output(function):
+    """Output failures must not interrupt training; other errors still propagate."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            result = function(*args, **kwargs)
+            return True if result is None else result
+        except (OSError, RuntimeError) as error:
+            # PyTorch's zip writer reports disk failures as RuntimeError.
+            if isinstance(error, RuntimeError) and not any(marker in str(error) for marker in (
+                "PytorchStreamWriter failed", "unexpected pos", "could not be opened")):
+                raise
+            print(f"[disk warning] {function.__name__} failed for {args[0]}: {error}; "
+                  "skipping this output and continuing.", flush=True)
+            return False
+    return wrapped
+
+
+@optional_disk_output
+def prepare_run_directory(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+@optional_disk_output
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -179,15 +205,16 @@ def load_checkpoint(path):
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
+@optional_disk_output
 def save_checkpoint(path, payload):
-    # Never continue a benchmark silently after failing to save its best model.
+    # A failed save is reported to W&B but does not stop training.
     temporary = path.with_suffix(".tmp")
     torch.save(payload, temporary)
     temporary.replace(path)
 
 
 def run_directory(args, experiment, seed):
-    return Path(args.output_dir) / args.task / args.model / args.constraint_source / experiment / f"seed_{seed}"
+    return Path(args.output_dir) / args.task / args.model / experiment / f"seed_{seed}"
 
 
 def protocol_config(args, experiment, seed, metadata):
@@ -199,6 +226,7 @@ def protocol_config(args, experiment, seed, metadata):
             "intervention": EXPERIMENTS[experiment].to_dict(), "dataset": metadata}
 
 
+@optional_disk_output
 def clear_run_outputs(directory):
     """Remove this run's generated files before a fresh training run."""
     names = {"config.json", "parameters.json", "last.pth", "best.pth",
@@ -212,7 +240,7 @@ def clear_run_outputs(directory):
 
 def run_experiment(args, experiment, seed):
     directory = run_directory(args, experiment, seed)
-    directory.mkdir(parents=True, exist_ok=True)
+    prepare_run_directory(directory)
     last_path, best_path = directory / "last.pth", directory / "best.pth"
     if args.mode == "evaluate":
         saved = load_checkpoint(best_path)
@@ -250,14 +278,19 @@ def run_experiment(args, experiment, seed):
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
     start, best, best_epoch = 0, 0.0, -1
     resume_id = ""
+    best_metrics = None
     if args.resume:
         saved = load_checkpoint(last_path)
         if saved["protocol"] != protocol:
-            raise ValueError("resume protocol mismatch (data, split, source, experiment, seed or hyperparameters)")
+            raise ValueError("resume protocol mismatch (data, split, experiment, seed or hyperparameters)")
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
         start, best, best_epoch = saved["epoch"] + 1, saved["best"], saved["best_epoch"]
+        best_metrics = saved.get("best_metrics")
+        if best_metrics is None:
+            # Compatibility with checkpoints written before metrics were retained.
+            best_metrics = load_checkpoint(best_path)["test"]
         restore_rng_state(saved["rng"])
         resume_id = str(saved.get("wandb_run_id", "") or "")
     primary = "instance_accuracy"
@@ -291,23 +324,23 @@ def run_experiment(args, experiment, seed):
             improved = test_metrics[primary] >= best
             if improved:
                 best, best_epoch = test_metrics[primary], epoch
+                best_metrics = copy.deepcopy(test_metrics)
             payload = {"protocol": protocol, "epoch": epoch, "model": model.state_dict(),
                        "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
                        "rng": capture_rng_state(), "best": best, "best_epoch": best_epoch,
                        "test": test_metrics, "parameters": parameters,
                        "wandb_run_id": wandb_run_id(wandb_run),
                        "model_config": classification_model_config(args), "args": vars(args),
-                       "best_acc": best}
-            if improved:
-                save_checkpoint(best_path, payload)
-            save_checkpoint(last_path, payload)
+                       "best_acc": best, "best_metrics": best_metrics}
+            best_saved = save_checkpoint(best_path, payload) if improved else False
+            last_saved = save_checkpoint(last_path, payload)
             write_json(directory / f"epoch_{epoch + 1:04d}.json",
                        {"epoch": epoch + 1, "train": train_metrics, "test": test_metrics})
             log = {
                 "epoch": epoch + 1, "learning_rate": epoch_learning_rate,
                 "loss/train": train_metrics["loss"], "loss/test": test_metrics["loss"],
                 "best/test_instance_accuracy": best,
-                "checkpoint/last_saved": 1, "checkpoint/best_saved": 1,
+                "checkpoint/last_saved": int(last_saved), "checkpoint/best_saved": int(best_saved),
                 "train/optimization/gradient_norm_mean": train_metrics["optimization/gradient_norm_mean"],
                 "train/optimization/gradient_norm_max": train_metrics["optimization/gradient_norm_max"],
             }
@@ -320,12 +353,13 @@ def run_experiment(args, experiment, seed):
             wandb_run.log(log, step=epoch)
             print(f"[{experiment} seed={seed}] {epoch + 1}/{args.epochs} "
                   f"loss={train_metrics['loss']:.6f} test/{primary}={test_metrics[primary]:.6f}", flush=True)
-        saved_best = load_checkpoint(best_path)
-        model.load_state_dict(saved_best["model"], strict=True)
-        test_metrics = evaluate(model, test, device, args)
-        result = {"task": args.task, "model": args.model, "constraint_source": args.constraint_source,
-                  "experiment": experiment, "seed": seed, "best_epoch": saved_best["epoch"] + 1,
-                  "test": test_metrics, "parameters": parameters,
+        # Use the metrics already evaluated at the best epoch. Never reload a
+        # missing or stale checkpoint after a failed disk write.
+        if best_metrics is None:
+            raise ValueError("no best metrics available; training requires at least one epoch")
+        result = {"task": args.task, "model": args.model,
+                  "experiment": experiment, "seed": seed, "best_epoch": best_epoch + 1,
+                  "test": best_metrics, "parameters": parameters,
                   "protocol": protocol}
         write_json(directory / "result.json", result)
         return result
@@ -333,6 +367,7 @@ def run_experiment(args, experiment, seed):
         wandb_run.finish()
 
 
+@optional_disk_output
 def summarize(output_dir, seed=42):
     """Export one row per completed experiment at the selected seed."""
     rows = []
@@ -344,7 +379,7 @@ def summarize(output_dir, seed=42):
         for key in ("experiment", "intervention"):
             protocol.pop(key)
         fingerprint = hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest()[:16]
-        row = {k: result[k] for k in ("task", "model", "constraint_source", "experiment", "seed", "best_epoch")}
+        row = {k: result[k] for k in ("task", "model", "experiment", "seed", "best_epoch")}
         row["protocol_id"] = fingerprint
         row.update({k: v for k, v in result["test"].items() if isinstance(v, (float, int))})
         row.update({f"parameters_{k}": v for k, v in result["parameters"].items()})
