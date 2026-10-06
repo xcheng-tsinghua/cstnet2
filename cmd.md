@@ -421,3 +421,12 @@ nohup python train_cst_pred.py \
   --checkpoint_policy restart \
   --wandb_run_name attn_3dgcn_direct_joint_wd0 \
   > "$EXP_ROOT/train_joint.log" 2>&1 &
+
+
+## 消融实验
+python train_cls_ablation.py --experiments xyz_only no_primitive_type
+python train_cls_ablation.py --experiments no_direction no_dimension 
+python train_cls_ablation.py --experiments only_primitive_type no_location
+
+python train_cls_ablation.py --experiments only_location only_direction --bs 10
+python train_cls_ablation.py --experiments only_location only_dimension --bs 10
