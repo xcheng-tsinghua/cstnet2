@@ -304,6 +304,68 @@ class Stage2AblationTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "invalid tensor"):
                 runner.save_checkpoint(Path("unused.pth"), {})
 
+    def test_auto_resume_failures_restart_with_clean_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_data(root / "data")
+            args = self._args(root)
+            with mock.patch.object(runner, "build_ablation_model", side_effect=small_model):
+                runner.run_experiment(args, "xyz_only", 0)
+                path = runner.run_directory(args, "xyz_only", 0) / "last.pth"
+                reference = runner.load_checkpoint(path)
+                args.resume = "auto"
+                for failure in ("missing", "corrupt", "partial"):
+                    with self.subTest(failure=failure):
+                        if failure == "missing":
+                            path.unlink()
+                        elif failure == "corrupt":
+                            path.write_bytes(b"not a checkpoint")
+                        else:
+                            import copy
+                            broken = copy.deepcopy(reference)
+                            for tensor in broken["model"].values():
+                                tensor.zero_()
+                            broken["optimizer"]["param_groups"][0]["lr"] = 1.0
+                            broken["epoch"] = 99
+                            broken["best"] = 1.0
+                            del broken["rng"]  # Fail after restoring weights/optimizer/metrics.
+                            runner.save_checkpoint(path, broken)
+                        runner.run_experiment(args, "xyz_only", 0)
+                        actual = runner.load_checkpoint(path)
+                        self.assertEqual(actual["epoch"], 0)
+                        self.assertEqual(actual["best"], reference["best"])
+                        self.assertEqual(actual["scheduler"], reference["scheduler"])
+                        self.assertEqual(self.wandb_init.call_args.kwargs["run_id"], "")
+                        self.assertEqual(self.wandb_runs[-1].log.call_args.kwargs["step"], 0)
+                        for key in reference["model"]:
+                            torch.testing.assert_close(actual["model"][key], reference["model"][key], rtol=0, atol=0)
+
+    def test_explicit_resume_path_and_strict_failure(self):
+        self.assertEqual(parse_args([]).resume, "")
+        self.assertEqual(parse_args(["--resume", "auto"]).resume, "auto")
+        self.assertEqual(parse_args(["--resume", ""]).resume, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_data(root / "data")
+            args = self._args(root)
+            with mock.patch.object(runner, "build_ablation_model", side_effect=small_model):
+                result = runner.run_experiment(args, "xyz_only", 0)
+                path = runner.run_directory(args, "xyz_only", 0) / "last.pth"
+                args.resume = str(path)
+                args.output_dir = str(root / "another_output")
+                resumed = runner.run_experiment(args, "xyz_only", 0)
+                self.assertEqual(resumed["test"], result["test"])
+                self.assertEqual(self.wandb_init.call_args.kwargs["run_id"], self.wandb_runs[0].id)
+                self.wandb_runs[-1].log.assert_not_called()  # Already reached total epochs.
+                args.resume = str(root / "missing.pth")
+                with self.assertRaises(FileNotFoundError):
+                    runner.run_experiment(args, "xyz_only", 0)
+                path.write_bytes(b"corrupted")
+                args.resume = str(path)
+                with self.assertRaises(Exception):
+                    runner.run_experiment(args, "xyz_only", 0)
+                self.assertEqual(self.wandb_init.call_count, 2)
+
     def test_experiments_have_independent_wandb_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -341,7 +403,7 @@ class Stage2AblationTest(unittest.TestCase):
                         runner.run_experiment(args, "no_location", 0)
                 interrupted_id = self.wandb_runs[-1].id
                 self.wandb_runs[-1].finish.assert_called_once()
-                args.resume = True
+                args.resume = "auto"
                 runner.run_experiment(args, "no_location", 0)
                 self.assertEqual(self.wandb_init.call_args.kwargs["run_id"], interrupted_id)
                 self.assertEqual(self.wandb_runs[-1].log.call_args.kwargs["step"], 1)
@@ -351,6 +413,7 @@ class Stage2AblationTest(unittest.TestCase):
                 for key in state1["model"]:
                     torch.testing.assert_close(state1["model"][key], state2["model"][key], rtol=0, atol=0)
                 args.learning_rate *= 2
+                args.resume = str(runner.run_directory(args, "no_location", 0) / "last.pth")
                 with self.assertRaisesRegex(ValueError, "protocol mismatch"):
                     runner.run_experiment(args, "no_location", 0)
 

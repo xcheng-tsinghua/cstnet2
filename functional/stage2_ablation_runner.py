@@ -279,20 +279,47 @@ def run_experiment(args, experiment, seed):
     start, best, best_epoch = 0, 0.0, -1
     resume_id = ""
     best_metrics = None
+    resumed = False
     if args.resume:
-        saved = load_checkpoint(last_path)
-        if saved["protocol"] != protocol:
-            raise ValueError("resume protocol mismatch (data, split, experiment, seed or hyperparameters)")
-        model.load_state_dict(saved["model"], strict=True)
-        optimizer.load_state_dict(saved["optimizer"])
-        scheduler.load_state_dict(saved["scheduler"])
-        start, best, best_epoch = saved["epoch"] + 1, saved["best"], saved["best_epoch"]
-        best_metrics = saved.get("best_metrics")
-        if best_metrics is None:
-            # Compatibility with checkpoints written before metrics were retained.
-            best_metrics = load_checkpoint(best_path)["test"]
-        restore_rng_state(saved["rng"])
-        resume_id = str(saved.get("wandb_run_id", "") or "")
+        resume_path = last_path if args.resume == "auto" else Path(args.resume).expanduser()
+        # Loading may modify some tensors before failing. Keep a complete fresh
+        # state so auto fallback is identical to training from scratch.
+        fresh_state = None
+        if args.resume == "auto":
+            fresh_state = (
+                copy.deepcopy({k: v.detach().cpu() for k, v in model.state_dict().items()}),
+                copy.deepcopy(optimizer.state_dict()), copy.deepcopy(scheduler.state_dict()),
+                capture_rng_state(),
+            )
+        try:
+            saved = load_checkpoint(resume_path)
+            if saved["protocol"] != protocol:
+                raise ValueError("resume protocol mismatch (data, split, experiment, seed or hyperparameters)")
+            model.load_state_dict(saved["model"], strict=True)
+            optimizer.load_state_dict(saved["optimizer"])
+            scheduler.load_state_dict(saved["scheduler"])
+            start, best, best_epoch = saved["epoch"] + 1, saved["best"], saved["best_epoch"]
+            best_metrics = saved.get("best_metrics")
+            if best_metrics is None:
+                # Legacy checkpoints keep the best metrics in the sibling file.
+                best_metrics = load_checkpoint(resume_path.with_name("best.pth"))["test"]
+            restore_rng_state(saved["rng"])
+            resume_id = str(saved.get("wandb_run_id", "") or "")
+            resumed = True
+            print(f"Resumed {resume_path}; next epoch: {start + 1}", flush=True)
+        except Exception as error:
+            if args.resume != "auto":
+                raise
+            model.load_state_dict(fresh_state[0], strict=True)
+            optimizer.load_state_dict(fresh_state[1])
+            scheduler.load_state_dict(fresh_state[2])
+            restore_rng_state(fresh_state[3])
+            start, best, best_epoch = 0, 0.0, -1
+            best_metrics, resume_id = None, ""
+            print(f"[resume auto] Cannot restore {resume_path}: {error}; "
+                  "starting a fresh training run.", flush=True)
+        finally:
+            del fresh_state
     primary = "instance_accuracy"
     print(f"{directory}: parameters={parameters}; train={len(train)}, test={len(test)}")
     class_names = [name for name, _ in sorted(metadata["classes"].items(), key=lambda item: item[1])]
@@ -308,7 +335,7 @@ def run_experiment(args, experiment, seed):
     )
     restore_rng_state(rng_before_wandb)
     try:
-        if not args.resume:
+        if not resumed:
             # Reset only after data/model/W&B initialization succeeds. In
             # particular, remove old higher-epoch logs and completed results
             # so a shorter or interrupted new run cannot expose stale output.

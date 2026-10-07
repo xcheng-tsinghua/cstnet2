@@ -67,7 +67,7 @@ python train_cls_ablation.py --data_root /data/param20k_pred --experiments all -
 
 ```bash
 # 用原训练参数恢复
-python train_cls_ablation.py --data_root /data/param20k_pred --experiments no_location --seed 42 --resume
+python train_cls_ablation.py --data_root /data/param20k_pred --experiments no_location --seed 42 --resume auto
 
 # 自动加载 best.pth 保存的配置和数据路径，在已有 test 上复评
 python train_cls_ablation.py --mode evaluate --experiments no_location --seed 42
@@ -76,9 +76,9 @@ python train_cls_ablation.py --mode evaluate --experiments no_location --seed 42
 python train_cls_ablation.py --mode summarize --seed 42
 ```
 
-不传 `--resume` 时（默认 false），即使已有结果也从第 1 轮重新训练，覆盖当前实验目录的 checkpoint、配置和结果，并清除旧的逐轮日志与评估文件。重新训练创建新的 W&B Run，已有线上 Run 保留；其他实验目录不受影响。
+`--resume` 为空字符串时（默认，可省略），即使已有结果也从第 1 轮重新训练，覆盖当前实验目录的 checkpoint、配置和结果，并清除旧的逐轮日志与评估文件。重新训练创建新的 W&B Run，已有线上 Run 保留；其他实验目录不受影响。
 
-传入 `--resume` 时，每个指定实验须有 last.pth；数据、划分、超参数不匹配时拒绝恢复。旧版曾留出验证集的消融 checkpoint 不符合当前协议，可不传 --resume 重新训练并覆盖本地结果。
+`--resume auto` 会尝试恢复每个实验目录中的 last.pth；文件缺失、损坏、协议不匹配或状态恢复失败时，自动重置模型、优化器、调度器、随机状态和最佳指标，从头训练并创建新 W&B Run。`--resume /path/to/last.pth` 则严格恢复指定检查点，加载或恢复失败直接报错。成功恢复会继续原 W&B Run。旧版曾留出验证集的消融 checkpoint 不符合当前协议，可不传 --resume 重新训练并覆盖本地结果。
 
 ```text
 model_trained/stage2_ablation/cls/constraint_aware/<experiment>/seed_<n>/
@@ -112,7 +112,7 @@ python -m unittest discover -s tests -p test_cls_ablation.py -v
 
 记录字段包括 epoch、learning_rate、loss/train、loss/test、best/test_instance_accuracy、train/metric/*、test/metric/*、训练梯度范数、checkpoint 保存状态以及 train/test 混淆矩阵，命名与 train_cls.py 一致。W&B config 额外记录 experiment 和保留的 constraint_components。
 
-last.pth 和 best.pth 保存 wandb_run_id；--resume 使用该 ID 恢复原 Run，并从恢复的 epoch 继续记录。训练结束或异常退出都会 finish 当前 Run。evaluate、summarize、list、dry_run 不创建 W&B Run。
+last.pth 和 best.pth 保存 wandb_run_id；--resume 成功恢复时使用该 ID 恢复原 Run，并从恢复的 epoch 继续记录。训练结束或异常退出都会 finish 当前 Run。evaluate、summarize、list、dry_run 不创建 W&B Run。
 
 ```bash
 python train_cls_ablation.py --data_root /data/param20k_pred --experiments all --seed 42 --bs 20 --epoch 200 --lr 0.0001 --wandb_project cstnet2-s2
@@ -120,4 +120,4 @@ python train_cls_ablation.py --data_root /data/param20k_pred --experiments all -
 
 每个实验仍使用独立 checkpoint 目录及单个可设置的 seed；原 train_cls.py 无需修改。W&B 验证测试使用 mock，不会将合成测试数据上传到真实项目。
 
-本地检查点、JSON 日志或汇总写入失败时，打印提示并跳过该次输出，继续训练；后续输出仍会尝试保存。W&B 的 checkpoint/last_saved 和 checkpoint/best_saved 记录本轮实际保存状态（未尝试或失败为 0）。最佳轮次的测试指标保留在内存并写入后续检查点，训练结束不再依赖重新读取 best.pth。写盘失败期间的模型可能无法恢复；显式 resume/evaluate 仍要求能够读取相应检查点。
+本地检查点、JSON 日志或汇总写入失败时，打印提示并跳过该次输出，继续训练；后续输出仍会尝试保存。W&B 的 checkpoint/last_saved 和 checkpoint/best_saved 记录本轮实际保存状态（未尝试或失败为 0）。最佳轮次的测试指标保留在内存并写入后续检查点，训练结束不再依赖重新读取 best.pth。写盘失败期间的模型可能无法恢复；指定路径的 resume 和 evaluate 仍要求能够读取相应检查点；resume auto 读取失败则从头训练。
