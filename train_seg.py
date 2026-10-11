@@ -74,7 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--data_root",
         type=str,
-        default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd_pred",
+        default=r"/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd",
         help="MFCAD++ TXT split root or converted HDF5 shard directory",
     )
     parser.add_argument("--data_format", choices=("auto", "txt", "h5"), default="auto",
@@ -146,7 +146,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--wandb_entity", type=str, default="", help="Optional WandB entity/team",
     )
     parser.add_argument(
-        "--save_name", type=str, default="stage2_seg_cstpred",
+        "--save_name", type=str, default="stage2_seg",
         help="Fallback WandB name; stage2_seg and stage2_seg_cstpred append the model name",
     )
     parser.add_argument(

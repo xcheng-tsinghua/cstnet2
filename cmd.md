@@ -305,6 +305,10 @@ nohup bash -c '
   python train_seg.py --model pointmlp --batch_size=10 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee seg2.log
 ' > /dev/null 2>&1 &
 
+// 训练普通PointMLP
+python train_seg.py --model=pointmlp --batch_size=10 --epochs=70 --data_root=/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd --save_name=stage2_seg
+
+
 nohup bash -c '
   python train_seg.py --model pointtransformer --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointtransformer_cst_gt.log
   python train_seg.py --model pointmamba --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointmamba_cst_gt.log
@@ -312,6 +316,10 @@ nohup bash -c '
   python train_seg.py --model pointmlp --batch_size=100 --epochs=70 --not_resume --baseline_use_constraints 2>&1 | tee pointmlp_cst_gt.log
 ' > /dev/null 2>&1 &
 
+训练普通pointmlp
+python train_seg.py --model=pointmlp --batch_size=16 --epochs=70 --not_resume && python train_seg.py --model=pointmlp --batch_size=16 --epochs=70 --baseline_use_constraints --not_resume
+
+python train_seg.py --model=attn3dgcn --batch_size=16 --epochs=70 --not_resume && python train_seg.py --model=attn3dgcn --batch_size=16 --epochs=70 --baseline_use_constraints --not_resume
 
 ## baseline stage1 训练
 python train_stage1_direct_baseline.py --model=pointnet2 && python train_stage1_direct_baseline.py --model=dgcnn && python train_stage1_direct_baseline.py --model=pointtransformer 
@@ -430,3 +438,5 @@ python train_cls_ablation.py --experiments only_primitive_type no_location
 
 python train_cls_ablation.py --experiments only_location only_direction --bs 10
 python train_cls_ablation.py --experiments only_location only_dimension --bs 10
+
+
