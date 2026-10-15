@@ -439,4 +439,8 @@ python train_cls_ablation.py --experiments only_primitive_type no_location
 python train_cls_ablation.py --experiments only_location only_direction --bs 10
 python train_cls_ablation.py --experiments only_location only_dimension --bs 10
 
+、、2026.10.15
+训练两种约束的pointmlp
+python train_seg.py --model=pointmlp --batch_size=10 --epochs=70 --baseline_use_constraints --not_resume 
 
+python train_seg.py --model=pointmlp --batch_size=10 --epochs=70 --baseline_use_constraints --not_resume --save_name=stage2_seg_cstpred --data_root=/opt/data/private/data_set/pcd_cstnet2/mfcad_pcd_pred
